@@ -184,6 +184,21 @@ const MIGRATIONS = [
   CREATE INDEX audit_log_age ON audit_log(created_at);`,
   // v4: Manage users: the last time each person connected, and the page (origin) each message was sent from
   `ALTER TABLE users ADD COLUMN last_connect INTEGER; ALTER TABLE messages ADD COLUMN via TEXT;`,
+  // v9: bot slash commands + context menu commands, who may use them, and message components / interaction info
+  `ALTER TABLE messages ADD COLUMN components TEXT;
+  ALTER TABLE messages ADD COLUMN interaction TEXT;
+  CREATE TABLE bot_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE, type INTEGER NOT NULL DEFAULT 1, name TEXT NOT NULL,
+    name_localizations TEXT, description TEXT NOT NULL DEFAULT '', description_localizations TEXT, options TEXT NOT NULL DEFAULT '[]',
+    default_member_permissions TEXT, nsfw INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX bot_commands_name ON bot_commands(bot_id, IFNULL(community_id, 0), type, name);
+  CREATE TABLE bot_command_perms (
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE, bot_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    command_id INTEGER NOT NULL DEFAULT 0, target_type INTEGER NOT NULL, target_id TEXT NOT NULL, allow INTEGER NOT NULL,
+    PRIMARY KEY (community_id, bot_id, command_id, target_type, target_id)
+  );`,
 ];
 
 function open() {

@@ -171,7 +171,7 @@ Online members get the `chat_mention` gateway event themselves; `notifyOffline` 
 - **CloudLink bridge** in logs channels (gmsg both ways, `!online`, SSRF-guarded). §17.
 - **Ember Link (Minecraft)**: `bonfire server <url>` connects a server; join-info card, live console with audit log, synced chat and join / death / advancement lines. §18.
 - **Webhooks**: Discord-compatible `POST /api/v1/webhooks/:wid/:token` (embeds, files, `?wait=true`, 30/min per hook). §13.
-- **Bots**: instance-local `b:<n>` accounts with a Discord-dialect REST API at `/bot/v1` and gateway at `/bot/gateway`. §14.
+- **Bots**: instance-local `b:<n>` accounts with a Discord-dialect REST API at `/bot/v1` and gateway at `/bot/gateway`, with slash commands, message menu commands, buttons and modals. §14.
 - **Soundboard**: per-community sounds (mp3 / wav / ogg / flac / m4a, ≤ 5.2 s), played into a voice room with the `voice_sound` frame. §6.2.
 - **Link previews** with SSRF protection: `GET /api/v1/unfurl?url=` (needs a session). §6.3.
 - **Mentions** (`@user`, `@everyone`, `@here`, `@role`, replies) as `chat_mention` events, per-channel / per-community notification levels and mutes.

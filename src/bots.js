@@ -191,7 +191,8 @@ function messageObj(m, c, snap) {
     mention_roles: (m.mention_roles || []).map(rid => { const r = snap.roles.find(x => x.rid === rid); return r ? String(ROLE_BASE + r.id) : null; }).filter(Boolean),
     mention_everyone: !!m.mention_everyone,
     attachments: (m.attachments || []).map((a, i) => ({ id: String(i), filename: a.name || String(a.url).split('?')[0].split('/').pop(), url: a.url, proxy_url: a.url, size: a.size || 0, content_type: mimeOf(a), width: a.width, height: a.height })),
-    embeds: m.embeds || [], pinned: !!m.pinned, tts: false,
+    embeds: m.embeds || [], pinned: !!m.pinned, tts: false, components: m.components || [], application_id: au?.kind === 'bot' && auId ? String(auId) : undefined,
+    ...(m.interaction ? { interaction: { id: m.interaction.id, type: m.interaction.type, name: m.interaction.name, user: m.interaction.user ? { id: String(uidOf(m.interaction.user.id) || 0), username: m.interaction.user.username } : undefined }, interaction_metadata: { id: m.interaction.id, type: m.interaction.type } } : {}),
     reactions: (m.reactions || []).map(x => { const cm = /^<a?:(\w+):(e[0-9a-f]{10})>$/.exec(x.emoji); return { emoji: cm ? { id: cm[2], name: cm[1] } : { id: null, name: x.emoji }, count: x.count, me: false }; }),
     timestamp: new Date(m.created_at).toISOString(), edited_timestamp: m.edited_at ? new Date(m.edited_at).toISOString() : null,
     member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: null } : undefined,
@@ -224,6 +225,14 @@ function textIn(c, snap, text, allowed) {
 const gateways = new Set(); // { ws, botId, seq, last }
 let wss = null, presenceSweep = null;
 const gwSend = (g, t, d) => { if (g.ws.readyState !== 1) return; g.seq++; g.ws.send(JSON.stringify({ op: 0, t, s: g.seq, d })); };
+const isOnline = botId => { for (const g of gateways) if (g.botId === Number(botId)) return true; return false; };
+// newest connection gets it, like a single shard
+function sendToBot(botId, t, d) {
+  let last = null;
+  for (const g of gateways) if (g.botId === Number(botId) && g.ws.readyState === 1) last = g;
+  if (last) gwSend(last, t, d);
+  return !!last;
+}
 function closeGateways(botId, code, reason) { for (const g of gateways) if (g.botId === Number(botId)) { g.dispose(); g.ws.close(code, reason); } }
 function memberRemoved(botId, communityId, reason) {
   for (const g of gateways) if (g.botId === Number(botId)) gwSend(g, 'GUILD_DELETE', { id: String(communityId), unavailable: false });
@@ -254,7 +263,7 @@ function onConnection(ws) {
       g.botId = u.id; g.last = Date.now();
       clearTimeout(noIdentify);
       const list = guildsOf(u.id);
-      gwSend(g, 'READY', { v: 1, user: userObj(u), guilds: list.map(c => ({ id: String(c.id), unavailable: true })), session_id: crypto.randomBytes(8).toString('hex'), resume_gateway_url: gatewayUrl(), application: { id: String(u.id) } });
+      gwSend(g, 'READY', { v: 1, user: userObj(u), guilds: list.map(c => ({ id: String(c.id), unavailable: true })), session_id: crypto.randomBytes(8).toString('hex'), resume_gateway_url: gatewayUrl(), application: { id: String(u.id), flags: 0 } });
       presence.add(g);
       for (const c of list) gwSend(g, 'GUILD_CREATE', guildObj(c, C.snapOf(c), true, u));
     }
@@ -314,6 +323,6 @@ function dispatch(communityId, obj) {
 
 module.exports = {
   mine, create, update, setAvatar, resetToken, remove, info, addToServer, fromHeader, parseId, viewOf: id => view(botRow(id)), closeGatewaysOf: closeGateways,
-  userObj, guildObj, channelObj, roleObj, messageObj, textIn, handleUpgrade, shutdown, dispatch, uidOf,
+  userObj, guildObj, channelObj, roleObj, messageObj, textIn, handleUpgrade, shutdown, dispatch, uidOf, permsToDiscord, isOnline, sendToBot,
   ROLE_BASE, MAX_BOTS, apiUrl, gatewayUrl, memberRemoved,
 };

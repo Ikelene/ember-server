@@ -21,7 +21,11 @@ function register(app) {
   app.get(v1('/channels/:cid/search'), req => M.search(req.params.cid, req.user, req.query.q));
   app.get(v1('/servers/:sid/search'), req => M.searchServer(req.params.sid, req.user, req.query.q, { offset: req.query.offset }));
   app.get(v1('/channels/:cid/pins'), req => M.pins(req.params.cid, req.user));
-  app.patch(v1('/messages/:id'), async req => ({ message: await M.editMessage(req.params.id, req.user, req.body?.message ?? req.body?.body, { signature: req.body?.signature, scopes: req.scopes }) }));
+  app.patch(v1('/messages/:id'), async req => {
+    const text = req.body?.message ?? req.body?.body;
+    if (text === undefined) throw err('empty_message');
+    return { message: await M.editMessage(req.params.id, req.user, text, { signature: req.body?.signature, scopes: req.scopes }) };
+  });
   app.delete(v1('/messages/:id'), req => { M.deleteMessage(req.params.id, req.user); });
   app.put(v1('/messages/:id/reactions/:emoji'), req => { M.react(req.params.id, req.user, req.params.emoji, true); });
   app.delete(v1('/messages/:id/reactions/:emoji'), req => { M.react(req.params.id, req.user, req.params.emoji, false); });

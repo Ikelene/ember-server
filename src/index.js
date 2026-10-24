@@ -33,6 +33,7 @@ async function startServer({ dataDir, port, host = process.env.BONFIRE_HOST, res
   require('./routes/moderation').register(app); // server settings, reports, timeouts, audit log, dashboard
   require('./routes/hooks').register(app);
   require('./routes/botapi').register(app);
+  require('./routes/commands').register(app);
   require('./bridge').register(app); // Discord / Fluxer / CloudLink bridges (PROTOCOL §16, §17)
   require('./game').register(app);   // Ember Link / Minecraft (PROTOCOL §18)
   await require('./youtube').init(); // optional yt-dlp player: detects the binary
@@ -53,6 +54,7 @@ async function startServer({ dataDir, port, host = process.env.BONFIRE_HOST, res
   require('./game').init();   // Ember Link tables, hooks, retention
   require('./profiles').start(); // keeps Velora members' names / pictures current
   require('./relay').start(); // Velora relays (PROTOCOL §12): registers in the background once we are reachable
+  require('./interactions').start(); // clears "thinking" messages a restart left behind
   require('./audit').start(); // drops audit log entries past their retention, hourly
   uploads.startExpiry(); // deletes uploads past their expiry, every few minutes
   log(`bonfire-server ${pkg.version} listening on ${host}:${actual}`);
@@ -65,6 +67,7 @@ async function startServer({ dataDir, port, host = process.env.BONFIRE_HOST, res
     require('./profiles').stop();
     require('./relay').stop();
     require('./audit').stop();
+    require('./interactions').stop();
     uploads.stopExpiry();
     require('./bridge').shutdown();
     require('./game').shutdown();

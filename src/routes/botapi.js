@@ -7,6 +7,7 @@ const M = require('../messages');
 const B = require('../bots');
 const uploads = require('../uploads');
 const W = require('../webhooks');
+const comps = require('../components');
 const { err, limiter } = require('../util');
 
 const ERR = {
@@ -14,32 +15,37 @@ const ERR = {
   server_not_found: [404, 10004, 'Unknown Guild'], role_not_found: [404, 10011, 'Unknown Role'], role_too_high: [403, 50013, 'Missing Permissions'], user_not_found: [404, 10013, 'Unknown User'], not_allowed: [403, 50013, 'Missing Permissions'],
   no_send_permission: [403, 50013, 'Missing Permissions'], no_attach_permission: [403, 50013, 'Missing Permissions'], channel_locked: [403, 50013, 'Missing Permissions'],
   empty_message: [400, 50006, 'Cannot send an empty message'], rate_limited: [429, 0, 'You are being rate limited.'], cannot_dm_bot: [403, 50007, 'Cannot send messages to this user'],
+  unknown_interaction: [404, 10062, 'Unknown interaction'], unknown_webhook: [404, 10015, 'Unknown Webhook'], unknown_command: [404, 10063, 'Unknown application command'],
+  unknown_message: [404, 10008, 'Unknown Message'], already_acknowledged: [400, 40060, 'Interaction has already been acknowledged.'],
+  invalid_form_body: [400, 50035, 'Invalid Form Body'], max_commands: [400, 30032, 'Maximum number of application commands reached'], unknown_application: [404, 10002, 'Unknown Application'],
 };
 const hits = limiter(150, 10000); // per bot
 
 function register(app) {
   const V = p => '/bot/v1' + p;
-  const route = fn => async (req, res) => {
+  // anon: interaction webhooks and callbacks are keyed by their token, not by a bot token
+  const route = (fn, { anon = false } = {}) => async (req, res) => {
     try {
       const bot = B.fromHeader(req.headers.authorization);
-      if (!bot) return app.send(res, 401, { message: '401: Unauthorized', code: 0 });
-      if (!hits.hit(bot.id)) return app.send(res, 429, { message: 'You are being rate limited.', retry_after: 2, global: false, code: 0 });
+      if (!bot && !anon) return app.send(res, 401, { message: '401: Unauthorized', code: 0 });
+      if (!hits.hit(bot ? bot.id : 'anon:' + req.ip)) return app.send(res, 429, { message: 'You are being rate limited.', retry_after: 2, global: false, code: 0 });
       const out = await fn(req, bot, res);
       if (res.headersSent) return;
       if (out === undefined) { res.writeHead(204); return res.end(); }
+      if (out && out.__status) return app.send(res, out.__status, out.body);
       app.send(res, 200, out);
     } catch (e) {
       if (res.headersSent) return;
       const [status, code, message] = ERR[e.code] || [e.status || (e.code ? 400 : 500), 0, e.code || 'Server error'];
       if (!e.code) console.error('[bot api]', req.method, req.url, e.stack || e.message);
-      app.send(res, status, { message, code, ...(status === 429 ? { retry_after: 1, global: false } : {}) });
+      app.send(res, status, { message: e.extra?.message || message, code, ...(e.extra?.errors ? { errors: e.extra.errors } : {}), ...(status === 429 ? { retry_after: 1, global: false } : {}) });
     }
   };
-  const get = (p, fn) => app.get(V(p), { auth: false }, route(fn));
-  const post = (p, fn) => app.post(V(p), { auth: false }, route(fn));
-  const patch = (p, fn) => app.patch(V(p), { auth: false }, route(fn));
-  const put = (p, fn) => app.put(V(p), { auth: false }, route(fn));
-  const del = (p, fn) => app.delete(V(p), { auth: false }, route(fn));
+  const get = (p, fn, o) => app.get(V(p), { auth: false }, route(fn, o));
+  const post = (p, fn, o) => app.post(V(p), { auth: false }, route(fn, o));
+  const patch = (p, fn, o) => app.patch(V(p), { auth: false }, route(fn, o));
+  const put = (p, fn, o) => app.put(V(p), { auth: false }, route(fn, o));
+  const del = (p, fn, o) => app.delete(V(p), { auth: false }, route(fn, o));
 
   // discovery (same shape as Fluxer's /.well-known/fluxer) + gateway info: no token needed
   const disc = () => ({ api_code_version: 1, endpoints: { api: B.apiUrl(), api_public: B.apiUrl(), api_client: B.apiUrl(), gateway: B.gatewayUrl() } });
@@ -122,18 +128,22 @@ function register(app) {
     if (body.payload_json != null) { try { body = JSON.parse(body.payload_json); } catch { throw err('empty_message'); } }
     const text = B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions);
     const fl = W.withFiles(files, body.embeds, bot.id);
-    const msg = await M.postMessage(bot, ctx, text, { replyTo: body.message_reference?.message_id || null, attachments: fl.atts, embeds: W.cleanEmbeds(fl.embeds) });
+    const msg = await M.postMessage(bot, ctx, text, { replyTo: body.message_reference?.message_id || null, attachments: fl.atts, embeds: W.cleanEmbeds(fl.embeds), components: comps.clean(body.components) });
     return B.messageObj(msg, ctx.c, ctx.snap);
   });
   patch('/channels/:cid/messages/:mid', async (req, bot) => {
     const ctx = channel(bot, req.params.cid);
-    const msg = await M.editMessage(inChannel(ctx, req.params.mid), bot, B.textIn(ctx.c, ctx.snap, req.body?.content, req.body?.allowed_mentions));
+    const body = req.body || {};
+    const msg = await M.editMessage(inChannel(ctx, req.params.mid), bot, body.content === undefined ? undefined : B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions), {
+      embeds: body.embeds === undefined ? undefined : W.cleanEmbeds(body.embeds), components: body.components === undefined ? undefined : comps.clean(body.components),
+    });
     return B.messageObj(msg, ctx.c, ctx.snap);
   });
   del('/channels/:cid/messages/:mid', (req, bot) => { const ctx = channel(bot, req.params.cid); M.deleteMessage(inChannel(ctx, req.params.mid), bot); });
   // reactions: :emoji is the character, or name:eid for a custom one
   put('/channels/:cid/messages/:mid/reactions/:emoji/@me', (req, bot) => { const ctx = channel(bot, req.params.cid); M.react(inChannel(ctx, req.params.mid), bot, req.params.emoji, true); });
   del('/channels/:cid/messages/:mid/reactions/:emoji/@me', (req, bot) => { const ctx = channel(bot, req.params.cid); M.react(inChannel(ctx, req.params.mid), bot, req.params.emoji, false); });
+  require('./botcommands').register({ get, post, patch, put, del, guild, channel, app });
   put('/channels/:cid/pins/:mid', (req, bot) => { const ctx = channel(bot, req.params.cid); M.pinMessage(inChannel(ctx, req.params.mid), bot, true); });
   del('/channels/:cid/pins/:mid', (req, bot) => { const ctx = channel(bot, req.params.cid); M.pinMessage(inChannel(ctx, req.params.mid), bot, false); });
 }

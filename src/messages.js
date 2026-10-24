@@ -63,6 +63,7 @@ function messageView(r, snap) {
     mention_everyone: r.mention_everyone === 1 ? 'everyone' : r.mention_everyone === 2 ? 'here' : null,
     mention_roles: r.mention_roles ? String(r.mention_roles).split(',').filter(Boolean).map(rid).filter(Boolean) : [],
     created_at: r.created_at, edited_at: r.edited_at || null,
+    components: json(r.components, undefined), interaction: json(r.interaction, undefined),
     signature: r.sig_kid ? { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } : null,
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
@@ -169,12 +170,13 @@ function insertMessage(ctx, f) {
   require('./managed').assertWritable(); // every way of posting ends here: users, bots, webhooks, bridges, Ember Link
   const { ch, c, snap } = ctx;
   const res = db.run(
-    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via, components, interaction)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ch.id, f.userId ?? null, f.body, f.replyTo ?? null, f.attachments?.length ? JSON.stringify(f.attachments) : null, f.system ? 1 : 0, f.sysKind || null,
     f.subjectId ?? null, f.subjectParts ? JSON.stringify(f.subjectParts) : null, f.everyone || 0, f.roleIds?.length ? ',' + f.roleIds.join(',') + ',' : null,
     f.authorName || null, f.authorAvatar || null, Date.now(), f.sig?.sig_kid ?? null, f.sig?.sig_sig ?? null, f.sig?.sig_ts ?? null, f.sig?.sig_nonce ?? null, f.sig?.verified ?? null,
-    f.embeds?.length ? JSON.stringify(f.embeds) : null, f.webhookId ?? null, f.bridge || null, f.via ? JSON.stringify(f.via) : null);
+    f.embeds?.length ? JSON.stringify(f.embeds) : null, f.webhookId ?? null, f.bridge || null, f.via ? JSON.stringify(f.via) : null,
+    f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null);
   const id = Number(res.lastInsertRowid);
   if (f.bridge && f.bridgeFrom) require('./bridge/store').setFrom(id, f.bridgeFrom);
   db.run('UPDATE channels SET last_message_id = ? WHERE id = ?', id, ch.id);
@@ -253,15 +255,15 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
   return insertMessage(ctx, { body: normBody(body), embeds, attachments, webhookId: hook.id, authorName: clean(username, 80) || hook.name, authorAvatar: avatar || hook.avatar || null });
 }
 
-// ctx = { ch, c, snap } (from C.findChannel)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin } = {}) {
+// ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, components, interaction, force } = {}) {
   const { ch, c, snap } = ctx;
   const body = normBody(text);
   const atts = cleanAttachments(attachments);
-  if (!body.trim() && !atts.length && !embeds?.length) throw err('empty_message');
+  if (!body.trim() && !atts.length && !embeds?.length && !components?.length) throw err('empty_message');
   if (!snap.isMember(me.id)) throw err('not_a_member', 403);
-  if (!snap.canPost(ch, me.id)) throw err(ch.locked && ch.type !== 'voice' ? 'channel_locked' : 'no_send_permission', 403);
-  if (atts.length && !(snap.chPerms(ch, me.id) & P.ATTACH)) throw err('no_attach_permission', 403);
+  if (!force && !snap.canPost(ch, me.id)) throw err(ch.locked && ch.type !== 'voice' ? 'channel_locked' : 'no_send_permission', 403);
+  if (atts.length && !force && !(snap.chPerms(ch, me.id) & P.ATTACH)) throw err('no_attach_permission', 403);
   assertLength(c, text);
   mod().beforePost(ctx, me, body); // timeouts, AutoMod's blocked words and spam limits
   if (!sendLimit.hit(me.id)) throw err('rate_limited', 429);
@@ -274,21 +276,25 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin) });
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin), components, interaction });
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
-async function editMessage(id, me, text, { signature, scopes } = {}) {
+// undefined text/embeds/components/interaction = keep them. silent skips the (edited) mark
+async function editMessage(id, me, text, { signature, scopes, embeds, components, interaction, silent, attachments } = {}) {
   const { r, ch, c, snap } = messageCtx(id, me);
   if (Number(r.user_id) !== Number(me.id)) throw err('not_allowed', 403);
-  const body = normBody(text);
-  if (!body.trim() && !r.attachments) throw err('empty_message');
-  assertLength(c, text);
+  const body = text === undefined ? r.body : normBody(text);
+  const nextEmbeds = embeds === undefined ? json(r.embeds, []) : embeds, nextComps = components === undefined ? json(r.components, []) : components;
+  if (!body.trim() && !r.attachments && !attachments?.length && !nextEmbeds?.length && !nextComps?.length) throw err('empty_message');
+  if (text !== undefined) assertLength(c, text);
   if (body !== r.body) mod().beforePost({ ch, c, snap }, me, body, { edit: true });
-  const atts = json(r.attachments, []);
+  const atts = attachments === undefined ? json(r.attachments, []) : cleanAttachments(attachments);
   const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: r.reply_to, editOf: r.id });
-  db.run('UPDATE messages SET body = ?, edited_at = ?, sig_kid = ?, sig_sig = ?, sig_ts = ?, sig_nonce = ?, verified = ? WHERE id = ?',
-    body, Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null, r.id);
+  db.run('UPDATE messages SET body = ?, edited_at = ?, sig_kid = ?, sig_sig = ?, sig_ts = ?, sig_nonce = ?, verified = ?, embeds = ?, components = ?, interaction = ?, attachments = ? WHERE id = ?',
+    body, silent ? r.edited_at : Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null,
+    nextEmbeds?.length ? JSON.stringify(nextEmbeds) : null, nextComps?.length ? JSON.stringify(nextComps) : null,
+    interaction === undefined ? r.interaction : interaction ? JSON.stringify(interaction) : null, atts.length ? JSON.stringify(atts) : null, r.id);
   const msg = viewById(r.id, snap);
   gateway.emit(c.id, { type: 'chat_message_update', message: msg, __via: parseVia(r.via) });
   runHooks(editHooks, msg, { ch, c, snap });
