@@ -19,6 +19,7 @@ const uploads = require('./uploads');
 const { P } = require('./perms');
 const { err, sha256, now, normalizeOrigin, b64url } = require('./util');
 const { presence } = require('./bot-presence');
+const botVoice = require('./bot-voice');
 
 const M = () => require('./messages');
 const ROLE_BASE = 1000000000, MAX_BOTS = 25, NAME = /^[A-Za-z0-9_.-]{2,32}$/, HEARTBEAT = 41250;
@@ -159,7 +160,7 @@ const roleObj = (c, r) => ({ id: roleId(c, r), name: r.name, color: r.color ? pa
 const channelObj = (ch, c) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: [], bonfire_type: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
 const guildObj = (c, snap, full, bot) => {
   const out = { id: String(c.id), name: c.name, icon: c.icon_url ? 'bonfire' : null, icon_url: c.icon_url || null, owner_id: String(c.owner_id), description: c.description || null, member_count: C.memberCount(c.id), roles: snap.roles.map(r => roleObj(c, r)) };
-  if (full) out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c));
+  if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c)); out.voice_states = botVoice.voiceStates(c, snap, uidOf); }
   return out;
 };
 const mimeOf = a => (a.type === 'gif' ? 'image/gif' : a.type === 'image' ? (/\.webp(\?|$)/i.test(a.url) ? 'image/webp' : /\.jpe?g(\?|$)/i.test(a.url) ? 'image/jpeg' : 'image/png') : a.type === 'video' ? 'video/mp4' : a.type === 'audio' ? 'audio/mpeg' : 'application/octet-stream');
@@ -243,12 +244,13 @@ function guildsOf(userId) {
 }
 function onConnection(ws) {
   const g = { ws, botId: null, seq: 0, last: Date.now() };
+  g.send = (t, d) => gwSend(g, t, d);
   gateways.add(g);
   ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: HEARTBEAT } }));
   if (!presenceSweep) { presenceSweep = setInterval(() => presence.sweep(), 15000); presenceSweep.unref(); }
   const noIdentify = setTimeout(() => { if (!g.botId) { g.dispose(); ws.close(4003, 'not authenticated'); } }, 20000);
   g.dispose = () => {
-    clearTimeout(noIdentify); presence.remove(g); gateways.delete(g);
+    clearTimeout(noIdentify); presence.remove(g); gateways.delete(g); botVoice.drop(g);
     if (!gateways.size) { clearInterval(presenceSweep); presenceSweep = null; }
   };
   ws.on('message', raw => {
@@ -256,6 +258,11 @@ function onConnection(ws) {
     if (!ev || typeof ev !== 'object') return;
     if (!gateways.has(g) || ws.readyState !== 1) return;
     if (ev.op === 1) { g.last = Date.now(); ws.send(JSON.stringify({ op: 11 })); return; }
+    if (ev.op === 4 || ev.op === 40) {
+      const me = g.botId && auth.userById(g.botId);
+      if (me) botVoice.handleOp(g, me, ev);
+      return;
+    }
     if (ev.op === 2 || ev.op === 6) {
       if (g.botId) { g.dispose(); ws.close(4005, 'already authenticated'); return; }
       const u = fromHeader(`Bot ${String(ev.d?.token || '').replace(/^Bot\s+/i, '')}`);
@@ -279,6 +286,7 @@ function shutdown() { for (const g of gateways) { g.dispose(); try { g.ws.close(
 
 // gateway.emit hands us every community event; bots that are members get it in Discord's shape
 function dispatch(communityId, obj) {
+  const voiceDiff = obj?.type === 'chat_voice_state' ? botVoice.diff(obj) : null;
   if (!gateways.size || !obj) return;
   const here = [...gateways].filter(g => g.botId && db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', communityId, g.botId));
   if (!here.length && !(obj.type === 'chat_member_update' && String(obj.user_id).startsWith('b:'))) return;
@@ -314,6 +322,11 @@ function dispatch(communityId, obj) {
       only = g => g.botId !== uid;
       t = 'GUILD_MEMBER_REMOVE'; d = { guild_id: String(c.id), user: { id: String(uid), username: obj.username } };
     }
+  } else if (voiceDiff) {
+    ch = chOf(obj.channel);
+    if (!ch) return;
+    for (const u of voiceDiff) here.filter(g => sees(g, ch)).forEach(g => gwSend(g, 'VOICE_STATE_UPDATE', botVoice.stateObj(c, ch, uidOf, u, u.present)));
+    return;
   } else if (obj.type === 'chat_channels_update') {
     here.forEach(g => gwSend(g, 'GUILD_UPDATE', guildObj(c, snap, true, auth.userById(g.botId))));
     return;
