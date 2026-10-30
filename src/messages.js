@@ -23,7 +23,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
 // ---------- views ----------
 const SELECT_MSG = `SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.username AS u_username, u.display_name AS u_dn, u.pfp AS u_pfp, u.velora_id AS u_vid,
   su.username AS subject_username, su.principal AS subject_principal,
-  r.id AS r_id, r.body AS r_body, r.system AS r_system, r.user_id AS r_user_id, r.author_name AS r_author_name, r.subject_user_id AS r_subject_user_id, r.subject_parts AS r_subject_parts,
+  r.id AS r_id, r.body AS r_body, r.system AS r_system, r.user_id AS r_user_id, r.author_name AS r_author_name, r.subject_user_id AS r_subject_user_id, r.subject_parts AS r_subject_parts, r.alias_name AS r_alias_name, r.alias_avatar AS r_alias_avatar,
   ru.principal AS r_principal, ru.kind AS r_kind, ru.username AS r_username, ru.display_name AS r_dn, ru.pfp AS r_pfp, ru.velora_id AS r_vid, rsu.username AS r_subject_username, rsu.principal AS r_subject_principal
   FROM messages m LEFT JOIN users u ON u.id = m.user_id
   LEFT JOIN messages r ON r.id = m.reply_to LEFT JOIN users ru ON ru.id = r.user_id
@@ -42,6 +42,28 @@ const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, ki
 const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, velora_id: null, name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
 // author.bridge_from (where a bridged post was relayed from: a Velocity backend, "Discord" via CloudLink...) lives in bridge/store.js
 const bridgeFrom = id => { try { return require('./bridge/store').fromOf(id); } catch { return null; } };
+// alias: a bot posting under another name and picture ({ name, avatar_url }). author stays the real bot everywhere
+// (mentions, notifications, blocks, moderation); clients show the alias with a mask that names the real sender.
+const aliasView = (name, avatar) => (name ? { name, avatar_url: avatar || null } : null);
+const ALIAS_MAX = 32, ALIAS_AVATAR_MAX = 500;
+// raw alias from a request -> undefined (not given), null (clear) or { name, avatar }. Anyone but a bot gets 403 alias_bots_only.
+function cleanAlias(me, raw) {
+  if (raw === undefined) return undefined;
+  if (me?.kind !== 'bot') throw err('alias_bots_only', 403);
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw err('invalid_alias', 400, { message: 'alias must be an object: { name, avatar_url }' });
+  if (typeof raw.name !== 'string' || /[\r\n\u2028\u2029]/.test(raw.name)) throw err('invalid_alias', 400, { message: 'alias.name must be one line of text' });
+  const name = clean(raw.name.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, ''), ALIAS_MAX + 1);
+  if (!name || name.length > ALIAS_MAX) throw err('invalid_alias', 400, { message: `alias.name must be 1-${ALIAS_MAX} characters` });
+  let avatar = null;
+  if (raw.avatar_url != null && raw.avatar_url !== '') {
+    const a = String(raw.avatar_url);
+    let u = null; try { u = new URL(a); } catch { /* not a URL */ }
+    if (a.length > ALIAS_AVATAR_MAX || !u || u.protocol !== 'https:' || u.username || u.password || /\s/.test(a)) throw err('invalid_alias', 400, { message: `alias.avatar_url must be an https:// URL of at most ${ALIAS_AVATAR_MAX} characters` });
+    avatar = u.href.length <= ALIAS_AVATAR_MAX ? u.href : a;
+  }
+  return { name, avatar };
+}
 
 function messageView(r, snap) {
   const c = snap.c;
@@ -59,7 +81,8 @@ function messageView(r, snap) {
     ...identityView(r.subject_user_id, r.subject_parts, r.subject_username, r.subject_principal, r.body),
     attachments: json(r.attachments, []), system: !!r.system, sys_kind: r.sys_kind || undefined, pinned: !!r.pinned_at, embeds: json(r.embeds, undefined),
     reply_to: r.reply_to == null ? null : String(r.reply_to),
-    reply: r.r_id ? { id: String(r.r_id), author: replyAuthor, ...rep, body: rep.body.slice(0, 200) } : null,
+    alias: aliasView(r.alias_name, r.alias_avatar),
+    reply: r.r_id ? { id: String(r.r_id), author: replyAuthor, alias: aliasView(r.r_alias_name, r.r_alias_avatar), ...rep, body: rep.body.slice(0, 200) } : null,
     mention_everyone: r.mention_everyone === 1 ? 'everyone' : r.mention_everyone === 2 ? 'here' : null,
     mention_roles: r.mention_roles ? String(r.mention_roles).split(',').filter(Boolean).map(rid).filter(Boolean) : [],
     created_at: r.created_at, edited_at: r.edited_at || null,
@@ -178,6 +201,7 @@ function insertMessage(ctx, f) {
     f.embeds?.length ? JSON.stringify(f.embeds) : null, f.webhookId ?? null, f.bridge || null, f.via ? JSON.stringify(f.via) : null,
     f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null);
   const id = Number(res.lastInsertRowid);
+  if (f.alias) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', f.alias.name, f.alias.avatar || null, id);
   if (f.bridge && f.bridgeFrom) require('./bridge/store').setFrom(id, f.bridgeFrom);
   db.run('UPDATE channels SET last_message_id = ? WHERE id = ?', id, ch.id);
   ch.last_message_id = id;
@@ -256,8 +280,10 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
 }
 
 // ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, components, interaction, force } = {}) {
+// alias (bots only): { name, avatar_url } shows another name and picture on this message (see cleanAlias)
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, components, interaction, force, alias } = {}) {
   const { ch, c, snap } = ctx;
+  const aliasRow = cleanAlias(me, alias);
   const body = normBody(text);
   const atts = cleanAttachments(attachments);
   if (!body.trim() && !atts.length && !embeds?.length && !components?.length) throw err('empty_message');
@@ -276,14 +302,15 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin), components, interaction });
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin), components, interaction, alias: aliasRow || null });
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
-// undefined text/embeds/components/interaction = keep them. silent skips the (edited) mark
-async function editMessage(id, me, text, { signature, scopes, embeds, components, interaction, silent, attachments } = {}) {
+// undefined text/embeds/components/interaction/alias = keep them (alias: null clears it). silent skips the (edited) mark
+async function editMessage(id, me, text, { signature, scopes, embeds, components, interaction, silent, attachments, alias } = {}) {
   const { r, ch, c, snap } = messageCtx(id, me);
   if (Number(r.user_id) !== Number(me.id)) throw err('not_allowed', 403);
+  const aliasRow = cleanAlias(me, alias);
   const body = text === undefined ? r.body : normBody(text);
   const nextEmbeds = embeds === undefined ? json(r.embeds, []) : embeds, nextComps = components === undefined ? json(r.components, []) : components;
   if (!body.trim() && !r.attachments && !attachments?.length && !nextEmbeds?.length && !nextComps?.length) throw err('empty_message');
@@ -295,6 +322,7 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
     body, silent ? r.edited_at : Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null,
     nextEmbeds?.length ? JSON.stringify(nextEmbeds) : null, nextComps?.length ? JSON.stringify(nextComps) : null,
     interaction === undefined ? r.interaction : interaction ? JSON.stringify(interaction) : null, atts.length ? JSON.stringify(atts) : null, r.id);
+  if (aliasRow !== undefined) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', aliasRow?.name ?? null, aliasRow?.avatar ?? null, r.id);
   const msg = viewById(r.id, snap);
   gateway.emit(c.id, { type: 'chat_message_update', message: msg, __via: parseVia(r.via) });
   runHooks(editHooks, msg, { ch, c, snap });
@@ -439,7 +467,7 @@ function markRead(cid, me, id) {
 }
 
 module.exports = {
-  viaOf, MSG_MAX, SELECT_MSG, messageView, viewById, reactionsFor, withReactions, cleanAttachments, postMessage, systemMessage, insertMessage, editMessage, deleteMessage,
+  viaOf, MSG_MAX, SELECT_MSG, cleanAlias, messageView, viewById, reactionsFor, withReactions, cleanAttachments, postMessage, systemMessage, insertMessage, editMessage, deleteMessage,
   react, history, search, searchServer, pinMessage, pins, markRead, checkSignature,
   onPost, onEdit, onDelete, postBridged, editBridged, deleteBridged, postWebhook, ctxOf, _sendLimit: sendLimit,
 };

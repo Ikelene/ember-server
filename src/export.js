@@ -87,6 +87,7 @@ function exportCommunity(sid, me) {
           ...(r.sys_kind ? { sys_kind: r.sys_kind } : {}), pinned: !!r.pinned_at, reactions: rx.get(r.id) || [],
           ...(r.sig_kid ? { signature: { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } } : {}),
           ...(r.bridge ? { bridge: r.bridge } : {}),
+          ...(r.alias_name ? { alias: { name: r.alias_name, avatar_url: r.alias_avatar || null } } : {}),
         };
         lines.push(JSON.stringify(o));
       }
@@ -239,6 +240,9 @@ function importCommunity(me, buffer, parsed) {
           m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null);
         const nid = Number(res.lastInsertRowid);
         idMap.set(String(m.id), nid);
+        if (u?.kind === 'bot' && m.alias && typeof m.alias === 'object') { // a bot's alias survives only when the author is still that bot
+          try { const al = require('./messages').cleanAlias(u, m.alias); if (al) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', al.name, al.avatar, nid); } catch { /* invalid alias: drop it */ }
+        }
         if (m.reply_to) replies.push([nid, String(m.reply_to)]);
         for (const rx of Array.isArray(m.reactions) ? m.reactions : []) {
           if (typeof rx?.emoji !== 'string') continue;

@@ -199,6 +199,8 @@ const MIGRATIONS = [
     command_id INTEGER NOT NULL DEFAULT 0, target_type INTEGER NOT NULL, target_id TEXT NOT NULL, allow INTEGER NOT NULL,
     PRIMARY KEY (community_id, bot_id, command_id, target_type, target_id)
   );`,
+  // v10: aliases: a bot can post a message under another name and picture (the author stays the real bot)
+  `ALTER TABLE messages ADD COLUMN alias_name TEXT; ALTER TABLE messages ADD COLUMN alias_avatar TEXT;`,
 ];
 
 function open() {

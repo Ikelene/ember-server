@@ -198,12 +198,13 @@ function messageObj(m, c, snap) {
     timestamp: new Date(m.created_at).toISOString(), edited_timestamp: m.edited_at ? new Date(m.edited_at).toISOString() : null,
     member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: null } : undefined,
     channel_name: ch?.name, guild_name: c.name, bonfire: { cid: m.channel, sid: c.sid, bridge: au?.bridge || undefined },
+    alias: m.alias || null, // Ember extension: { name, avatar_url } when a bot posted under an alias; author is still the real bot
   };
   if (au?.webhook && !au.bridge) out.webhook_id = '1';
   if (m.reply) {
     out.message_reference = { message_id: String(m.reply.id), channel_id: String(ch?.id), guild_id: String(c.id) };
     const ra = m.reply.author, raId = ra?.id ? uidOf(ra.id) : null;
-    out.referenced_message = { id: String(m.reply.id), channel_id: String(ch?.id), content: m.reply.body || '', author: ra ? { id: String(raId || 0), username: ra.username, avatar_url: ra.pfp || null, bot: raId ? db.get('SELECT kind FROM users WHERE id = ?', raId)?.kind === 'bot' : true } : null };
+    out.referenced_message = { id: String(m.reply.id), channel_id: String(ch?.id), content: m.reply.body || '', author: ra ? { id: String(raId || 0), username: ra.username, avatar_url: ra.pfp || null, bot: raId ? db.get('SELECT kind FROM users WHERE id = ?', raId)?.kind === 'bot' : true } : null, alias: m.reply.alias || null };
     if (raId) out.message_reference.author_id = String(raId);
   }
   return out;

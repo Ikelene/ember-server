@@ -195,13 +195,14 @@ async function prepare(it, data, files) {
     embeds: data.embeds === undefined ? undefined : W.cleanEmbeds(fl.embeds),
     components: data.components === undefined ? undefined : comps.clean(data.components),
     attachments: fl.atts.length ? fl.atts : undefined,
+    alias: data.alias, // undefined = keep; checked in messages.cleanAlias
   };
 }
 const meta = it => (it.type === 2 ? { id: it.id, type: 2, name: it.name, user: (u => ({ id: u.principal, username: u.username }))(commUser(it.userId)) } : undefined);
 
 async function postReal(it, p) {
   const ctx = M().ctxOf(channelOf(it));
-  const msg = await M().postMessage(p.bot, ctx, p.text ?? '', { embeds: p.embeds, attachments: p.attachments, components: p.components, interaction: meta(it), force: true });
+  const msg = await M().postMessage(p.bot, ctx, p.text ?? '', { embeds: p.embeds, attachments: p.attachments, components: p.components, interaction: meta(it), force: true, alias: p.alias });
   it.msgIds.add(Number(msg.id));
   return msg;
 }
@@ -257,7 +258,7 @@ async function updateMessage(it, p) {
     putEphOn(owner, p, keep);
     return;
   }
-  await M().editMessage(it.message.real, p.bot, p.text, { embeds: p.embeds, components: p.components, attachments: p.attachments });
+  await M().editMessage(it.message.real, p.bot, p.text, { embeds: p.embeds, components: p.components, attachments: p.attachments, alias: p.alias });
 }
 function putEphOn(owner, p, keep) {
   const view = ephView(owner, keep.id, { content: p.text ?? keep.body, embeds: p.embeds ?? keep.embeds, components: p.components ?? keep.components, attachments: p.attachments ?? keep.attachments, created_at: keep.created_at, edited_at: Date.now() });
@@ -273,7 +274,7 @@ async function followup(token, appId, body, files) {
     if (empty(p)) throw err('empty_message');
     it.origDone = true; it.thinking = false;
     if (it.ephemeral) return ephDiscord(it, putEphOn2(it, p, it.eph.get(it.origEph)));
-    const msg = await M().editMessage(it.msgId, p.bot, p.text ?? '', { embeds: p.embeds, components: p.components, attachments: p.attachments, interaction: meta(it) || null, silent: true });
+    const msg = await M().editMessage(it.msgId, p.bot, p.text ?? '', { embeds: p.embeds, components: p.components, attachments: p.attachments, interaction: meta(it) || null, silent: true, alias: p.alias });
     return realObj(it, msg);
   }
   if (empty(p)) throw err('empty_message');
@@ -308,7 +309,7 @@ async function editFollowup(token, appId, mid, body, files) {
   const first = (mid === '@original' || mid === String(it.origEph) || Number(mid) === it.msgId) && !it.origDone && it.deferred;
   if (first) { it.origDone = true; it.thinking = false; }
   if (t.eph) { putEphOn(it, p, t.eph); return ephDiscord(it, it.eph.get(t.eph.id)); }
-  const msg = await M().editMessage(t.real, p.bot, p.text, { embeds: p.embeds, components: p.components, attachments: p.attachments, ...(first ? { interaction: meta(it) || null, silent: true } : {}) });
+  const msg = await M().editMessage(t.real, p.bot, p.text, { embeds: p.embeds, components: p.components, attachments: p.attachments, alias: p.alias, ...(first ? { interaction: meta(it) || null, silent: true } : {}) });
   return realObj(it, msg);
 }
 function deleteFollowup(token, appId, mid) {

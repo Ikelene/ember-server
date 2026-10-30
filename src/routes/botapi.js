@@ -128,14 +128,14 @@ function register(app) {
     if (body.payload_json != null) { try { body = JSON.parse(body.payload_json); } catch { throw err('empty_message'); } }
     const text = B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions);
     const fl = W.withFiles(files, body.embeds, bot.id);
-    const msg = await M.postMessage(bot, ctx, text, { replyTo: body.message_reference?.message_id || null, attachments: fl.atts, embeds: W.cleanEmbeds(fl.embeds), components: comps.clean(body.components) });
+    const msg = await M.postMessage(bot, ctx, text, { replyTo: body.message_reference?.message_id || null, attachments: fl.atts, embeds: W.cleanEmbeds(fl.embeds), components: comps.clean(body.components), alias: body.alias });
     return B.messageObj(msg, ctx.c, ctx.snap);
   });
   patch('/channels/:cid/messages/:mid', async (req, bot) => {
     const ctx = channel(bot, req.params.cid);
     const body = req.body || {};
     const msg = await M.editMessage(inChannel(ctx, req.params.mid), bot, body.content === undefined ? undefined : B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions), {
-      embeds: body.embeds === undefined ? undefined : W.cleanEmbeds(body.embeds), components: body.components === undefined ? undefined : comps.clean(body.components),
+      embeds: body.embeds === undefined ? undefined : W.cleanEmbeds(body.embeds), components: body.components === undefined ? undefined : comps.clean(body.components), alias: body.alias,
     });
     return B.messageObj(msg, ctx.c, ctx.snap);
   });

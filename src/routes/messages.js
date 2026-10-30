@@ -14,7 +14,7 @@ function register(app) {
   app.get(v1('/channels/:cid/messages'), req => M.history(req.params.cid, req.user, req.query));
   app.post(v1('/channels/:cid/messages'), async req => ({
     message: await M.postMessage(req.user, C.findChannel(req.params.cid, req.user), req.body?.message ?? req.body?.body, {
-      replyTo: req.body?.reply_to, attachments: req.body?.attachments, signature: req.body?.signature, scopes: req.scopes, origin: req.headers?.origin,
+      replyTo: req.body?.reply_to, attachments: req.body?.attachments, signature: req.body?.signature, scopes: req.scopes, origin: req.headers?.origin, alias: req.body?.alias,
     }),
   }));
   app.post(v1('/channels/:cid/read'), req => { M.markRead(req.params.cid, req.user, req.body?.id ?? req.body?.message_id); });
@@ -24,7 +24,7 @@ function register(app) {
   app.patch(v1('/messages/:id'), async req => {
     const text = req.body?.message ?? req.body?.body;
     if (text === undefined) throw err('empty_message');
-    return { message: await M.editMessage(req.params.id, req.user, text, { signature: req.body?.signature, scopes: req.scopes }) };
+    return { message: await M.editMessage(req.params.id, req.user, text, { signature: req.body?.signature, scopes: req.scopes, alias: req.body?.alias }) };
   });
   app.delete(v1('/messages/:id'), req => { M.deleteMessage(req.params.id, req.user); });
   app.put(v1('/messages/:id/reactions/:emoji'), req => { M.react(req.params.id, req.user, req.params.emoji, true); });
