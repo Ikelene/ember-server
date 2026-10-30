@@ -11,6 +11,7 @@ const pkg = require('../package.json');
 async function startServer({ dataDir, port, host = process.env.BONFIRE_HOST, restart } = {}) {
   config.init({ dataDir, port: port === undefined ? undefined : port || undefined });
   db.open();
+  require('./public-url').checkPublicUrl(); // a new BONFIRE_PUBLIC_URL (a hosted server moved): stored urls on the old origin follow
   require('./communities').syncFromConfig(); // config.json is the source of truth for name/description/icon
   const setup = require('./setup');
   const gateway = require('./gateway');

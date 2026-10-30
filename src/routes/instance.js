@@ -24,7 +24,7 @@ function discovery() {
     open_protocol: true, protocol_name: 'Ember Instance Protocol', protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md',
     about: "Ember is an open chat protocol, not a Velora-only product: anyone can write an Ember client and use or run Ember servers. Velora's web, desktop and Android apps are just the clients the Velora ecosystem uses.",
     build: V.build(), // PROTOCOL §3: { version, commit, commit_short, commit_date, built_at, dirty, build_id }
-    name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url,
+    name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
     accounts_mode: mode,
     velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json` } : null,
     claimed: auth.claimed(),

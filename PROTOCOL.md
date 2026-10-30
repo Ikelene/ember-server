@@ -112,7 +112,7 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
   "software": "bonfire-server", "version": "0.1.0", "protocol": 1,
   "open_protocol": true, "protocol_name": "Ember Instance Protocol", "protocol_docs": "https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md", "about": "<one sentence: Ember is open, anyone can write a client or server>",
   "name": "My Instance", "description": "", "icon_url": null,
-  "public_url": "http://localhost:4100",
+  "public_url": "http://localhost:4100", "previous_urls": [],
   "accounts_mode": "velora" | "local",
   "velora": { "issuer": "http://localhost:3000", "jwks_url": "http://localhost:3000/.well-known/bonfire/jwks.json" } | null,
   "claimed": true,
@@ -135,6 +135,7 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
 - `features.voice` is true when voice works: the instance's own Cloudflare keys, or Velora's voice broker while registered and under its cap (§10).
 - `managed` is non-null on a Velora-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
 - `read_only` is true while the instance refuses all writes (§19.3).
+- `previous_urls` lists earlier `public_url`s, newest first (a Velora-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
 - `build` is the running server build (§5c). `commit` / `built_at` are `null` on a server not built by the release script (plain checkout).
 
 ---
