@@ -201,6 +201,17 @@ const MIGRATIONS = [
   );`,
   // v10: aliases: a bot can post a message under another name and picture (the author stays the real bot)
   `ALTER TABLE messages ADD COLUMN alias_name TEXT; ALTER TABLE messages ADD COLUMN alias_avatar TEXT;`,
+  // v11: Server settings > Insights: join / leave history (joins backfilled from members.joined_at; leaves start now) and
+  // time indexes so the activity charts are range scans
+  `CREATE TABLE member_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL, kind TEXT NOT NULL, reason TEXT, at INTEGER NOT NULL
+  );
+  CREATE INDEX member_events_at ON member_events(community_id, at);
+  INSERT INTO member_events (community_id, user_id, kind, at) SELECT community_id, user_id, 'join', joined_at FROM members;
+  INSERT OR REPLACE INTO meta (k, v) VALUES ('member_events_since', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
+  CREATE INDEX messages_created ON messages(created_at, channel_id, user_id, system, webhook_id);
+  CREATE INDEX reactions_created ON reactions(created_at, message_id, user_id);`,
 ];
 
 function open() {

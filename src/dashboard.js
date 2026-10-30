@@ -11,7 +11,7 @@ const pkg = require('../package.json');
 // database tables -> the storage groups the page shows
 const GROUPS = {
   messages: ['messages', 'reactions', 'read_state', 'starboard', 'webhooks'],
-  members: ['users', 'members', 'member_roles', 'sessions', 'bans', 'join_requests', 'timeouts', 'notify', 'jti_seen', 'instance_admins', 'role_purchases', 'role_payments', 'bots'],
+  members: ['users', 'members', 'member_roles', 'sessions', 'bans', 'join_requests', 'timeouts', 'notify', 'jti_seen', 'instance_admins', 'role_purchases', 'role_payments', 'bots', 'member_events'],
   roles: ['roles', 'channel_perms', 'channels', 'communities', 'invites'],
   moderation: ['audit_log', 'reports'],
   previews: ['unfurls'],

@@ -49,5 +49,16 @@ function register(app) {
 
   // ---- dashboard (Server settings > Dashboard) ----
   app.get(v1('/servers/:sid/dashboard'), req => { const { c } = manager(req); return require('../dashboard').view(c); });
+
+  // ---- insights (Server settings > Insights): activity charts. Manage server, or an instance admin ----
+  app.get(v1('/servers/:sid/insights'), req => {
+    const c = C.findCommunity(req.params.sid);
+    if (!require('../auth').isAdmin(req.user)) {
+      const snap = C.snapOf(c);
+      if (!snap.isMember(req.user.id)) throw err('not_a_member', 403);
+      if (!snap.can(req.user.id, P.MANAGE_SERVER)) throw err('not_allowed', 403);
+    }
+    return require('../insights').view(c, req.query || {});
+  });
 }
 module.exports = { register };

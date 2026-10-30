@@ -307,7 +307,7 @@ function createCommunity(me, body = {}, opts = {}) {
       sid, name, clean(body.description, 300), owner.id, inviteCode(), policy, (body.listed ?? body.discoverable) ? 1 : 0, t, '[]');
     const id = r.lastInsertRowid;
     insertRole(id, { name: '@everyone', permissions: EVERYONE_DEFAULT, is_default: 1, position: 0 });
-    for (const uid of new Set([owner.id, me.id])) db.run('INSERT INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', id, uid, t);
+    for (const uid of new Set([owner.id, me.id])) { db.run('INSERT INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', id, uid, t); memberEvent(id, uid, 'join', null, t); }
     if (!opts.empty) {
       insertChannel(id, { name: 'general', category: 'Text channels', type: 'text' }, 0);
       insertChannel(id, { name: 'General', category: 'Voice channels', type: 'voice' }, 1);
@@ -380,12 +380,15 @@ function deleteCommunity(sid, me, { afterCommit } = {}) {
 }
 
 // ---------- members ----------
+// join / leave history for Server settings > Insights (why: 'left' / 'kicked' / 'banned' / ...)
+const memberEvent = (communityId, userId, kind, why = null, at = now()) => db.run('INSERT INTO member_events (community_id, user_id, kind, reason, at) VALUES (?, ?, ?, ?, ?)', communityId, userId, kind, why, at);
 function addMember(c, userId, { quiet = false, announce = true } = {}) {
   userId = Number(userId);
   if (db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, userId)) return false;
   if (auth.userById(userId)?.kind === 'bot') managed.assertRoom('bots', managed.botCount(c.id));
   db.tx(() => {
     db.run('INSERT OR IGNORE INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', c.id, userId, now());
+    memberEvent(c.id, userId, 'join');
     db.run('DELETE FROM join_requests WHERE community_id = ? AND user_id = ?', c.id, userId);
     // start with everything read (a new member doesn't get years of "unread")
     for (const ch of db.all('SELECT id, last_message_id FROM channels WHERE community_id = ?', c.id)) db.run('INSERT OR REPLACE INTO read_state (user_id, channel_id, last_read_id) VALUES (?, ?, ?)', userId, ch.id, ch.last_message_id || 0);
@@ -424,7 +427,7 @@ function removeMember(c, userId, why) {
   // Publish while still a member; the normal debounced presence emitter looks up current memberships.
   if (bot) gateway.emit(c.id, { type: 'chat_presence', server: c.sid, user_id: u.principal, username: u.username, presence: 'offline' });
   db.tx(() => {
-    db.run('DELETE FROM members WHERE community_id = ? AND user_id = ?', c.id, userId);
+    if (db.run('DELETE FROM members WHERE community_id = ? AND user_id = ?', c.id, userId).changes) memberEvent(c.id, userId, 'leave', why || null);
     db.run('DELETE FROM member_roles WHERE community_id = ? AND user_id = ?', c.id, userId);
   });
   gateway.pushToUser(userId, { type: 'chat_server_removed', server: c.sid, reason: why });
