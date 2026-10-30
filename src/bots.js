@@ -147,6 +147,8 @@ function fromHeader(h) {
 
 // ---------- Discord-shaped objects ----------
 const uidOf = (() => { return principal => db.get('SELECT id FROM users WHERE principal = ?', String(principal))?.id; })();
+// a message's alias for the bot API: principals become numeric ids like every other id there (member_id = the matched member)
+const botAlias = a => (a ? { name: a.name, avatar_url: a.avatar_url || null, unmarked: !!a.unmarked, ...(a.member_id && uidOf(a.member_id) ? { member_id: String(uidOf(a.member_id)) } : {}) } : null);
 const userObj = u => ({ id: String(u.id), username: u.username, global_name: u.display_name || u.username, discriminator: '0', avatar: u.pfp ? 'bonfire' : null, avatar_url: u.pfp || null, bot: u.kind === 'bot', ...(db.get('SELECT 1 FROM bots WHERE user_id = ? AND gallery_verified = 1', Number(u.id)) ? { verified: true } : {}) });
 function permsToDiscord(p) {
   let d = 1024n | 65536n | 16384n | 64n; // view, read history, embed links, add reactions
@@ -198,13 +200,13 @@ function messageObj(m, c, snap) {
     timestamp: new Date(m.created_at).toISOString(), edited_timestamp: m.edited_at ? new Date(m.edited_at).toISOString() : null,
     member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: null } : undefined,
     channel_name: ch?.name, guild_name: c.name, bonfire: { cid: m.channel, sid: c.sid, bridge: au?.bridge || undefined },
-    alias: m.alias || null, // Ember extension: { name, avatar_url } when a bot posted under an alias; author is still the real bot
+    alias: botAlias(m.alias), // Ember extension: { name, avatar_url, unmarked, member_id? } when a bot posted under an alias; author is still the real bot
   };
   if (au?.webhook && !au.bridge) out.webhook_id = '1';
   if (m.reply) {
     out.message_reference = { message_id: String(m.reply.id), channel_id: String(ch?.id), guild_id: String(c.id) };
     const ra = m.reply.author, raId = ra?.id ? uidOf(ra.id) : null;
-    out.referenced_message = { id: String(m.reply.id), channel_id: String(ch?.id), content: m.reply.body || '', author: ra ? { id: String(raId || 0), username: ra.username, avatar_url: ra.pfp || null, bot: raId ? db.get('SELECT kind FROM users WHERE id = ?', raId)?.kind === 'bot' : true } : null, alias: m.reply.alias || null };
+    out.referenced_message = { id: String(m.reply.id), channel_id: String(ch?.id), content: m.reply.body || '', author: ra ? { id: String(raId || 0), username: ra.username, avatar_url: ra.pfp || null, bot: raId ? db.get('SELECT kind FROM users WHERE id = ?', raId)?.kind === 'bot' : true } : null, alias: botAlias(m.reply.alias) };
     if (raId) out.message_reference.author_id = String(raId);
   }
   return out;

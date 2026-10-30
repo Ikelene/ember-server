@@ -23,6 +23,9 @@ const DEFAULTS = {
     per_minute: 30, files_per_member: null, types: ['any'], expire_days: null, never_expire_plans: [], never_expire_roles: [], storage_mb: null,
     compress: false, max_width: 1920, max_height: 1920, max_pixels: 50000000, jpeg_quality: 85,
   },
+  // Danger zone > Advanced (owner only): bots' alias messages show with no alias mark, under a matching member's name colour and
+  // profile (messages.js aliasFor). Never exported or imported: it has to be turned on by hand on each server.
+  advanced: { unmarked_aliases: false },
 };
 const SPAM_DEFAULTS = { per_minute: 30, burst: 8, pause_seconds: 0 };
 const AUDIT_CATEGORIES = ['user_moderation', 'role_management', 'channel_management', 'message_moderation', 'server_management'];
@@ -171,11 +174,15 @@ const SECTION_RULES = {
     max_pixels: v => int(v, 10000, 1e9, 'invalid_image_size'),
     jpeg_quality: v => int(v, 1, 100, 'invalid_jpeg_quality'),
   },
+  advanced: {
+    unmarked_aliases: v => bool(v, 'invalid_unmarked_aliases'),
+  },
 };
 const ADMIN_ONLY = { messages: ['preview_proxy'], automod: ['word_file'] };
+const OWNER_ONLY = { advanced: ['unmarked_aliases'] }; // the server owner and nobody else (not Administrator, not instance admins)
 const JOIN_POLICIES = ['open', 'request', 'password', 'allowlist', 'invite'];
 
-// body: { join_policy?, join_password?, join?: {...}, messages?: {...}, automod?: {...}, audit?: {...}, uploads?: {...} }
+// body: { join_policy?, join_password?, join?: {...}, messages?: {...}, automod?: {...}, audit?: {...}, uploads?: {...}, advanced?: {...} }
 // -> { changed: [section or key names] }. Throws API errors; nothing is saved unless all of it is valid.
 async function update(c, snap, me, body = {}) {
   const auth = require('./auth');
@@ -191,7 +198,8 @@ async function update(c, snap, me, body = {}) {
       const val = rule(v, ctx);
       if (JSON.stringify(val) === JSON.stringify(cur[sec][k])) continue;
       if (ADMIN_ONLY[sec]?.includes(k) && !admin) throw err('instance_admin_only', 403, { setting: k });
-      next[sec][k] = val; changed.add(sec);
+      if (OWNER_ONLY[sec]?.includes(k) && !snap.isOwner(me.id)) throw err('owner_only', 403, { setting: k });
+      next[sec][k] = val; changed.add(OWNER_ONLY[sec]?.includes(k) ? k : sec);
     }
   }
   const p = planCaps(); // a number above the plan is saved as the plan's (the page shows the plan's number and a lock)
@@ -220,7 +228,7 @@ async function update(c, snap, me, body = {}) {
 // what an export carries: everything but the join password and the two settings that point at this machine
 function exportable(c) {
   const s = raw(c);
-  delete s.join.password_hash; delete s.messages.preview_proxy; delete s.automod.word_file;
+  delete s.join.password_hash; delete s.messages.preview_proxy; delete s.automod.word_file; delete s.advanced;
   return s;
 }
 // an export's settings -> what gets saved (each value checked like a PATCH; a bad one is left at its default). mapRid: old rid -> new
@@ -230,7 +238,7 @@ function imported(obj, mapRid) {
   const roles = v => (Array.isArray(v) ? [...new Set(v.map(x => mapRid(String(x))).filter(Boolean))].slice(0, 25) : []);
   for (const sec of SECTIONS) {
     const src = obj[sec];
-    if (!src || typeof src !== 'object') continue;
+    if (!src || typeof src !== 'object' || sec === 'advanced') continue; // Danger zone settings never come in with an import
     out[sec] = {};
     for (const [k, v] of Object.entries(src)) {
       if ((sec === 'messages' && k === 'preview_proxy') || (sec === 'automod' && k === 'word_file')) continue;

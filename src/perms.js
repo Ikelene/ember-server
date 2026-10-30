@@ -10,9 +10,10 @@ const P = {
   MANAGE_MESSAGES: 64, MENTION_EVERYONE: 128, ATTACH: 256, ADMIN: 512,
   MANAGE_USERS: 2048, // last login of members and the page each message was sent from (Velora's own chat also shows invisible people and devices)
   VIEW: 1024, // channel-level only
+  UNMARKED_ALIASES: 4096, // a bot's alias messages show with no alias mark, when the server's Danger zone turns unmarked aliases on (messages.js)
 };
 const CHANNEL_BITS = P.VIEW | P.SEND | P.ATTACH; // what a channel's per-role settings can allow / deny
-const ALL_PERMS = 1023 | P.MANAGE_USERS;
+const ALL_PERMS = 1023 | P.MANAGE_USERS | P.UNMARKED_ALIASES;
 const EVERYONE_DEFAULT = P.SEND | P.ATTACH;
 
 // community-wide permissions: owner = all, Administrator = all, otherwise OR of @everyone + held roles

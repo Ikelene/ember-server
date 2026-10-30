@@ -15,7 +15,7 @@ const ACTIONS = {
   channel_perms: 'channel_management', channel_layout: 'channel_management',
   message_delete: 'message_moderation', message_pin: 'message_moderation', message_unpin: 'message_moderation', automod_block: 'message_moderation',
   spam_pause: 'message_moderation', report_resolve: 'message_moderation', report_dismiss: 'message_moderation', report_reopen: 'message_moderation',
-  server_update: 'server_management', settings_update: 'server_management', invite_create: 'server_management', invite_delete: 'server_management',
+  server_update: 'server_management', settings_update: 'server_management', unmarked_aliases_update: 'server_management', invite_create: 'server_management', invite_delete: 'server_management',
   emoji_create: 'server_management', emoji_rename: 'server_management', emoji_delete: 'server_management',
 };
 

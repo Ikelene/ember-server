@@ -50,8 +50,40 @@ const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, userna
 // author.bridge_from (where a bridged post was relayed from: a Velocity backend, "Discord" via CloudLink...) lives in bridge/store.js
 const bridgeFrom = id => { try { return require('./bridge/store').fromOf(id); } catch { return null; } };
 // alias: a bot posting under another name and picture ({ name, avatar_url }). author stays the real bot everywhere
-// (mentions, notifications, blocks, moderation); clients show the alias with a mask that names the real sender.
-const aliasView = (name, avatar) => (name ? { name, avatar_url: avatar || null } : null);
+// (mentions, notifications, blocks, reports, moderation); clients show the alias with a mask that names the real sender.
+//
+// unmarked aliases (Server settings > Danger zone > Advanced, owner only): when the server turns them on and the bot holds
+// "Use unmarked aliases" (or Administrator), the alias carries unmarked: true and clients draw it like a normal message - no mask,
+// no BOT tag. If the alias name is exactly (trimmed, any case) one member's username - or else one member's display name - of
+// THIS server, member_id / member name them, and clients use that member's colour and profile card. Worked out every time a
+// message is shown, so turning the setting off (or on) changes old messages too; nothing extra is stored per message.
+const aliasKeyOf = s => String(s || '').trim().toLowerCase();
+function unmarkedOn(snap) {
+  if (snap._unmarked === undefined) { try { snap._unmarked = !!S().get(snap.c).advanced?.unmarked_aliases; } catch { snap._unmarked = false; } }
+  return snap._unmarked;
+}
+// the one member of snap's server the alias name points at, or null (none, or ambiguous). Only ever this server's members.
+function aliasMember(snap, name) {
+  if (!snap._aliasMembers) snap._aliasMembers = db.all('SELECT u.id, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM members mb JOIN users u ON u.id = mb.user_id WHERE mb.community_id = ?', snap.c.id);
+  const n = aliasKeyOf(name);
+  if (!n) return null;
+  const byName = snap._aliasMembers.filter(u => aliasKeyOf(u.username) === n);
+  if (byName.length) return byName.length === 1 ? byName[0] : null;
+  const byDisplay = snap._aliasMembers.filter(u => aliasKeyOf(u.display_name) === n);
+  return byDisplay.length === 1 ? byDisplay[0] : null;
+}
+// alias_name / alias_avatar of a row -> what clients get. userId / kind: the real author; channelId: where the message is
+function aliasView(name, avatar, { snap, userId, kind, channelId } = {}) {
+  if (!name) return null;
+  const out = { name, avatar_url: avatar || null, unmarked: false };
+  if (!snap || kind !== 'bot' || !userId || !unmarkedOn(snap)) return out;
+  if (!snap.channels.some(ch => ch.id === channelId)) return out; // guild channels of this very server only
+  if (!snap.isMember(userId) || !snap.can(userId, P.UNMARKED_ALIASES)) return out;
+  out.unmarked = true;
+  const m = aliasMember(snap, name);
+  if (m) { out.member_id = m.principal; out.member = person(m.principal, m.kind, m.username, m.display_name, m.pfp, m.velora_id); }
+  return out;
+}
 const ALIAS_MAX = 32, ALIAS_AVATAR_MAX = 500;
 // raw alias from a request -> undefined (not given), null (clear) or { name, avatar }. Anyone but a bot gets 403 alias_bots_only.
 function cleanAlias(me, raw) {
@@ -88,8 +120,8 @@ function messageView(r, snap) {
     ...identityView(r.subject_user_id, r.subject_parts, r.subject_username, r.subject_principal, r.body),
     attachments: json(r.attachments, []), system: !!r.system, sys_kind: r.sys_kind || undefined, pinned: !!r.pinned_at, embeds: json(r.embeds, undefined),
     reply_to: r.reply_to == null ? null : String(r.reply_to),
-    alias: aliasView(r.alias_name, r.alias_avatar),
-    reply: r.r_id ? { id: String(r.r_id), author: replyAuthor, alias: aliasView(r.r_alias_name, r.r_alias_avatar), ...rep, body: rep.body.slice(0, 200) } : null,
+    alias: aliasView(r.alias_name, r.alias_avatar, { snap, userId: r.user_id, kind: r.u_kind, channelId: r.channel_id }),
+    reply: r.r_id ? { id: String(r.r_id), author: replyAuthor, alias: aliasView(r.r_alias_name, r.r_alias_avatar, { snap, userId: r.r_user_id, kind: r.r_kind, channelId: r.channel_id }), ...rep, body: rep.body.slice(0, 200) } : null,
     mention_everyone: r.mention_everyone === 1 ? 'everyone' : r.mention_everyone === 2 ? 'here' : null,
     mention_roles: r.mention_roles ? String(r.mention_roles).split(',').filter(Boolean).map(rid).filter(Boolean) : [],
     created_at: r.created_at, edited_at: r.edited_at || null,

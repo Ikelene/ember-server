@@ -23,7 +23,9 @@ function register(app) {
     const { changed } = await S.update(c, snap, req.user, req.body || {});
     if (changed.length) {
       gateway.emit(c.id, { type: 'chat_server_update', server: C.serverView(c, C.snapOf(c), null) });
-      audit.record(c, req.user, 'settings_update', { details: { changed } });
+      const rest = changed.filter(k => k !== 'unmarked_aliases');
+      if (rest.length) audit.record(c, req.user, 'settings_update', { details: { changed: rest } });
+      if (changed.includes('unmarked_aliases')) audit.record(c, req.user, 'unmarked_aliases_update', { details: { enabled: S.raw(c).advanced.unmarked_aliases } });
     }
     return { settings: S.view(c, req.user) };
   });

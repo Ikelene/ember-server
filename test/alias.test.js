@@ -53,13 +53,13 @@ let aliasedId;
 test('a bot posts with an alias: REST response, history, both gateways, author unchanged', async () => {
   const r = await botCall('POST', `/channels/${chId}/messages`, { content: 'hi from the alias', alias: { name: '  sable :3 · opencode-go/kimi-k3 ', avatar_url: 'https://example.com/a.png' } });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png' });
+  assert.deepEqual(r.body.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png', unmarked: false });
   assert.equal(r.body.author.id, bot.id.slice(2));
   assert.equal(r.body.author.bot, true);
   aliasedId = r.body.id;
   // user gateway: chat_message carries alias + the real author
   const f = await ugw.waitFor(x => x.type === 'chat_message' && x.message.id === aliasedId);
-  assert.deepEqual(f.message.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png' });
+  assert.deepEqual(f.message.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png', unmarked: false });
   assert.equal(f.message.author.id, bot.id);
   // bot gateway MESSAGE_CREATE
   const mc = await until(gw.frames, x => x.t === 'MESSAGE_CREATE' && x.d.id === aliasedId);
@@ -67,7 +67,7 @@ test('a bot posts with an alias: REST response, history, both gateways, author u
   // user history + bot history
   const h = await alice.a.get(`/api/v1/channels/${general}/messages`);
   const m = h.body.messages.find(x => x.id === aliasedId);
-  assert.deepEqual(m.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png' });
+  assert.deepEqual(m.alias, { name: 'sable :3 · opencode-go/kimi-k3', avatar_url: 'https://example.com/a.png', unmarked: false });
   assert.equal(m.author.id, bot.id);
   const bh = await botCall('GET', `/channels/${chId}/messages`);
   assert.equal(bh.body.find(x => x.id === aliasedId).alias.avatar_url, 'https://example.com/a.png');
@@ -75,7 +75,7 @@ test('a bot posts with an alias: REST response, history, both gateways, author u
   const plain = await botCall('POST', `/channels/${chId}/messages`, { content: 'plain' });
   assert.equal(plain.body.alias, null);
   const nameOnly = await botCall('POST', `/channels/${chId}/messages`, { content: 'named', alias: { name: 'Narrator' } });
-  assert.deepEqual(nameOnly.body.alias, { name: 'Narrator', avatar_url: null });
+  assert.deepEqual(nameOnly.body.alias, { name: 'Narrator', avatar_url: null, unmarked: false });
 });
 
 test('replies, search and pins carry the alias', async () => {
@@ -126,7 +126,7 @@ test('users can never set an alias: 403 alias_bots_only (REST post, REST edit, g
 test('a bot edits its alias, keeps it when not given, and clears it with null', async () => {
   let r = await botCall('PATCH', `/channels/${chId}/messages/${aliasedId}`, { alias: { name: 'Renamed', avatar_url: 'https://example.com/b.png' } });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.alias, { name: 'Renamed', avatar_url: 'https://example.com/b.png' });
+  assert.deepEqual(r.body.alias, { name: 'Renamed', avatar_url: 'https://example.com/b.png', unmarked: false });
   const up = await ugw.waitFor(x => x.type === 'chat_message_update' && x.message.id === aliasedId && x.message.alias?.name === 'Renamed');
   assert.equal(up.message.author.id, bot.id);
   r = await botCall('PATCH', `/channels/${chId}/messages/${aliasedId}`, { content: 'new text' });
