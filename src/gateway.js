@@ -163,7 +163,13 @@ function onConnection(sock, req) {
     clearTimeout(sock.bf.timer);
     all.delete(sock);
     const uid = sock.bf.user?.id;
-    if (uid != null) { const set = byUser.get(uid); set?.delete(sock); if (set && !set.size) byUser.delete(uid); }
+    if (uid != null) {
+      const set = byUser.get(uid); set?.delete(sock);
+      if (set && !set.size) {
+        byUser.delete(uid);
+        try { db.run('UPDATE users SET last_online = ? WHERE id = ?', Date.now(), uid); } catch (e) { console.error('[gateway] last_online', e.message); }
+      }
+    }
     for (const [id, set] of subs) { set.delete(sock); if (!set.size) subs.delete(id); }
     if (db.raw()) try { V().leave(sock); } catch (e) { console.error('[gateway] voice leave', e.message); }
   });
