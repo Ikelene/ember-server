@@ -210,13 +210,19 @@ function myServers(me) {
   const counts = unreadCounts(me, ids);
   const order = getSettings(me).server_order || [];
   const pos = s => { const i = order.indexOf(s.sid); return i < 0 ? 1e6 + s.id : i; };
+  // muted channels / servers don't make a server "unread" (the client checks the same, live)
+  const notes = notifyList(me), t = now();
+  const muted = target => (notes[target]?.muted_until || 0) > t;
   return snaps.sort((a, b) => pos(a.c) - pos(b.c)).map(snap => {
     const list = vis.get(snap.c.id);
+    const isUnread = ch => Number(ch.last_message_id) > (read.get(ch.id) ?? Number(ch.last_message_id));
+    const unreadChannels = muted(snap.c.sid) ? [] : list.filter(ch => isUnread(ch) && !muted(ch.cid)).map(ch => ch.cid);
     return {
       ...serverView(snap.c, snap, me),
       mentions: list.reduce((n, ch) => n + (pings.get(ch.id) || 0), 0),
       online: 0, // instances don't relay presence
-      unread: list.some(ch => Number(ch.last_message_id) > (read.get(ch.id) ?? Number(ch.last_message_id))),
+      unread: unreadChannels.length > 0,
+      unread_channels: unreadChannels,
       unread_count: list.reduce((n, ch) => n + (counts.get(ch.id) || 0), 0),
     };
   });
