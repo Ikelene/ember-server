@@ -320,7 +320,7 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
 
 // ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
 // alias (bots only): { name, avatar_url } shows another name and picture on this message (see cleanAlias)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, components, interaction, force, alias } = {}) {
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, components, interaction, force, alias } = {}) {
   const { ch, c, snap } = ctx;
   const aliasRow = cleanAlias(me, alias);
   const body = normBody(text);
@@ -341,7 +341,7 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin), components, interaction, alias: aliasRow || null });
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua), components, interaction, alias: aliasRow || null });
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
@@ -417,9 +417,18 @@ function react(id, me, emojiRaw, on) {
 }
 
 // ---------- which page a message was sent from (Manage users) ----------
-// Stored with the message as { url }, the Origin of the request (never an IP address). Only the copies that go to people
-// with Manage users carry it (`via`); messageView never does, so bots, bridges, exports and everyone else see nothing.
-const viaOf = origin => { const url = origin ? normalizeOrigin(origin) : null; return url && !/^https?:\/\/([\d.]+|\[.*\])(:|$)/.test(url) ? { url: url.slice(0, 120) } : null; };
+// Stored with the message as { url, kind? }: url = the Origin of the request (never an IP address), kind = 'desktop' /
+// 'android' when the official Ember apps' User-Agent marker (BonfireDesktop/, BonfireAndroid/) says so. Ember turns it
+// into a name with Velora's official clients list (GET /api/clients/official, matched by url host + kind).
+// Only the copies that go to people with Manage users carry it (`via`); messageView never does, so bots, bridges,
+// exports and everyone else see nothing.
+const appKind = ua => (/\bBonfireDesktop\//.test(String(ua || '')) ? 'desktop' : /\bBonfireAndroid\//.test(String(ua || '')) ? 'android' : null);
+const viaOf = (origin, ua) => {
+  const url = origin ? normalizeOrigin(origin) : null;
+  if (!url || /^https?:\/\/([\d.]+|\[.*\])(:|$)/.test(url)) return null;
+  const kind = appKind(ua);
+  return kind ? { url: url.slice(0, 120), kind } : { url: url.slice(0, 120) };
+};
 function parseVia(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
 function attachVia(rows, snap, me, msgs) {
   if (!snap.can(me.id, P.MANAGE_USERS)) return msgs;
@@ -506,7 +515,7 @@ function markRead(cid, me, id) {
 }
 
 module.exports = {
-  viaOf, MSG_MAX, SELECT_MSG, cleanAlias, messageView, viewById, reactionsFor, withReactions, cleanAttachments, postMessage, systemMessage, insertMessage, editMessage, deleteMessage,
+  viaOf, appKind, MSG_MAX, SELECT_MSG, cleanAlias, messageView, viewById, reactionsFor, withReactions, cleanAttachments, postMessage, systemMessage, insertMessage, editMessage, deleteMessage,
   react, history, search, searchServer, pinMessage, pins, markRead, checkSignature,
   onPost, onEdit, onDelete, postBridged, editBridged, deleteBridged, postWebhook, ctxOf, _sendLimit: sendLimit,
 };

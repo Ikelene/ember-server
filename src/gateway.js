@@ -102,7 +102,7 @@ async function onFrame(sock, msg) {
       }
       case 'chat_send': {
         const ctx = C().findChannel(msg.channel, me);
-        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, alias: msg.alias });
+        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, ua: st.ua, alias: msg.alias });
         reply({ type: 'chat_ack', nonce: msg.nonce, message });
         break;
       }
@@ -149,7 +149,7 @@ function doAuth(sock, msg) {
 }
 
 function onConnection(sock, req) {
-  sock.bf = { origin: req?.headers?.origin || null, authed: false, ready: false, lastSeen: Date.now(), frames: [] };
+  sock.bf = { origin: req?.headers?.origin || null, ua: req?.headers?.['user-agent'] || null, authed: false, ready: false, lastSeen: Date.now(), frames: [] };
   all.add(sock);
   sock.bf.timer = setTimeout(() => { if (!sock.bf.authed) sock.close(4001, 'auth_timeout'); }, AUTH_TIMEOUT);
   const fps = limiter(MAX_FPS, 1000);

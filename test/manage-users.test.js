@@ -57,3 +57,16 @@ test('IP addresses are never stored as a page', async () => {
   const m = (await alice.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(x => x.id === r.body.message.id);
   assert.equal(m.via, undefined);
 });
+
+test('the official apps are told apart by their User-Agent marker (kind), for official-clients matching', async () => {
+  const { viaOf, appKind } = require('../src/messages');
+  assert.equal(appKind('Mozilla/5.0 (Windows NT 10.0) Chrome/130 Electron/33 BonfireDesktop/1.4.2'), 'desktop');
+  assert.equal(appKind('Mozilla/5.0 (Linux; Android 15; wv) Chrome/130 BonfireAndroid/0.9'), 'android');
+  assert.equal(appKind('Mozilla/5.0 Firefox/131'), null);
+  assert.deepEqual(viaOf('https://velora.example', 'x NotBonfireDesktop/1'), { url: 'https://velora.example' });
+  assert.equal(viaOf('http://10.0.0.2', 'BonfireDesktop/1'), null);
+  const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'from the app' }, { Origin: 'https://velora.example', 'User-Agent': 'Mozilla/5.0 Electron/33 BonfireDesktop/1.4.2' });
+  assert.equal(r.status, 200);
+  const m = (await alice.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(x => x.id === r.body.message.id);
+  assert.deepEqual(m.via, { url: 'https://velora.example', kind: 'desktop' });
+});
