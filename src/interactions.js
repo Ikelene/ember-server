@@ -169,7 +169,7 @@ function ephView(it, id, d, thinking = false) {
   return {
     id, ephemeral: true, interaction_id: it.id, channel: it.cid, server: it.sid, system: false, author: auth.userView(bot), body: d.content ?? '', embeds: d.embeds || undefined,
     components: d.components || undefined, attachments: d.attachments || [], created_at: d.created_at || Date.now(), edited_at: d.edited_at || null, thinking: thinking || undefined,
-    interaction: it.type === 2 ? { id: it.id, type: 2, name: it.name, user: { id: commUser(it.userId)?.principal, username: commUser(it.userId)?.username } } : undefined,
+    interaction: it.type === 2 ? { id: it.id, type: 2, name: it.name, user: (u => ({ id: u?.principal, username: u?.username, display_name: u?.display_name || null, pfp: u?.pfp || null }))(commUser(it.userId)) } : undefined,
   };
 }
 function ephDiscord(it, v) {
@@ -198,7 +198,7 @@ async function prepare(it, data, files) {
     alias: data.alias, // undefined = keep; checked in messages.cleanAlias
   };
 }
-const meta = it => (it.type === 2 ? { id: it.id, type: 2, name: it.name, user: (u => ({ id: u.principal, username: u.username }))(commUser(it.userId)) } : undefined);
+const meta = it => (it.type === 2 ? { id: it.id, type: 2, name: it.name, user: (u => ({ id: u.principal, username: u.username, display_name: u.display_name || null, pfp: u.pfp || null }))(commUser(it.userId)) } : undefined);
 
 async function postReal(it, p) {
   const ctx = M().ctxOf(channelOf(it));

@@ -30,6 +30,13 @@ const SELECT_MSG = `SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.
   LEFT JOIN users su ON su.id = m.subject_user_id LEFT JOIN users rsu ON rsu.id = r.subject_user_id`;
 
 const json = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
+// "X used /cmd": stored rows only carry id + username, so look the invoker up live for their current name + pfp
+function interactionView(raw) {
+  const i = json(raw, undefined);
+  if (!i?.user?.id) return i;
+  const u = auth.userByPrincipal(i.user.id);
+  return u ? { ...i, user: { ...i.user, username: u.username, display_name: u.display_name || null, pfp: u.pfp || null } } : i;
+}
 const parseParts = v => { const p = json(v, null); return Array.isArray(p) && p.length <= 1001 && p.includes(null) && p.every(x => x === null || typeof x === 'string') ? p : null; };
 // system messages that name a person: the text stays readable, the subject carries the account
 function identityView(subjectId, subjectParts, subjectName, subjectPrincipal, fallback) {
@@ -86,7 +93,7 @@ function messageView(r, snap) {
     mention_everyone: r.mention_everyone === 1 ? 'everyone' : r.mention_everyone === 2 ? 'here' : null,
     mention_roles: r.mention_roles ? String(r.mention_roles).split(',').filter(Boolean).map(rid).filter(Boolean) : [],
     created_at: r.created_at, edited_at: r.edited_at || null,
-    components: json(r.components, undefined), interaction: json(r.interaction, undefined),
+    components: json(r.components, undefined), interaction: interactionView(r.interaction),
     signature: r.sig_kid ? { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } : null,
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
