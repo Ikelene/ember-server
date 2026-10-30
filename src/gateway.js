@@ -124,6 +124,7 @@ async function onFrame(sock, msg) {
         for (const s of V().socketsIn(room)) send(s, { type: 'voice_sound', by: me.username, channel: ch.cid, sound: r.sound });
         break;
       }
+      case 'chat_profile_refresh': require('./profiles').nudge(msg.velora_id).catch(() => {}); break; // Ember saw a live Velora profile change: pull it now
       case 'chat_read': M().markRead(msg.channel, me, msg.message_id ?? msg.id); break;
       default:
         if (/^chat_(rtc|voice)/.test(String(msg.type))) await V().handle(sock, me, msg, reply);
