@@ -22,7 +22,7 @@ const C = () => require('../communities');
 const M = () => require('../messages');
 
 const DEFAULT_URL = 'wss://ikelene.net/cl/';
-const OFFICIAL_HOSTS = new Set(['ikelene.net', 'www.ikelene.net', 'velora.ikelene.net']);
+const OFFICIAL_HOSTS = new Set(['ikelene.net', 'www.ikelene.net', 'velora.ikelene.net', 'nookara.cc', 'www.nookara.cc', 'ember.nookara.cc']);
 const MAX_PER_COMMUNITY = 3;
 const PREFIX = 'Ember | ';
 const OUT_MAX = 1000;          // characters per message sent to CloudLink

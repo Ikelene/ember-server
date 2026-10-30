@@ -16,7 +16,7 @@ let watcher = null, lastWritten = null, debounce = null;
 
 const DEFAULTS = {
   name: 'Ember Instance', description: '', icon_url: null, public_url: null,
-  accounts_mode: 'local', velora_url: 'https://velora.ikelene.net',
+  accounts_mode: 'local', velora_url: 'https://nookara.cc',
   registration: 'open', max_upload_mb: 25, max_backups: 10,
   voice: { cf_app_id: '', cf_app_secret: '', cf_turn_key_id: '', cf_turn_token: '' },
   // optional "watch through the instance" YouTube player (needs yt-dlp); cache_dir '' = DATA_DIR/cache/yt

@@ -4,6 +4,7 @@
 // listed changes, and every 6 hours anyway.
 const db = require('../db');
 const config = require('../config');
+const { emberBase } = require('../util');
 const C = require('../communities');
 const client = require('./client');
 
@@ -19,7 +20,7 @@ function payload() {
   return {
     listed: true, name: c.name, description: c.description || '', icon_url: abs(c.icon_url), member_count: C.memberCount(c.id),
     // the community's permanent invite, opened in Ember on the web
-    invite_url: `${cfg.velora_url}/chat#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
+    invite_url: `${emberBase(cfg.velora_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
     tags: Array.isArray(cfg.tags) ? cfg.tags.slice(0, 8) : [],
   };
 }

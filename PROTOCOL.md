@@ -4,7 +4,7 @@
 
 This is the contract between three parties:
 
-- **Velora** (`VELORA` = Velora base URL, e.g. `https://velora.ikelene.net`, dev `http://localhost:3000`) — identity provider, the account signing key, DMs.
+- **Velora** (`VELORA` = Velora base URL, e.g. `https://nookara.cc`, dev `http://localhost:3000`) — identity provider, the account signing key, DMs.
 - **Instance** (`INSTANCE` = origin of a bonfire-server, e.g. `https://chat.ikelene.net`, dev `http://localhost:4100`) - hosts exactly **one community** (what the UI calls a "server"). Adding an instance's URL in Ember *is* joining that server.
 - **Client** - Ember (web `/chat`, desktop, android).
 
@@ -187,7 +187,7 @@ If the env var `BONFIRE_OWNER=v:<velora id>` is set, the instance boots already 
 | `name`, `description`, `icon_url` | string | |
 | `public_url` | origin | |
 | `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `BONFIRE_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
-| `velora_url` | origin | default `https://velora.ikelene.net` |
+| `velora_url` | origin | default `https://nookara.cc` |
 | `registration` | `"open"` / `"closed"` | local mode |
 | `max_upload_mb` | int 1–500 | instance ceiling (managed: follows the plan) |
 | `max_backups` | int 1–50 | retained instance backups; default 10, oldest pruned first |
@@ -249,7 +249,7 @@ Restore validates the archive, takes an automatic safety backup with note `befor
 }
 ```
 
-`stats` is cached for 30 s. `update` is `null` when the server cannot tell (no `build.build_id`, `BONFIRE_UPDATE_CHECK=0`, Velora unreachable and nothing cached). The comparison is against **`GET https://velora.ikelene.net/bonfire/server-latest.json`** (override: env `BONFIRE_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and `latest.built_at` is newer. Only admins ever see `update`.
+`stats` is cached for 30 s. `update` is `null` when the server cannot tell (no `build.build_id`, `BONFIRE_UPDATE_CHECK=0`, Velora unreachable and nothing cached). The comparison is against **`GET https://nookara.cc/bonfire/server-latest.json`** (override: env `BONFIRE_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and `latest.built_at` is newer. Only admins ever see `update`.
 
 Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds the image on the Docker LXC with the commit baked in (`BONFIRE_BUILD_*` build args), publishes `server-latest.json` (`POST VELORA/bonfire/server-latest`, Bearer = the hostd secret), and bonfire-hostd (`POST /update-all`) recreates every hosted container on the new image one at a time, health-checked, rolled back on failure. bonfire-hostd also does this check every 10 minutes by itself.
 

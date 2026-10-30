@@ -46,7 +46,7 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `name`, `description`, `icon_url` | | shown in discovery. They are the **same values as the community's** name / description / icon: editing either side (this file, `PATCH /instance/settings`, or `PATCH /servers/:sid` + icon upload) updates the other. Name ≤ 60 chars, description ≤ 300 |
 | `public_url` | `http://localhost:<PORT>` | the origin clients reach you at. **Set this in production** (https). It is the JWT audience and the base of upload URLs |
 | `accounts_mode` | `local` | `local` (accounts on this instance) or `velora` (Velora sign-in). Changing it needs a restart; accounts of the other kind can no longer log in |
-| `velora_url` | `https://velora.ikelene.net` | issuer for Velora mode |
+| `velora_url` | `https://nookara.cc` | issuer for Velora mode |
 | `registration` | `open` | local mode: `open` / `closed` (always open while unclaimed) |
 | `max_upload_mb` | `25` | instance ceiling (1–500); each community also has `upload_max_mb` |
 | `voice` | empty | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` — Cloudflare Realtime SFU app + TURN key. Secrets are write-only over the API |

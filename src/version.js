@@ -53,7 +53,7 @@ function stats() {
 const runtime = () => ({ node: process.version, uptime_s: Math.round((Date.now() - startedAt) / 1000), started_at: new Date(startedAt).toISOString(), platform: process.platform });
 
 // ---- update check against Velora's published "latest" (cache ~1 h, silent on failure) ----
-const LATEST_URL = () => process.env.BONFIRE_LATEST_URL || 'https://velora.ikelene.net/bonfire/server-latest.json';
+const LATEST_URL = () => process.env.BONFIRE_LATEST_URL || 'https://nookara.cc/bonfire/server-latest.json';
 const OK_TTL = 3600 * 1000, FAIL_TTL = 10 * 60 * 1000;
 let latest = { at: 0, ttl: 0, v: null, pending: null };
 async function fetchLatest() {

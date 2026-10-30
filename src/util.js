@@ -54,4 +54,12 @@ function limiter(max, ms) {
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-module.exports = { err, normalizeOrigin, b64url, fromB64url, sha256, randHex, randId, now, clean, setupCode, normCode, safeEqual, limiter, log, CROCKFORD };
+// Nookara (nookara.cc) was Velora (velora.ikelene.net): both names are the same identity provider, so an issuer check
+// accepts either spelling. Instances that saved the old velora_url in config.json keep working when tokens say nookara.cc.
+const VELORA_ALIASES = new Set(['https://velora.ikelene.net', 'https://velora.ikelene.dev', 'https://nookara.cc', 'https://www.nookara.cc', 'https://ember.nookara.cc']);
+const canonVelora = o => { const n = normalizeOrigin(o); return n && VELORA_ALIASES.has(n) ? 'https://nookara.cc' : n; };
+const sameVelora = (a, b) => { const x = canonVelora(a); return !!x && x === canonVelora(b); };
+// where Ember (the web client) lives: BONFIRE_EMBER_URL, else ember.nookara.cc for Nookara, else <velora_url>/chat/
+const emberBase = veloraUrl => process.env.BONFIRE_EMBER_URL ? process.env.BONFIRE_EMBER_URL.replace(/\/+$/, '') + '/' : (canonVelora(veloraUrl) === 'https://nookara.cc' ? 'https://ember.nookara.cc/' : String(veloraUrl).replace(/\/+$/, '') + '/chat');
+
+module.exports = { err, normalizeOrigin, sameVelora, canonVelora, emberBase, b64url, fromB64url, sha256, randHex, randId, now, clean, setupCode, normCode, safeEqual, limiter, log, CROCKFORD };

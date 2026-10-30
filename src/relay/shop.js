@@ -10,7 +10,7 @@ const auth = require('../auth');
 const gateway = require('../gateway');
 const C = require('../communities');
 const { P } = require('../perms');
-const { err, normalizeOrigin } = require('../util');
+const { err, normalizeOrigin, sameVelora } = require('../util');
 const client = require('./client');
 
 const RECEIPT_TYP = 'bonfire-receipt+jwt';
@@ -107,7 +107,7 @@ async function verifyReceipt(token, pr, user) {
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, Buffer.from(parts[2], 'base64url')); } catch { ok = false; }
   if (!ok) throw err('receipt_bad_signature');
   const cfg = config.get();
-  if (normalizeOrigin(claims.iss) !== cfg.velora_url) throw err('receipt_wrong_issuer');
+  if (!sameVelora(claims.iss, cfg.velora_url)) throw err('receipt_wrong_issuer');
   if (normalizeOrigin(claims.aud) !== cfg.public_url) throw err('receipt_wrong_audience');
   if (String(claims.sub) !== String(user.velora_id)) throw err('receipt_wrong_user');
   if (claims.amount !== pr.amount) throw err('receipt_wrong_amount');

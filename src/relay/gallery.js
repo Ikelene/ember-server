@@ -14,7 +14,7 @@ const auth = require('../auth');
 const C = require('../communities');
 const { P } = require('../perms');
 const client = require('./client');
-const { err, normalizeOrigin, now } = require('../util');
+const { err, normalizeOrigin, sameVelora, now } = require('../util');
 
 const TYP = 'bonfire-botadd+jwt', SYNC_MS = 10 * 60 * 1000, NAME = /^[A-Za-z0-9_.-]{2,32}$/;
 const B = () => require('../bots');
@@ -36,7 +36,7 @@ async function verifyTicket(token, user) {
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, Buffer.from(parts[2], 'base64url')); } catch { ok = false; }
   if (!ok) throw err('ticket_bad_signature');
   const cfg = config.get();
-  if (normalizeOrigin(claims.iss) !== normalizeOrigin(cfg.velora_url)) throw err('ticket_wrong_issuer');
+  if (!sameVelora(claims.iss, cfg.velora_url)) throw err('ticket_wrong_issuer');
   if (normalizeOrigin(claims.aud) !== normalizeOrigin(cfg.public_url)) throw err('ticket_wrong_audience');
   if (!user.velora_id || String(claims.sub) !== String(user.velora_id)) throw err('ticket_wrong_user', 403);
   if (!Number.isFinite(claims.exp) || claims.exp * 1000 < now()) throw err('ticket_expired', 410);

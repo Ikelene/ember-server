@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
-const { err, normalizeOrigin, b64url, fromB64url, sha256, now, clean } = require('./util');
+const { err, normalizeOrigin, sameVelora, b64url, fromB64url, sha256, now, clean } = require('./util');
 
 const SESSION_TTL = 30 * 24 * 3600 * 1000;
 const SKEW_S = 60;
@@ -126,7 +126,7 @@ async function verifyVeloraJwt(token, nowMs = Date.now()) {
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, fromB64url(parts[2])); } catch { ok = false; }
   if (!ok) throw bad('invalid_signature');
   const cfg = config.get();
-  if (normalizeOrigin(claims.iss) !== normalizeOrigin(cfg.velora_url)) throw bad('invalid_issuer');
+  if (!sameVelora(claims.iss, cfg.velora_url)) throw bad('invalid_issuer');
   if (normalizeOrigin(claims.aud) !== normalizeOrigin(cfg.public_url)) throw bad('invalid_audience');
   const nowS = Math.floor(nowMs / 1000);
   if (!Number.isFinite(claims.exp) || claims.exp + SKEW_S < nowS) throw bad('token_expired');
