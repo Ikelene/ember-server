@@ -125,7 +125,8 @@ async function register() {
   const json = { 'Content-Type': 'application/json' };
   const ch = await http('POST', `${cfg.velora_url}/bonfire/instances/challenge`, { headers: json, body: JSON.stringify({ pubkey: k.pubkey, url }) });
   if (typeof ch.nonce !== 'string') throw err('velora_bad_response', 502);
-  const body = { pubkey: k.pubkey, url, name: String(cfg.name || 'Ember Instance').slice(0, 80), accounts_mode: config.mode(), nonce: ch.nonce, sig: sign(`bonfire-register-v1|${ch.nonce}|${url}`) };
+  const opTerms = require('../operator-terms').forRegistration();
+  const body = { pubkey: k.pubkey, url, name: String(cfg.name || 'Ember Instance').slice(0, 80), accounts_mode: config.mode(), nonce: ch.nonce, ...(opTerms ? { operator_terms: opTerms } : {}), sig: sign(`bonfire-register-v1|${ch.nonce}|${url}`) };
   const out = await http('POST', `${cfg.velora_url}/bonfire/instances/register`, { headers: json, body: JSON.stringify(body) });
   if (out.instance_id !== k.id) throw err('velora_bad_response', 502);
   if (forKey !== target()) throw err('settings_changed', 409); // urls changed while we were registering: the next round does it again
@@ -147,7 +148,7 @@ function ownerAttestation(veloraId) {
 }
 
 // what registration depends on: a change re-registers
-const fingerprint = () => { const c = config.get(); return [c.velora_registration, c.velora_url, c.public_url, c.name, config.mode()].join('|'); };
+const fingerprint = () => { const c = config.get(); return [c.velora_registration, c.velora_url, c.public_url, c.name, config.mode(), require('../operator-terms').accepted() ? 'terms' : 'noterms'].join('|'); };
 const BACKOFF = [5e3, 15e3, 60e3, 5 * 60e3, 15 * 60e3, 30 * 60e3];
 const REFRESH = 12 * 3600e3; // trusted / voice cap can change on Velora's side
 let timer = null, attempt = 0, running = false, started = false, lastFp = null;

@@ -80,11 +80,12 @@ function register(app, { restart }) {
     if (!claimLimit.hit(req.ip)) throw err('rate_limited', 429);
     if (auth.claimed()) throw err('already_claimed', 409);
     if (!setup.check(req.body?.code)) throw err('invalid_code', 403);
+    require('../operator-terms').requireForSetup(req.body, req.user); // setup cannot finish without accepting the Ember Server Operator Terms
     setup.claim(req.user);
     gateway.pushToUser(req.user.id, { type: 'instance_update', settings: config.publicView() });
     return { ok: true };
   });
-  const settingsView = () => ({ ...config.adminView(), managed: managed.view(), plan: managed.usage(), velora: require('../relay').status(), local_admins: auth.localAdmins().map(u => u.username) });
+  const settingsView = () => ({ ...config.adminView(), operator_terms: require('../operator-terms').view(), managed: managed.view(), plan: managed.usage(), velora: require('../relay').status(), local_admins: auth.localAdmins().map(u => u.username) });
   app.get('/api/v1/instance/settings', { admin: true }, settingsView);
   app.patch('/api/v1/instance/settings', { admin: true }, req => {
     managed.guardSettings(req.body, config.get());
@@ -92,6 +93,13 @@ function register(app, { restart }) {
     if (req.body?.accounts_mode === 'local' && config.get().accounts_mode !== 'local' && !auth.localAdmins().length) throw err('local_admin_required', 409);
     config.update(req.body); if (req.body?.max_backups !== undefined) require('../backups').prune(); return settingsView();
   });
+  // Ember Server Operator Terms: an instance set up before they existed accepts from the dashboard notice (never blocks chat); anyone signed in can read the status
+  app.get('/api/v1/instance/operator-terms', () => require('../operator-terms').view());
+  app.post('/api/v1/instance/operator-terms/accept', { owner: true }, req => {
+    if (req.body?.accept_operator_terms !== true) throw err('operator_terms_required', 400);
+    return require('../operator-terms').acceptLater(req.user);
+  });
+  app.post('/api/v1/instance/operator-terms/dismiss', { admin: true }, () => require('../operator-terms').dismiss());
   // (owner, like adding admins) a local (username + password) admin account, made while still on Velora accounts: instance admin, and an Administrator role on the server
   app.post('/api/v1/instance/local-admin', { owner: true }, async req => {
     const id = await auth.createLocalUser(req.body?.username, req.body?.password);

@@ -82,6 +82,8 @@ async function startServer({ dataDir, port, host = process.env.BONFIRE_HOST, res
 }
 
 if (require.main === module) {
+  // headless setup: --accept-operator-terms accepts the Ember Server Operator Terms (https://nookara.cc/operator-terms), same as EMBER_ACCEPT_OPERATOR_TERMS=1
+  if (process.argv.includes('--accept-operator-terms')) process.env.EMBER_ACCEPT_OPERATOR_TERMS = '1';
   startServer({ port: undefined }).then(inst => {
     const stop = async sig => {
       log(`${sig} received, shutting down`);

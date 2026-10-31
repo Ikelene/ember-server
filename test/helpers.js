@@ -6,6 +6,8 @@ const WebSocket = require('ws');
 
 // tests never contact a real Velora unless they ask for it (relay.test.js runs its own stub Velora)
 process.env.BONFIRE_VELORA_REGISTRATION ??= 'off';
+// tests set up instances headlessly; operator-terms.test.js removes this to test the real setup gate
+process.env.EMBER_ACCEPT_OPERATOR_TERMS ??= '1';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'bonfire-test-'));
 

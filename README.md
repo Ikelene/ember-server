@@ -23,10 +23,10 @@ On first boot an unclaimed instance prints a **setup code** (`XXXX-XXXX`) to the
 ```
 
 1. Sign in (local mode: create an account; Velora mode: sign in with Velora).
-2. Claim the instance: `POST /api/v1/instance/claim {"code":"7Q3K-M9XD"}` (the Ember client has a button for it). You become the owner and an admin, and the code file is deleted.
+2. Claim the instance: `POST /api/v1/instance/claim {"code":"7Q3K-M9XD","accept_operator_terms":true}` (the Ember client has a button for it). Setting up a server means accepting the [Ember Server Operator Terms](https://nookara.cc/operator-terms) (v1.0): the client shows a required checkbox, and the claim is refused with `400 operator_terms_required` without it. The acceptance (version, time, who) is stored in the instance database. An instance set up before the terms existed keeps working; its admins see a one-time notice and can accept from the dashboard (`POST /api/v1/instance/operator-terms/accept {"accept_operator_terms":true}`). You become the owner and an admin, and the code file is deleted.
 3. Set up the instance's community: `POST /api/v1/servers {"name":"…"}` or `POST /api/v1/import` (an export zip). **An instance hosts exactly one community** — only instance admins can create/import it, and only while none exists (`409 community_exists` otherwise). You, the instance owner, own it. Deleting it returns the instance to "not set up" (discovery shows `community: null`) so it can be created or imported again. Everyone else joins it through its `join_policy` or an invite code (there is no auto-join).
 
-Or skip the code: set `BONFIRE_OWNER=v:<velora user id>` and the instance boots already claimed by that Velora user.
+Or skip the code: set `BONFIRE_OWNER=v:<velora user id>` and the instance boots already claimed by that Velora user. A headless setup like this must also accept the operator terms explicitly: start with `--accept-operator-terms` or set `EMBER_ACCEPT_OPERATOR_TERMS=1` (without it `BONFIRE_OWNER` is ignored and the setup code flow is used).
 
 ### Docker
 
@@ -66,6 +66,8 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `BONFIRE_VELORA_URL` | overrides `velora_url` |
 | `BONFIRE_ACCOUNTS_MODE` | overrides `accounts_mode` (`velora` / `local`) |
 | `BONFIRE_OWNER` | `v:<velora id>`: boot already claimed by that user (ignored if the instance is already claimed) |
+| `EMBER_ACCEPT_OPERATOR_TERMS` | `1` = you accept the [Ember Server Operator Terms](https://nookara.cc/operator-terms) (same as `--accept-operator-terms`); needed for a headless setup, and records the acceptance on an existing instance |
+| `BONFIRE_OPERATOR_TERMS_AT`, `BONFIRE_OPERATOR_TERMS_BY` | Velora-hosted instances: when / by whom Nookara collected the acceptance (set by bonfire-hostd) |
 | `BONFIRE_VELORA_REGISTRATION` | overrides `velora_registration` (`auto` / `off`) |
 | `BONFIRE_TRUST_PROXY` | `1` = take the client IP from `X-Forwarded-For` (set this behind a reverse proxy, otherwise per-IP rate limits see only the proxy) |
 | `BONFIRE_DISCORD_TOKEN`, `BONFIRE_FLUXER_TOKEN` | bridge bot tokens, used when none is saved in the instance settings (`PATCH /api/v1/bridge/settings`) |

@@ -14,4 +14,5 @@ services:
       BONFIRE_ACCOUNTS_MODE: "local"
       # BONFIRE_VELORA_URL: "https://nookara.cc"
       # BONFIRE_OWNER: "v:123"        # pre-claim for a Velora user instead of using the setup code
+      # EMBER_ACCEPT_OPERATOR_TERMS: "1"   # you accept the Ember Server Operator Terms (https://nookara.cc/operator-terms); needed for BONFIRE_OWNER setups
       # BONFIRE_TRUST_PROXY: "1"      # behind a reverse proxy: use X-Forwarded-For for rate limits
