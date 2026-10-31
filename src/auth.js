@@ -38,6 +38,14 @@ function refreshVeloraProfile({ id, username, display_name, pfp }) {
   identityChanged(userById(row.id), row.username);
   return true;
 }
+// Velora switched Ember off (or back on) for this account. -> true when it changed; open sockets are told right away
+function setRestricted(veloraId, flag) {
+  const row = userByPrincipal('v:' + veloraId);
+  if (!row || row.kind !== 'velora' || !!row.restricted === !!flag) return false;
+  db.run('UPDATE users SET restricted = ? WHERE id = ?', flag ? 1 : 0, row.id);
+  require('./gateway').restrictionChanged(row.id, !!flag);
+  return true;
+}
 // placeholder for a Velora user we've only heard of (import, BONFIRE_OWNER) - refreshed on their first login
 function ensureVeloraPlaceholder(id, username, pfp) {
   const row = userByPrincipal('v:' + id);
@@ -217,7 +225,7 @@ function setOwner(userId) {
 }
 
 module.exports = {
-  userView, botVerified, userById, userByPrincipal, upsertVeloraUser, refreshVeloraProfile, ensureVeloraPlaceholder,
+  userView, botVerified, userById, userByPrincipal, upsertVeloraUser, refreshVeloraProfile, setRestricted, ensureVeloraPlaceholder,
   createSession, resolveSession, revokeSession, bearer,
   verifyVeloraJwt, setJwksFetcher, keyFor, loginVelora, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
   claimed, ownerRow, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,

@@ -19,6 +19,24 @@ const AUTH_TIMEOUT = 10000, IDLE_MS = 60000, MAX_FPS = 30;
 
 const send = (sock, obj) => { if (sock.readyState === 1) { try { sock.send(JSON.stringify(obj)); } catch { /* closing */ } } };
 const authed = sock => sock.bf?.authed;
+const RESTRICTED = { error: 'account_restricted', message: 'Ember is switched off for your account.' };
+
+// Velora switched Ember off / on for this account: its open sockets stop receiving community events and leave voice at once
+// (or may say chat_hello again), and are told. Frames from a restricted socket are refused in onFrame.
+function restrictionChanged(userId, restricted) {
+  for (const sock of byUser.get(Number(userId)) || []) setRestricted(sock, restricted);
+}
+function setRestricted(sock, restricted) {
+  const st = sock.bf;
+  if (!!st.restricted === restricted) return;
+  st.restricted = restricted;
+  if (restricted) {
+    st.ready = false;
+    for (const [id, set] of subs) { set.delete(sock); if (!set.size) subs.delete(id); }
+    if (db.raw()) try { V().leave(sock); } catch (e) { console.error('[gateway] voice leave', e.message); }
+    send(sock, { type: 'account_restricted', ...RESTRICTED });
+  } else send(sock, { type: 'account_restored' });
+}
 
 function subscribe(userId, communityId) {
   for (const sock of byUser.get(Number(userId)) || []) if (sock.bf.ready) { if (!subs.has(communityId)) subs.set(communityId, new Set()); subs.get(communityId).add(sock); }
@@ -87,6 +105,11 @@ async function onFrame(sock, msg) {
   }
   if (msg.type === 'auth') return;
   const me = st.user;
+  if (me.kind === 'velora') { // staff switched Ember off for the account: re-checked with Velora at most every 30 s
+    const r = await require('./profiles').gate(me).catch(() => !!st.restricted);
+    if (r !== !!st.restricted) setRestricted(sock, r);
+    if (r && /^(chat_|voice_)/.test(String(msg.type))) return send(sock, { type: 'chat_error', nonce: msg.nonce, request: msg.type, ...RESTRICTED });
+  }
   const reply = obj => send(sock, obj);
   try {
     if (/^chat_/.test(String(msg.type)) && !st.scopes.includes(need(msg.type)) && msg.type !== 'chat_hello') {
@@ -146,6 +169,7 @@ function doAuth(sock, msg) {
   byUser.get(s.user.id).add(sock);
   const admin = auth.isAdmin(s.user), quota = admin ? require('./relay/client').voiceQuota() : null;
   send(sock, { type: 'auth_success', user: auth.userView(s.user), instance_admin: admin, instance_owner: auth.isOwner(s.user), ...(quota ? { voice_quota: quota } : {}) });
+  if (s.user.restricted) setRestricted(sock, true); // told right away; stays quiet until Velora switches it back on
 }
 
 function onConnection(sock, req) {
@@ -198,4 +222,4 @@ function shutdown(code = 1001, reason = 'shutdown') {
   wss?.close();
 }
 
-module.exports = { attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, isOnline };
+module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, isOnline };

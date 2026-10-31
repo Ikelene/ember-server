@@ -4,6 +4,7 @@ const auth = require('./auth');
 const { err } = require('./util');
 const managed = require('./managed');
 
+const RESTRICTED_MSG = 'Ember is switched off for your account.';
 const MAX_JSON = 1024 * 1024;
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -57,6 +58,8 @@ class App {
           const s = auth.resolveSession(auth.bearer(req));
           if (!s) throw err('invalid_session', 401);
           if (s.user.banned) throw err('banned', 403);
+          // Ember switched off for the Velora account: nothing but signing out / back in (which Velora refuses too)
+          if (!pathname.startsWith('/api/v1/auth/') && await require('./profiles').gate(s.user)) throw err('account_restricted', 403, { message: RESTRICTED_MSG });
           req.user = s.user; req.session = s; req.scopes = s.scopes;
           if (r.opts.admin && !auth.isAdmin(s.user)) throw err('not_allowed', 403);
           if (r.opts.owner && !auth.isOwner(s.user)) throw err('owner_only', 403);

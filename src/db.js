@@ -214,6 +214,8 @@ const MIGRATIONS = [
   CREATE INDEX reactions_created ON reactions(created_at, message_id, user_id);`,
   // v12: "Last online" on profiles: when someone's last gateway socket closed (backfilled from last_connect as a best guess)
   `ALTER TABLE users ADD COLUMN last_online INTEGER; UPDATE users SET last_online = last_connect WHERE last_connect IS NOT NULL;`,
+  // v13: Velora switched Ember off for this account (profiles endpoint `restricted`): refused over REST + the gateway until it is switched back on
+  `ALTER TABLE users ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 function open() {
