@@ -277,7 +277,7 @@ Core subset for v1:
 - **Members:** `GET /servers/:sid/members` (each member also has `joined_at`, ms), `DELETE /servers/:sid/members/:uid` (`?ban=1`), `DELETE /servers/:sid/bans/:uid`, `GET /servers/:sid/bans`
 - **Roles:** CRUD on `/servers/:sid/roles[/:rid]`, `PUT /servers/:sid/roles/order`, `PUT/DELETE /servers/:sid/members/:uid/roles/:rid`
 - **Channels:** `POST /servers/:sid/channels`, `PATCH/DELETE /channels/:cid`, `PUT /channels/:cid/perms`
-- **Messages:** `GET/POST /channels/:cid/messages`, `POST /channels/:cid/read`, `PATCH/DELETE /messages/:id`, `PUT/DELETE /messages/:id/reactions/:emoji`, `PUT/DELETE /messages/:id/pin`, `GET /channels/:cid/pins`, `GET /channels/:cid/search`
+- **Messages:** `GET/POST /channels/:cid/messages`, `POST /channels/:cid/read`, `PATCH/DELETE /messages/:id`, `PUT/DELETE /messages/:id/reactions/:emoji`, `PUT/DELETE /messages/:id/pin`, `GET /channels/:cid/pins`, `GET /channels/:cid/search`, `GET /channels/:cid/viewers` (`{ all: true }` when nothing limits who sees it, else `{ all: false, ids: [principals] }`; Ember shows only those in the member list)
 - **Identities and settings:**
   - `GET /identities?ids=` takes principal ids and returns `{ users: [user…] }`.
   - `GET/PATCH /settings` stores the user's per-instance settings, e.g. `server_order`.
