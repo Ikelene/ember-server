@@ -448,6 +448,14 @@ function leaveServer(sid, me) {
   if (snap.isOwner(me.id)) throw err('owner_cannot_leave', 400); // delete it instead
   removeMember(c, me.id, 'left');
 }
+// Ember's member list shows only the people who can see the channel you're in: { all: true } when nothing limits it,
+// otherwise the principals of the members who can (the same canView as everywhere else)
+function channelViewers(cid, me) {
+  const { ch, c, snap } = findChannel(cid, me);
+  if (!snap.ow.get(ch.id)?.size && perms.gameView(ch, 0) === null) return { all: true };
+  const users = db.all('SELECT u.id, u.principal FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ?', c.id);
+  return { all: false, ids: users.filter(u => snap.canView(ch, u.id)).map(u => u.principal) };
+}
 function memberList(sid, me) {
   const { c, snap } = memberCommunity(sid, me);
   const users = db.all('SELECT u.*, m.joined_at FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ? ORDER BY u.id', c.id);
@@ -977,7 +985,7 @@ function setNotify(me, target, body = {}) {
 module.exports = {
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
   effectiveUploadMax, roleView, serverView, channelView, memberView, readState, mentionCounts, myServers, serverDetail,
-  createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
+  createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
   channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,
   createRole, updateRole, deleteRole, orderRoles, setMemberRole, setRoleIcon,
