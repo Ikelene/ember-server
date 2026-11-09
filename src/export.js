@@ -39,6 +39,7 @@ function exportCommunity(sid, me) {
   };
   const roleByRid = id => snap.roles.find(r => r.id === id)?.rid;
   const emojis = db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(e => ({ eid: e.eid, name: e.name, animated: !!e.animated, file: localFile(`${origin()}/uploads/${e.file}`) }));
+  const stickers = db.all('SELECT * FROM stickers WHERE community_id = ? ORDER BY id', c.id).map(s => ({ tid: s.tid, name: s.name, animated: !!s.animated, file: localFile(`${origin()}/uploads/${s.file}`) }));
   const community = {
     name: c.name, description: c.description, icon: localFile(c.icon_url), banner: localFile(c.banner_url),
     settings: { join_policy: c.join_policy, allow_uploads: !!c.allow_uploads, upload_max_mb: c.upload_max_mb, rules: require('./settings').exportable(c) },
@@ -49,6 +50,7 @@ function exportCommunity(sid, me) {
     })),
     roles: snap.roles.map(r => ({ rid: r.rid, name: r.name, color: r.color || null, position: r.position, permissions: r.permissions, upload_max_mb: r.upload_max_mb ?? null, hoist: !!r.hoist, mentionable: !!r.mentionable, is_default: !!r.is_default })),
     emojis,
+    stickers,
     invites: db.all('SELECT * FROM invites WHERE community_id = ?', c.id).map(i => ({ code: i.code, expires_at: i.expires_at ?? null, max_uses: i.max_uses ?? null })),
   };
   files['manifest.json'] = strToU8(JSON.stringify({ format: FORMAT, source: origin(), source_kind: 'instance', exported_at: now(), community: c.sid }));
@@ -87,6 +89,7 @@ function exportCommunity(sid, me) {
           ...(r.sys_kind ? { sys_kind: r.sys_kind } : {}), pinned: !!r.pinned_at, reactions: rx.get(r.id) || [],
           ...(r.sig_kid ? { signature: { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } } : {}),
           ...(r.bridge ? { bridge: r.bridge } : {}),
+          ...(r.sticker_id ? { sticker: r.sticker_id } : {}),
           ...(r.alias_name ? { alias: { name: r.alias_name, avatar_url: r.alias_avatar || null } } : {}),
         };
         lines.push(JSON.stringify(o));
@@ -201,6 +204,18 @@ function importCommunity(me, buffer, parsed) {
         emojiMap.set(e.eid, { eid, name: clean(e.name, 32).replace(/[^A-Za-z0-9_]/g, '_') || 'emoji', animated });
       } catch { /* skip an unusable emoji */ }
     }
+    // stickers: fresh IDs too, messages that used one point at the new id
+    const stickerMap = new Map();
+    for (const s of (Array.isArray(cj.stickers) ? cj.stickers : []).slice(0, C.LIMITS.stickers)) {
+      const data = s && typeof s.file === 'string' ? entries[s.file] : null;
+      if (!data) continue;
+      try {
+        const tid = 't' + randHex(5);
+        const { file, animated } = uploads.saveSticker(Buffer.from(data), tid);
+        db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', tid, c.id, clean(s.name, 32).replace(/[^A-Za-z0-9_]/g, '_') || 'sticker', animated ? 1 : 0, file, me.id, now());
+        stickerMap.set(s.tid, tid);
+      } catch { /* skip an unusable sticker */ }
+    }
     // invites: same limits, fresh codes
     for (const inv of (Array.isArray(cj.invites) ? cj.invites : []).slice(0, 50)) {
       if (inv?.expires_at && inv.expires_at <= now()) continue;
@@ -233,11 +248,11 @@ function importCommunity(me, buffer, parsed) {
         const sig = m.signature && typeof m.signature.kid === 'string' && typeof m.signature.sig === 'string' ? m.signature : null;
         const created = Number(m.created_at) || now();
         const res = db.run(
-          `INSERT INTO messages (channel_id, user_id, body, attachments, system, sys_kind, author_name, author_avatar, embeds, bridge, pinned_at, created_at, edited_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (channel_id, user_id, body, attachments, system, sys_kind, author_name, author_avatar, embeds, bridge, pinned_at, created_at, edited_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, sticker_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ch.id, u?.id ?? null, String(m.body ?? '').slice(0, 4000), atts.length ? JSON.stringify(atts) : null, m.system ? 1 : 0, m.sys_kind ? String(m.sys_kind).slice(0, 12) : null,
           nameOnly ? clean(nameOnly, 80) : null, nameOnly ? (m.author_avatar || m.author?.pfp || null) : null, Array.isArray(m.embeds) ? JSON.stringify(m.embeds) : null, m.bridge ? String(m.bridge).slice(0, 10) : null,
-          m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null);
+          m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null, stickerMap.get(m.sticker) ?? null);
         const nid = Number(res.lastInsertRowid);
         idMap.set(String(m.id), nid);
         if (u?.kind === 'bot' && m.alias && typeof m.alias === 'object') { // a bot's alias survives only when the author is still that bot

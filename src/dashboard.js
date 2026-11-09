@@ -53,7 +53,7 @@ function view(c) {
   for (const [g, list] of Object.entries(GROUPS)) for (const t of list) { const b = tables.get(t) || 0; groups[g] += b; counted += b; }
   groups.other += Math.max(0, dbTotal - counted);
   groups.uploads = n('SELECT COALESCE(SUM(size), 0) AS n FROM uploads');
-  for (const r of [...db.all('SELECT file FROM emojis WHERE community_id = ?', c.id), ...db.all('SELECT file FROM sounds WHERE community_id = ?', c.id)]) groups.media += size(path.join(dir, 'uploads', r.file));
+  for (const r of [...db.all('SELECT file FROM emojis WHERE community_id = ?', c.id), ...db.all('SELECT file FROM stickers WHERE community_id = ?', c.id), ...db.all('SELECT file FROM sounds WHERE community_id = ?', c.id)]) groups.media += size(path.join(dir, 'uploads', r.file));
   groups.previews += dirSize(path.join(dir, 'uploads', 'embeds'));
   groups.backups = n('SELECT COALESCE(SUM(size), 0) AS n FROM instance_backups');
   groups.config = size(path.join(dir, 'config.json'));

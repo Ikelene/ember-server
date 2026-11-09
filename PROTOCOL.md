@@ -283,6 +283,7 @@ Core subset for v1:
   - `GET /identities?ids=` takes principal ids and returns `{ users: [user…] }`.
   - `GET/PATCH /settings` stores the user's per-instance settings, e.g. `server_order`.
 - **Emojis:** `GET /servers/:sid/emojis`, `POST /servers/:sid/emojis` (multipart `file`, `name`), `DELETE /servers/:sid/emojis/:eid`
+- **Stickers:** `GET /stickers`, `GET /servers/:sid/stickers`, `POST /servers/:sid/stickers` (multipart `file`, `name`), `PATCH/DELETE /servers/:sid/stickers/:tid` (§6.1.1)
 
 Member routes take the principal id (`:uid`) where Velora took a username.
 
@@ -332,6 +333,17 @@ A locked channel always needs Manage messages. `can_post` in `GET /servers/:sid`
 Message history/pins/search and `chat_reactions.reactions` return `{ emoji, count, users, user_ids }`. For custom reactions, `emoji` is always the stable key `c:<eid>`, with additional `{ emoji_id: <eid>, name, url, animated }`. `users` and `user_ids` contain the first 25 usernames/principals in reaction order. `chat_reactions.emoji` uses the same stable key. Render custom `url` as an image with `:name:` as its tooltip. A deleted emoji has `url: null` and a stored name fallback: show `:name:` and allow DELETE by stable key. Renaming never splits counts or prevents removal. Historical name-bearing storage tokens remain readable and exports keep their name snapshot; import remaps tokens to the imported emoji IDs. Unicode reactions and starboard behavior are unchanged.
 
 **Starboard.** The ⭐ reaction is the vote. When a message in a watched channel reaches `min` stars it is added to the board and stays (only deleting the message or channel removes it). `GET /channels/:cid/starboard` → `{ recent: [message + { channel_name, starred_at, stars, starred }], more, top, throwback, total, min, watching }`; `?before=<starred_at>` pages back and returns only `{ recent, more }`. Entries from channels you cannot see are left out.
+
+### 6.1.1 Stickers
+
+Stickers are like custom emojis but bigger and server-only: a sticker can only be sent in channels of the server that owns it. A sticker is `{ tid, name, animated, url }`: `tid` is `t` + 10 hex, `url` is `<instance>/uploads/stickers/<tid>.<ext>`.
+
+- `GET /servers/:sid/stickers` (members) -> `{ stickers, max: 30 }`. `GET /stickers` -> `{ servers: [{ sid, name, icon, stickers }] }` for every server the caller is in that has stickers.
+- `POST /servers/:sid/stickers` (Manage server, multipart `file` + `name`) -> `{ sticker }`. Names follow the emoji rules (letters, digits and `_`, up to 32; a missing name falls back to the file name). The file must be **PNG, GIF, WebP or APNG** (checked by magic bytes; `animated` is detected) and **at most 512 KB**. Errors: `too_many_stickers` (30 per server), `file_too_large` (413), `images_only`, `no_file`, `name_required` (PATCH).
+- `PATCH /servers/:sid/stickers/:tid { name }` and `DELETE /servers/:sid/stickers/:tid` need Manage server; both are audit-logged (`sticker_create`, `sticker_update`, `sticker_delete`). Any change emits `{ type: "chat_stickers_update", server: "<sid>", stickers: [...] }` to the whole server.
+- **Sending.** `POST /channels/:cid/messages` and the gateway `chat_send` accept `sticker: "<tid>"` (one per message). A tid that does not belong to the channel's own server is `400 unknown_sticker`. A message with a sticker may have an empty `message`.
+- **Message view.** A message sent with a sticker carries `sticker: { tid, name, url, animated }` in history, pins, search, `chat_message` and `chat_message_update`. If the sticker was deleted afterwards the field stays as `{ tid, name: null, url: null, animated: false, deleted: true }` so clients can show "Sticker deleted". Messages without a sticker have no `sticker` field. Bots can read the message as usual (empty `content`); the Bot API has no sticker sending.
+- **Export.** `community.json` has `stickers: [{ tid, name, animated, file }]` (files under `files/`) and messages have `sticker: "<tid>"`; import gives them fresh ids and remaps the messages.
 
 ### 6.2 Soundboard
 
@@ -430,7 +442,7 @@ Connect to `ws(s)://INSTANCE/gateway`.
 4. The client sends `{ "type": "ping" }` every 25 seconds. The server answers `{ "type": "pong" }` and drops any socket that has been idle for more than 60 seconds.
 
 **Client to server** frames have the same names and fields as Velora today:
-- `chat_send { nonce, channel, message, reply_to?, attachments?, signature? }`. The server replies `chat_ack { nonce, message }` or `chat_error { nonce, error }`.
+- `chat_send { nonce, channel, message, reply_to?, attachments?, signature?, sticker? }`. The server replies `chat_ack { nonce, message }` or `chat_error { nonce, error }`.
 - `chat_typing { channel }`
 - `chat_read { channel, message_id }`
 - the `chat_rtc_*` family (§10)
@@ -438,7 +450,7 @@ Connect to `ws(s)://INSTANCE/gateway`.
 **Server to client** events have the same names and shapes as Velora today:
 - Messages: `chat_message`, `chat_message_update`, `chat_message_delete`, `chat_reactions`, `chat_typing`, `chat_pins_update`
 - Server and roles: `chat_server_update`, `chat_server_removed`, `chat_roles_update`, `chat_perms_changed`
-- Channels and members: `chat_channels_update`, `chat_member_update`, `chat_members_stale`, `chat_emojis_update`
+- Channels and members: `chat_channels_update`, `chat_member_update`, `chat_members_stale`, `chat_emojis_update`, `chat_stickers_update`
 - Identity: `chat_identity_update`
 - Replies and errors: `chat_ack`, `chat_error`, `chat_ephemeral`
 - Bots (§14.2): `chat_commands_update { server }`, `chat_interaction_message`, `chat_interaction_modal`
@@ -516,9 +528,9 @@ If verification fails, the instance rejects the message with `bad_signature`. Bo
 | path | contents |
 |---|---|
 | `manifest.json` | `{ format: "bonfire-export-v1", source: "<origin>", source_kind: "instance" \| "velora-legacy" \| "velora-import", exported_at: <ms>, community: "<sid>" }` |
-| `community.json` | `{ name, description, icon, banner, settings: {join_policy, allow_uploads, upload_max_mb}, categories: [name…], channels: [ {cid, name, topic, category, position, locked, type, config, perms: [ {role: "<rid>", allow, deny} ]} ], roles: [ {rid, name, color, position, permissions, upload_max_mb, hoist, mentionable, is_default} ], emojis: [ {eid, name, animated, file} ], invites: [ {code, expires_at, max_uses} ] }` |
+| `community.json` | `{ name, description, icon, banner, settings: {join_policy, allow_uploads, upload_max_mb}, categories: [name…], channels: [ {cid, name, topic, category, position, locked, type, config, perms: [ {role: "<rid>", allow, deny} ]} ], roles: [ {rid, name, color, position, permissions, upload_max_mb, hoist, mentionable, is_default} ], emojis: [ {eid, name, animated, file} ], stickers: [ {tid, name, animated, file} ], invites: [ {code, expires_at, max_uses} ] }` |
 | `members.jsonl` | one JSON object per line: `{ user: <user object>, roles: ["<rid>"…], joined_at, owner?: true }` |
-| `messages/<cid>.jsonl` | oldest first, one JSON object per line: `{ id, author: <user object> \| null, author_name?, author_avatar?, body, attachments, embeds?, reply_to, created_at, edited_at, system, sys_kind?, pinned, reactions: [ {emoji, users: [uid…]} ], signature?, bridge? }` |
+| `messages/<cid>.jsonl` | oldest first, one JSON object per line: `{ id, author: <user object> \| null, author_name?, author_avatar?, body, attachments, embeds?, reply_to, created_at, edited_at, system, sys_kind?, pinned, sticker?: "<tid>", reactions: [ {emoji, users: [uid…]} ], signature?, bridge? }` |
 | `files/<path>` | icon, banner, emojis, and locally hosted attachments, referenced as `files/…` from the JSON |
 
 Import rules:

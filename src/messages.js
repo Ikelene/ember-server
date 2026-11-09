@@ -104,6 +104,11 @@ function cleanAlias(me, raw) {
   return { name, avatar };
 }
 
+// the sticker a message was sent with; a row that is gone later stays visible as a deleted one
+function stickerOf(tid) {
+  const s = db.get('SELECT * FROM stickers WHERE tid = ?', tid);
+  return s ? { tid: s.tid, name: s.name, url: C.stickerView(s).url, animated: !!s.animated } : { tid, name: null, url: null, animated: false, deleted: true };
+}
 function messageView(r, snap) {
   const c = snap.c;
   const author = r.system ? null
@@ -129,6 +134,7 @@ function messageView(r, snap) {
     signature: r.sig_kid ? { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } : null,
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
+    ...(r.sticker_id ? { sticker: stickerOf(r.sticker_id) } : {}),
   };
 }
 const customReaction = raw => /^(?:c:)?(e[0-9a-f]{10})$/.exec(raw)?.[1]
@@ -232,13 +238,13 @@ function insertMessage(ctx, f) {
   require('./managed').assertWritable(); // every way of posting ends here: users, bots, webhooks, bridges, Ember Link
   const { ch, c, snap } = ctx;
   const res = db.run(
-    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via, components, interaction)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via, components, interaction, sticker_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ch.id, f.userId ?? null, f.body, f.replyTo ?? null, f.attachments?.length ? JSON.stringify(f.attachments) : null, f.system ? 1 : 0, f.sysKind || null,
     f.subjectId ?? null, f.subjectParts ? JSON.stringify(f.subjectParts) : null, f.everyone || 0, f.roleIds?.length ? ',' + f.roleIds.join(',') + ',' : null,
     f.authorName || null, f.authorAvatar || null, Date.now(), f.sig?.sig_kid ?? null, f.sig?.sig_sig ?? null, f.sig?.sig_ts ?? null, f.sig?.sig_nonce ?? null, f.sig?.verified ?? null,
     f.embeds?.length ? JSON.stringify(f.embeds) : null, f.webhookId ?? null, f.bridge || null, f.via ? JSON.stringify(f.via) : null,
-    f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null);
+    f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null, f.stickerId || null);
   const id = Number(res.lastInsertRowid);
   if (f.alias) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', f.alias.name, f.alias.avatar || null, id);
   if (f.bridge && f.bridgeFrom) require('./bridge/store').setFrom(id, f.bridgeFrom);
@@ -320,12 +326,17 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
 
 // ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
 // alias (bots only): { name, avatar_url } shows another name and picture on this message (see cleanAlias)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, app, components, interaction, force, alias } = {}) {
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, app, components, interaction, force, alias, sticker } = {}) {
   const { ch, c, snap } = ctx;
+  let stickerId = null;
+  if (sticker != null && sticker !== '') {
+    stickerId = String(sticker);
+    if (!db.get('SELECT 1 FROM stickers WHERE tid = ? AND community_id = ?', stickerId, c.id)) throw err('unknown_sticker', 400);
+  }
   const aliasRow = cleanAlias(me, alias);
   const body = normBody(text);
   const atts = cleanAttachments(attachments);
-  if (!body.trim() && !atts.length && !embeds?.length && !components?.length) throw err('empty_message');
+  if (!body.trim() && !atts.length && !embeds?.length && !components?.length && !stickerId) throw err('empty_message');
   if (!snap.isMember(me.id)) throw err('not_a_member', 403);
   if (!force && !snap.canPost(ch, me.id)) throw err(ch.locked && ch.type !== 'voice' ? 'channel_locked' : 'no_send_permission', 403);
   if (atts.length && !force && !(snap.chPerms(ch, me.id) & P.ATTACH)) throw err('no_attach_permission', 403);
@@ -341,7 +352,7 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua, app), components, interaction, alias: aliasRow || null });
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua, app), components, interaction, alias: aliasRow || null, stickerId });
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
@@ -352,7 +363,7 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
   const aliasRow = cleanAlias(me, alias);
   const body = text === undefined ? r.body : normBody(text);
   const nextEmbeds = embeds === undefined ? json(r.embeds, []) : embeds, nextComps = components === undefined ? json(r.components, []) : components;
-  if (!body.trim() && !r.attachments && !attachments?.length && !nextEmbeds?.length && !nextComps?.length) throw err('empty_message');
+  if (!body.trim() && !r.sticker_id && !r.attachments && !attachments?.length && !nextEmbeds?.length && !nextComps?.length) throw err('empty_message');
   if (text !== undefined) assertLength(c, text);
   if (body !== r.body) mod().beforePost({ ch, c, snap }, me, body, { edit: true });
   const atts = attachments === undefined ? json(r.attachments, []) : cleanAttachments(attachments);

@@ -11,7 +11,7 @@ const gateway = require('./gateway');
 const { P, ALL_PERMS, CHANNEL_BITS, EVERYONE_DEFAULT } = perms;
 const { err, clean, randId, now } = require('./util');
 
-const LIMITS = { joined: 100, channels: 60, members: 5000, roles: 100, emojis: 100 };
+const LIMITS = { joined: 100, channels: 60, members: 5000, roles: 100, emojis: 100, stickers: 30 };
 // `game` = an Ember Link (Minecraft) channel, src/game; a `logs` channel may also be a CloudLink bridge, src/bridge/cloudlink.js
 const CHANNEL_TYPES = ['text', 'logs', 'roles', 'welcome', 'link', 'voice', 'starboard', 'game'];
 const STAR_SKIP = ['starboard', 'voice', 'link', 'roles']; // channels a starboard can't watch
@@ -368,7 +368,7 @@ function deleteCommunity(sid, me, { afterCommit } = {}) {
   const c = findCommunity(sid);
   const snap = snapOf(c);
   if (!snap.isOwner(me.id) && !auth.isAdmin(me)) throw err(snap.isMember(me.id) ? 'owner_only' : 'not_a_member', 403);
-  const files = [...db.all('SELECT file FROM emojis WHERE community_id = ?', c.id), ...db.all('SELECT file FROM sounds WHERE community_id = ?', c.id)];
+  const files = [...db.all('SELECT file FROM emojis WHERE community_id = ?', c.id), ...db.all('SELECT file FROM stickers WHERE community_id = ?', c.id), ...db.all('SELECT file FROM sounds WHERE community_id = ?', c.id)];
   db.run('DELETE FROM communities WHERE id = ?', c.id);
   const finish = () => {
     gateway.emit(c.id, { type: 'chat_server_removed', server: c.sid, reason: 'deleted' });
@@ -892,6 +892,54 @@ function deleteEmoji(sid, me, eid) {
   audit(c, me, 'emoji_delete', { target: { kind: 'emoji', id: e.eid, name: e.name } });
 }
 
+// ---------- stickers (Manage server; server-only: sent as a message of their own server's channels) ----------
+const stickerView = s => ({ tid: s.tid, name: s.name, animated: !!s.animated, url: `${instanceOrigin()}/uploads/${s.file}` });
+const stickersOf = c => db.all('SELECT * FROM stickers WHERE community_id = ? ORDER BY id', c.id).map(stickerView);
+function stickersChanged(c) { gateway.emit(c.id, { type: 'chat_stickers_update', server: c.sid, stickers: stickersOf(c) }); }
+function listStickers(sid, me) {
+  const { c } = emojiCommunity(sid, me, false);
+  return { stickers: stickersOf(c), max: LIMITS.stickers };
+}
+function allStickers(me) {
+  const out = [];
+  for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)) {
+    const stickers = stickersOf(c);
+    if (stickers.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, stickers });
+  }
+  return { servers: out };
+}
+function createSticker(sid, me, { buffer, name, filename }) {
+  const { c } = emojiCommunity(sid, me, true);
+  if (!buffer) throw err('no_file');
+  if (db.get('SELECT COUNT(*) AS n FROM stickers WHERE community_id = ?', c.id).n >= LIMITS.stickers) throw err('too_many_stickers');
+  const tid = 't' + require('./util').randHex(5);
+  const { file, animated } = require('./uploads').saveSticker(buffer, tid);
+  const nm = emojiName(name) || emojiName(String(filename || '').replace(/\.[^.]+$/, '')) || 'sticker';
+  db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', tid, c.id, nm, animated ? 1 : 0, file, me.id, now());
+  stickersChanged(c);
+  audit(c, me, 'sticker_create', { target: { kind: 'sticker', id: tid, name: nm } });
+  return { sticker: stickerView({ tid, name: nm, animated, file }) };
+}
+function renameSticker(sid, me, tid, name) {
+  const { c } = emojiCommunity(sid, me, true);
+  const nm = emojiName(name);
+  if (!nm) throw err('name_required');
+  const old = db.get('SELECT name FROM stickers WHERE tid = ? AND community_id = ?', tid, c.id);
+  if (!old) throw err('not_found', 404);
+  db.run('UPDATE stickers SET name = ? WHERE tid = ? AND community_id = ?', nm, tid, c.id);
+  stickersChanged(c);
+  if (old.name !== nm) audit(c, me, 'sticker_update', { target: { kind: 'sticker', id: tid, name: nm }, details: { old_name: old.name } });
+}
+function deleteSticker(sid, me, tid) {
+  const { c } = emojiCommunity(sid, me, true);
+  const s = db.get('SELECT * FROM stickers WHERE tid = ? AND community_id = ?', tid, c.id);
+  if (!s) throw err('not_found', 404);
+  db.run('DELETE FROM stickers WHERE id = ?', s.id);
+  require('./uploads').removeFiles([s.file]);
+  stickersChanged(c);
+  audit(c, me, 'sticker_delete', { target: { kind: 'sticker', id: s.tid, name: s.name } });
+}
+
 // click an emoji: which community it is from
 function emojiInfo(eid, me) {
   const e = db.get('SELECT e.eid, e.name, e.animated, e.community_id FROM emojis e WHERE e.eid = ?', String(eid));
@@ -989,6 +1037,6 @@ module.exports = {
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
   channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,
   createRole, updateRole, deleteRole, orderRoles, setMemberRole, setRoleIcon,
-  listEmojis, allEmojis, createEmoji, renameEmoji, deleteEmoji, emojiView, emojiInfo, shopView, shopRole, welcomeMessage, cleanConfig, cleanTemplates: templateList,
+  listEmojis, allEmojis, createEmoji, renameEmoji, deleteEmoji, emojiView, listStickers, allStickers, createSticker, renameSticker, deleteSticker, stickerView, emojiInfo, shopView, shopRole, welcomeMessage, cleanConfig, cleanTemplates: templateList,
   identities, getSettings, setSettings, SETTING_DEFAULTS, notifyList, setNotify, instanceOrigin,
 };

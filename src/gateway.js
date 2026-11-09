@@ -125,7 +125,7 @@ async function onFrame(sock, msg) {
       }
       case 'chat_send': {
         const ctx = C().findChannel(msg.channel, me);
-        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, ua: st.ua, app: st.app, alias: msg.alias });
+        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, ua: st.ua, app: st.app, alias: msg.alias, sticker: msg.sticker });
         reply({ type: 'chat_ack', nonce: msg.nonce, message });
         break;
       }

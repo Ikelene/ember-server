@@ -99,5 +99,16 @@ function register(app) {
   });
   app.patch(v1('/servers/:sid/emojis/:eid'), req => { C.renameEmoji(req.params.sid, req.user, req.params.eid, req.body?.name); });
   app.delete(v1('/servers/:sid/emojis/:eid'), req => { C.deleteEmoji(req.params.sid, req.user, req.params.eid); });
+
+  // ---- stickers ----
+  app.get(v1('/stickers'), req => C.allStickers(req.user));
+  app.get(v1('/servers/:sid/stickers'), req => C.listStickers(req.params.sid, req.user));
+  app.post(v1('/servers/:sid/stickers'), async req => {
+    C.memberCommunity(req.params.sid, req.user);
+    const { buffer, filename, fields } = await uploads.readMultipart(req, { maxBytes: 512 * 1024 });
+    return C.createSticker(req.params.sid, req.user, { buffer, name: fields.name, filename });
+  });
+  app.patch(v1('/servers/:sid/stickers/:tid'), req => { C.renameSticker(req.params.sid, req.user, req.params.tid, req.body?.name); });
+  app.delete(v1('/servers/:sid/stickers/:tid'), req => { C.deleteSticker(req.params.sid, req.user, req.params.tid); });
 }
 module.exports = { register };

@@ -218,6 +218,13 @@ const MIGRATIONS = [
   `ALTER TABLE users ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;`,
   // v14: the registered Nookara app a session was signed in through (the token's `app` claim), for messages' `via`
   `ALTER TABLE sessions ADD COLUMN app TEXT;`,
+  // v15: server stickers (like emojis but bigger, server-only) + the sticker a message was sent with
+  `CREATE TABLE stickers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, tid TEXT NOT NULL UNIQUE, community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, animated INTEGER NOT NULL DEFAULT 0, file TEXT NOT NULL, created_by INTEGER, created_at INTEGER NOT NULL
+  );
+  CREATE INDEX stickers_community ON stickers(community_id);
+  ALTER TABLE messages ADD COLUMN sticker_id TEXT;`,
 ];
 
 function open() {

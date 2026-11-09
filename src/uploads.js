@@ -213,6 +213,16 @@ function saveEmoji(buf, eid) {
   return { file: rel, animated: animatedImage(buf, sn.ext) };
 }
 
+// a server sticker: png / gif / webp (incl. animated), at most 512 KB
+function saveSticker(buf, tid) {
+  const sn = sniff(buf);
+  if (!sn || !['png', 'gif', 'webp'].includes(sn.ext)) throw err('images_only');
+  if (buf.length > 512 * 1024) throw err('file_too_large', 413);
+  const rel = `stickers/${tid}.${sn.ext}`;
+  writeStored(rel, buf);
+  return { file: rel, animated: animatedImage(buf, sn.ext) };
+}
+
 // parse one multipart file field into memory. -> { buffer, filename, fields }
 function readMultipart(req, { maxBytes, field = 'file' } = {}) {
   return new Promise((resolve, reject) => {
@@ -278,4 +288,4 @@ function serve(req, res) {
   return true;
 }
 
-module.exports = { kindOf, beforeUpload, acceptUpload, sweepExpired, startExpiry, stopExpiry, storageUsed, sniff, stripJpegExif, dimensions, storeUpload, saveImage, saveEmoji, removeFiles, readMultipart, readForm, serve, writeStored, root, safeExt };
+module.exports = { kindOf, beforeUpload, acceptUpload, sweepExpired, startExpiry, stopExpiry, storageUsed, sniff, stripJpegExif, dimensions, storeUpload, saveImage, saveEmoji, saveSticker, removeFiles, readMultipart, readForm, serve, writeStored, root, safeExt };
