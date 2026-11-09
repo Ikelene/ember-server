@@ -51,6 +51,7 @@ The JWT is compact and signed with EdDSA (Ed25519).
 | `pfp` | absolute URL or null |
 | `scp` | array drawn from `"chat"`, `"voice"`, `"media"`, `"sign"`; each is present only if the Velora token holds `CHAT`, `VOICE`, `MEDIA_UPLOAD` or `SIGN_MESSAGES` respectively |
 | `tier` | the person's Velora plan: `"pro"` (Pro, legacy Plus, staff ranks or a credit-bought tier) or `"free"`; instances use it for "plans whose files never expire" (§6.4) |
+| `app` | optional: `{ id, name?, icon? }` when the person signed in to Velora through a registered (third-party) app. The instance keeps it with the session and adds `app` (the id), `token` (the name) and `icon` to the `via` of messages sent with that session, so clients can name the app. `id` is `app_` + hex; `icon` is an https link to Velora's `/uploads/app-logos/`. Clients never take an instance's `via.app` as proof of an official app (no verified badge from it). |
 
 Errors:
 - `invalid_instance`: the URL doesn't parse, or it's http outside dev.
@@ -387,7 +388,7 @@ The permission algorithm is the same as `permsOf` / `channelPermsOf` / `canView`
 
 `via` is `{ official, kind, name, token, url }`, worked out on the server and never trusted from the client: the official Ember apps sign in with a reserved token name only the app login flow can mint, and a website session counts as official only when the browser's `Origin` is the site. Otherwise `token` is the name the person gave their sign-in token and `url` is the page's origin (never an IP address).
 
-**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }` (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history and pins for holders only. An instance cannot tell whether a client is the official one, so it never sets `official`.
+**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }`, plus `app` / `token` / `icon` when the session came from a registered app (the instance token's `app` claim) (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history and pins for holders only. An instance cannot tell whether a client is the official one, so it never sets `official`.
 
 Backward compatible: older clients ignore the new fields. A client may add `client: { version, platform, device }` to its `auth_token` frame to say more about itself; it is optional, trimmed and capped.
 
