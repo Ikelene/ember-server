@@ -320,7 +320,7 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
 
 // ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
 // alias (bots only): { name, avatar_url } shows another name and picture on this message (see cleanAlias)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, components, interaction, force, alias } = {}) {
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, app, components, interaction, force, alias } = {}) {
   const { ch, c, snap } = ctx;
   const aliasRow = cleanAlias(me, alias);
   const body = normBody(text);
@@ -341,7 +341,7 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua), components, interaction, alias: aliasRow || null });
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua, app), components, interaction, alias: aliasRow || null });
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
@@ -423,11 +423,15 @@ function react(id, me, emojiRaw, on) {
 // Only the copies that go to people with Manage users carry it (`via`); messageView never does, so bots, bridges,
 // exports and everyone else see nothing.
 const appKind = ua => (/\bBonfireDesktop\//.test(String(ua || '')) ? 'desktop' : /\bBonfireAndroid\//.test(String(ua || '')) ? 'android' : null);
-const viaOf = (origin, ua) => {
+// app: the registered Nookara app the session signed in through (auth.js appClaim): { app: id, token: name, icon }, the same
+// fields Velora's own messages carry for an app, so Ember names it the same way
+const viaOf = (origin, ua, app = null) => {
   const url = origin ? normalizeOrigin(origin) : null;
   if (!url || /^https?:\/\/([\d.]+|\[.*\])(:|$)/.test(url)) return null;
   const kind = appKind(ua);
-  return kind ? { url: url.slice(0, 120), kind } : { url: url.slice(0, 120) };
+  const v = kind ? { url: url.slice(0, 120), kind } : { url: url.slice(0, 120) };
+  if (app?.id) Object.assign(v, { app: app.id, ...(app.name ? { token: app.name } : {}), ...(app.icon ? { icon: app.icon } : {}) });
+  return v;
 };
 function parseVia(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
 function attachVia(rows, snap, me, msgs) {

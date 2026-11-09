@@ -216,6 +216,8 @@ const MIGRATIONS = [
   `ALTER TABLE users ADD COLUMN last_online INTEGER; UPDATE users SET last_online = last_connect WHERE last_connect IS NOT NULL;`,
   // v13: Velora switched Ember off for this account (profiles endpoint `restricted`): refused over REST + the gateway until it is switched back on
   `ALTER TABLE users ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;`,
+  // v14: the registered Nookara app a session was signed in through (the token's `app` claim), for messages' `via`
+  `ALTER TABLE sessions ADD COLUMN app TEXT;`,
 ];
 
 function open() {

@@ -97,3 +97,21 @@ test('local password hashing: scrypt, per-user salt, constant verify', async () 
   assert.equal(await auth.checkPassword('hunter2hunter2', h1), true);
   assert.equal(await auth.checkPassword('hunter3hunter3', h1), false);
 });
+
+test('a token made through a registered Nookara app: messages say which app (via.app / token / icon)', async () => {
+  const a = api(inst.url);
+  const owner = await a.post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat' }) });
+  const o = api(inst.url, owner.body.session);
+  const s = (await o.post('/api/v1/servers', { name: 'Apps' })).body;
+  const cid = s.channels.find(c => c.type === 'text').cid;
+  const app = { id: 'app_41afda32aadb66d74415', name: 'ScratchCord V2', icon: 'https://nookara.cc/uploads/app-logos/x.png' };
+  const r = await a.post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat', app }) });
+  const viaApp = api(inst.url, r.body.session);
+  const sent = (await viaApp.raw('POST', `/api/v1/channels/${cid}/messages`, { message: 'from scratchcord' }, { Origin: 'https://ikelene.net' })).body.message;
+  const hist = (await o.get(`/api/v1/channels/${cid}/messages`)).body.messages;
+  const m = hist.find(x => x.id === sent.id);
+  assert.deepEqual(m.via, { url: 'https://ikelene.net', app: app.id, token: 'ScratchCord V2', icon: app.icon });
+  // a bad claim is dropped, the login still works
+  const bad = await a.post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat', app: { id: 'nope', name: 'x' } }) });
+  assert.equal(bad.status, 200);
+});

@@ -62,9 +62,9 @@ function identityChanged(u, previousUsername) {
 }
 
 // ---------- sessions ----------
-function createSession(userId, scopes) {
+function createSession(userId, scopes, app = null) {
   const token = b64url(crypto.randomBytes(32));
-  db.run('INSERT INTO sessions (hash, user_id, scopes, created_at, last_used) VALUES (?, ?, ?, ?, ?)', sha256(token), userId, JSON.stringify(scopes), now(), now());
+  db.run('INSERT INTO sessions (hash, user_id, scopes, created_at, last_used, app) VALUES (?, ?, ?, ?, ?, ?)', sha256(token), userId, JSON.stringify(scopes), now(), now(), app ? JSON.stringify(app) : null);
   return token;
 }
 // -> { user, scopes, hash } | null
@@ -81,7 +81,8 @@ function resolveSession(token) {
   if (user.kind !== (config.mode() === 'velora' ? 'velora' : 'local')) return null;
   if (t - s.last_used > 3600 * 1000) db.run('UPDATE sessions SET last_used = ? WHERE hash = ?', t, hash);
   let scopes = []; try { scopes = JSON.parse(s.scopes); } catch { /* none */ }
-  return { user, scopes, hash };
+  let app = null; try { app = s.app ? JSON.parse(s.app) : null; } catch { /* none */ }
+  return { user, scopes, hash, app };
 }
 const revokeSession = token => { if (token) db.run('DELETE FROM sessions WHERE hash = ?', sha256(token)); };
 const bearer = req => { const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || ''); return m ? m[1] : null; };
@@ -146,9 +147,9 @@ async function verifyVeloraJwt(token, nowMs = Date.now()) {
 }
 
 // ---------- login flows ----------
-function finishLogin(user, scopes) {
+function finishLogin(user, scopes, app = null) {
   if (user.banned) throw err('banned', 403);
-  return { session: createSession(user.id, scopes), user: userView(userById(user.id)) };
+  return { session: createSession(user.id, scopes, app), user: userView(userById(user.id)) };
 }
 async function loginVelora(token) {
   if (config.mode() !== 'velora') throw err('wrong_accounts_mode', 400);
@@ -161,7 +162,15 @@ async function loginVelora(token) {
   // their Velora plan (`tier` claim: free / pro ...): Server settings > Uploads > Plans whose files never expire
   const tier = typeof c.tier === 'string' && /^[a-z0-9_-]{1,24}$/.test(c.tier) ? c.tier : null;
   if ((user.tier ?? null) !== tier) { db.run('UPDATE users SET tier = ? WHERE id = ?', tier, user.id); user.tier = tier; }
-  return finishLogin(user, scp);
+  return finishLogin(user, scp, appClaim(c.app));
+}
+// the `app` claim of a Velora token: the registered Nookara app the person signed in through ({ id, name, icon }), kept with
+// the session so messages' `via` can name it. Velora signed it, so it is taken as given, but only in this shape.
+function appClaim(a) {
+  if (!a || typeof a !== 'object' || typeof a.id !== 'string' || !/^app_[0-9a-f]{8,40}$/.test(a.id)) return null;
+  const name = typeof a.name === 'string' ? a.name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 64) : '';
+  const icon = typeof a.icon === 'string' && /^https:\/\/[^\s"'<>]{1,300}\/uploads\/app-logos\/[\w.-]+$/.test(a.icon) ? a.icon : null;
+  return { id: a.id, ...(name ? { name } : {}), ...(icon ? { icon } : {}) };
 }
 
 // ---------- local accounts ----------

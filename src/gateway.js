@@ -125,7 +125,7 @@ async function onFrame(sock, msg) {
       }
       case 'chat_send': {
         const ctx = C().findChannel(msg.channel, me);
-        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, ua: st.ua, alias: msg.alias });
+        const message = await M().postMessage(me, ctx, msg.message, { replyTo: msg.reply_to, attachments: msg.attachments, signature: msg.signature, scopes: st.scopes, origin: st.origin, ua: st.ua, app: st.app, alias: msg.alias });
         reply({ type: 'chat_ack', nonce: msg.nonce, message });
         break;
       }
@@ -163,7 +163,7 @@ function doAuth(sock, msg) {
   if (s.user.banned) return sock.close(4003, 'banned');
   const st = sock.bf;
   clearTimeout(st.timer);
-  Object.assign(st, { authed: true, user: s.user, scopes: s.scopes });
+  Object.assign(st, { authed: true, user: s.user, scopes: s.scopes, app: s.app || null });
   try { db.run('UPDATE users SET last_connect = ? WHERE id = ?', Date.now(), s.user.id); } catch (e) { console.error('[gateway] last_connect', e.message); }
   if (!byUser.has(s.user.id)) byUser.set(s.user.id, new Set());
   byUser.get(s.user.id).add(sock);
