@@ -16,6 +16,7 @@ const byUser = new Map(); // userId -> Set<socket>        (authenticated sockets
 const all = new Set();
 let wss = null, heartbeat = null, cfgHooked = false;
 const AUTH_TIMEOUT = 10000, IDLE_MS = 60000, MAX_FPS = 30;
+const HEARTBEAT_TICK_MS = 15000, PING_AFTER_MS = 15000; // quiet for 15 s: a websocket ping (its pong refreshes lastSeen)
 
 const send = (sock, obj) => { if (sock.readyState === 1) { try { sock.send(JSON.stringify(obj)); } catch { /* closing */ } } };
 const authed = sock => sock.bf?.authed;
@@ -195,8 +196,11 @@ function onConnection(sock, req) {
       }
     }
     for (const [id, set] of subs) { set.delete(sock); if (!set.size) subs.delete(id); }
-    if (db.raw()) try { V().leave(sock); } catch (e) { console.error('[gateway] voice leave', e.message); }
+    if (db.raw()) try { V().park(sock); } catch (e) { console.error('[gateway] voice leave', e.message); } // (a call survives a short drop: voice.js park / chat_rtc_resume)
   });
+  // a websocket pong counts as life too: browsers answer pings themselves, even when a background tab's timers (and so its
+  // {"type":"ping"} frames) are throttled to once a minute
+  sock.on('pong', () => { sock.bf.lastSeen = Date.now(); });
   sock.on('error', () => {});
 }
 
@@ -210,7 +214,13 @@ function attach(httpServer) {
     if (p !== '/gateway') { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
-  heartbeat = setInterval(() => { const t = Date.now(); for (const s of all) if (t - s.bf.lastSeen > IDLE_MS) s.terminate(); }, 15000);
+  heartbeat = setInterval(() => {
+    const t = Date.now();
+    for (const s of all) {
+      if (t - s.bf.lastSeen > IDLE_MS) { s.terminate(); continue; }
+      if (t - s.bf.lastSeen >= PING_AFTER_MS && s.readyState === 1) try { s.ping(); } catch { /* closing */ }
+    }
+  }, HEARTBEAT_TICK_MS);
   heartbeat.unref();
   if (!cfgHooked) { cfgHooked = true; config.events.on('change', () => broadcastAll({ type: 'instance_update', settings: config.publicView() })); }
 }

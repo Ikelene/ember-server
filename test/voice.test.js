@@ -24,7 +24,7 @@ const stub = async (url, init) => {
   return { ok: true, status: 200, json: async () => out };
 };
 
-test.before(async () => { inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' }); voice.setFetch(stub); });
+test.before(async () => { inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' }); voice.setFetch(stub); voice._setResumeGraceMs(50); });
 test.after(async () => { voice.setFetch(null); await inst.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 test('join, publish, connect, subscribe, leave; permissions and limits', async () => {
@@ -95,4 +95,62 @@ test('join, publish, connect, subscribe, leave; permissions and limits', async (
   wb.send({ type: 'chat_rtc_join', nonce: 'j4', room });
   assert.equal((await wb.waitFor(f => f.nonce === 'j4' && f.type === 'chat_error')).error, 'channel_full');
   [wa, wb, wm].forEach(w => w.close());
+});
+
+test('a dropped socket parks the call; a new socket resumes it with the token, others never see a leave', async () => {
+  // (alice's socket from the test above closed while connected: her parked call ends after the grace period)
+  await new Promise(r => setTimeout(r, 150)); voice._setResumeGraceMs(30000);
+  const reg = async u => { const r = await api(inst.url).post('/api/v1/auth/register', { username: u, password: 'password123' }); return { ...r.body, a: api(inst.url, r.body.session) }; };
+  const carol = await reg('carol'), dave = await reg('dave');
+  const owner = (await api(inst.url).post('/api/v1/auth/login', { username: 'alice', password: 'password123' })).body;
+  const oa = api(inst.url, owner.session);
+  const sid = (await oa.get('/api/v1/servers')).body.servers[0].sid; // (the server from the test above; its voice channel is empty again)
+  const vc = (await oa.get(`/api/v1/servers/${sid}`)).body.channels.find(c => c.type === 'voice').cid, room = 'bf_' + vc;
+  await oa.patch(`/api/v1/channels/${vc}`, { config: { user_limit: 0 } });
+  await carol.a.post(`/api/v1/servers/${sid}/join`); await dave.a.post(`/api/v1/servers/${sid}/join`);
+  const wc = await wsClient(inst.url).login(carol.session), wd = await wsClient(inst.url).login(dave.session);
+  wc.send({ type: 'chat_rtc_join', nonce: 'c1', room });
+  const joined = await wc.waitFor(f => f.type === 'chat_rtc_joined' && f.nonce === 'c1');
+  assert.ok(typeof joined.resume === 'string' && joined.resume.length > 10);
+  wc.send({ type: 'chat_rtc_publish', nonce: 'cp', room, sessionDescription: { type: 'offer', sdp: SDP }, tracks: [{ mid: '0', trackName: 'audio' }] });
+  await wc.waitFor(f => f.type === 'chat_rtc_published' && f.nonce === 'cp');
+  wc.send({ type: 'chat_rtc_connected', room });
+  await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 1);
+  const before = calls.length;
+
+  // the socket drops: carol stays in the room (parked), her sessions stay open
+  wc.ws.terminate(); await wc.closed;
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(voice.voiceIn.get(room)?.size, 1);
+  assert.ok(!calls.slice(before).some(c => c.startsWith('GET ') || c.includes('/tracks/close')), 'no sessions closed while parked');
+
+  // a wrong token / another account can't take it over
+  wd.send({ type: 'chat_rtc_resume', nonce: 'dr', room, resume: joined.resume });
+  assert.equal((await wd.waitFor(f => f.nonce === 'dr')).error, 'resume_failed');
+  const wc2 = await wsClient(inst.url).login(carol.session);
+  wc2.send({ type: 'chat_rtc_resume', nonce: 'bad', room, resume: 'x'.repeat(24) });
+  assert.equal((await wc2.waitFor(f => f.nonce === 'bad')).error, 'resume_failed');
+
+  wc2.send({ type: 'chat_rtc_resume', nonce: 'r1', room, resume: joined.resume });
+  const resumed = await wc2.waitFor(f => f.nonce === 'r1');
+  assert.equal(resumed.type, 'chat_rtc_resumed');
+  assert.deepEqual(resumed.tracks.map(t => t.trackName), ['audio']);
+  assert.notEqual(resumed.resume, joined.resume); // (a fresh token every time)
+  assert.ok(!wd.frames.some(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 0), 'dave never saw carol leave');
+  // the resumed socket is the participant now: mute works, and leaving really leaves
+  wc2.send({ type: 'chat_voice_mute', room, muted: true });
+  await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users[0]?.muted === true);
+  wc2.send({ type: 'chat_rtc_leave' });
+  await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 0);
+
+  // a parked call that nobody resumes ends after the grace period
+  voice._setResumeGraceMs(100);
+  wc2.send({ type: 'chat_rtc_join', nonce: 'c2', room });
+  await wc2.waitFor(f => f.type === 'chat_rtc_joined' && f.nonce === 'c2');
+  wc2.send({ type: 'chat_rtc_connected', room });
+  await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 1 && wd.frames.filter(x => x.type === 'chat_voice_state' && x.channel === vc).length >= 4);
+  wc2.ws.terminate(); await wc2.closed;
+  await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 0 && wd.frames.filter(x => x.type === 'chat_voice_state' && x.channel === vc && x.users.length === 0).length >= 2);
+  voice._setResumeGraceMs(30000);
+  wd.close();
 });

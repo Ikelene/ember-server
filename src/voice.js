@@ -1,6 +1,7 @@
 'use strict';
 // Voice over Cloudflare Realtime (PROTOCOL §10): ported from Velora's cf-realtime.js + the chat_rtc_* handlers in chat.js.
 // The client never sees the SFU app secret, only expiring ICE credentials and SDP. Rooms are named bf_<cid>.
+const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
 const C = require('./communities');
@@ -100,13 +101,33 @@ function voiceDenied(me, room) {
   return null;
 }
 
+// A gateway socket that drops (wifi blip, proxy or tunnel hiccup) doesn't end the call at once: the media runs straight
+// between the browser and Cloudflare, so the participant is parked for RESUME_GRACE_MS and a new socket of the same
+// account can take it over with chat_rtc_resume + the token it got in chat_rtc_joined. Nobody else sees a leave/join.
+let RESUME_GRACE_MS = 30 * 1000;
+const newResumeToken = () => crypto.randomBytes(18).toString('base64url');
+function park(sock) {
+  const p = rtcBySocket.get(sock);
+  if (!p) return;
+  if (!p.connected || !p.resume) return leave(sock); // (still negotiating: nothing worth keeping)
+  rtcBySocket.delete(sock);
+  p.parked = true;
+  clearTimeout(p.parkTimer);
+  p.parkTimer = setTimeout(() => { if (p.parked) drop(p); }, RESUME_GRACE_MS);
+  p.parkTimer.unref?.();
+}
 function leave(sock) {
   const p = rtcBySocket.get(sock);
   if (!p) return;
-  rtcBySocket.delete(sock);
+  drop(p);
+}
+function drop(p) {
+  clearTimeout(p.parkTimer); p.parked = false;
+  if (rtcBySocket.get(p.sock) === p) rtcBySocket.delete(p.sock);
   const people = rtcRooms.get(p.room);
-  people?.delete(sock);
-  if (!people?.size) rtcRooms.delete(p.room); else rtcBroadcast(p.room);
+  if (people?.get(p.sock) !== p) return; // (already gone)
+  people.delete(p.sock);
+  if (!people.size) rtcRooms.delete(p.room); else rtcBroadcast(p.room);
   // only drop the voice-state entry when no other tab of the same account is still connected in the room
   const stillThere = [...(people?.values() || [])].some(q => q.userId === p.userId && q.connected);
   if (p.connected && !stillThere) voiceLeft(p, p.room);
@@ -118,7 +139,7 @@ function removeMember(userId, communityId, reason = 'membership_removed') {
     if (voiceChannelOf(room)?.community_id !== communityId) continue;
     for (const p of [...people.values()]) if (p.userId === Number(userId)) {
       gw().send(p.sock, { type: 'chat_rtc_left', room, reason });
-      leave(p.sock);
+      drop(p); // (parked ones too)
     }
   }
 }
@@ -145,6 +166,7 @@ async function handle(sock, me, msg, reply) {
       const backend = backendName();
       if (!backend) throw err('voice_unavailable', 503);
       leave(sock);
+      for (const q of [...(rtcRooms.get(room)?.values() || [])]) if (q.parked && q.userId === me.id) drop(q); // (joining afresh instead of resuming)
       let publish, receive = null, ice;
       if (backend === 'direct') [publish, receive, ice] = await Promise.all([R.createSession(), R.createSession(), iceServers()]);
       else { ice = await broker().R.iceServers(); publish = await broker().R.createSession(); } // the receive session is made on first subscribe (it is metered)
@@ -155,9 +177,28 @@ async function handle(sock, me, msg, reply) {
         throw err('not_a_member', 403);
       }
       // keep negotiating participants private until their browser confirms a real WebRTC connection
-      const p = { sock, userId: me.id, principal: me.principal, username: me.username, room, publish, receive, backend, tracks: [], subscriptions: [], connected: false };
+      const p = { sock, userId: me.id, principal: me.principal, username: me.username, room, publish, receive, backend, tracks: [], subscriptions: [], connected: false, resume: newResumeToken() };
       rtcBySocket.set(sock, p); rtcOf(room).set(sock, p);
-      reply({ type: 'chat_rtc_joined', nonce: msg.nonce, room, iceServers: ice, people: rtcPublic(room) });
+      reply({ type: 'chat_rtc_joined', nonce: msg.nonce, room, iceServers: ice, people: rtcPublic(room), resume: p.resume });
+      return true;
+    }
+    case 'chat_rtc_resume': { // a new socket takes over this account's call in the room (see park); resume_failed = join again
+      const room = String(msg.room || ''), token = typeof msg.resume === 'string' ? msg.resume : '';
+      const people = rtcRooms.get(room);
+      const p = token && [...(people?.values() || [])].find(q => q.userId === me.id && q.resume && q.resume.length === token.length && crypto.timingSafeEqual(Buffer.from(q.resume), Buffer.from(token)));
+      if (!p) throw err('resume_failed', 404);
+      if (p.sock !== sock) {
+        if (rtcBySocket.get(sock)) leave(sock); // (this socket was somewhere else)
+        const denied = voiceDenied(me, room);
+        if (denied && denied !== 'channel_full') { drop(p); throw err(denied, 403); }
+        clearTimeout(p.parkTimer); p.parked = false;
+        if (rtcBySocket.get(p.sock) === p) rtcBySocket.delete(p.sock); // (the old socket may not have noticed it's dead yet)
+        people.delete(p.sock);
+        p.sock = sock;
+        people.set(sock, p); rtcBySocket.set(sock, p);
+      }
+      p.resume = newResumeToken();
+      reply({ type: 'chat_rtc_resumed', nonce: msg.nonce, room, resume: p.resume, tracks: p.tracks, people: rtcPublic(room) });
       return true;
     }
     case 'chat_rtc_publish': {
@@ -251,4 +292,4 @@ async function handle(sock, me, msg, reply) {
 const roomOf = sock => rtcBySocket.get(sock)?.room || null;
 const socketsIn = room => [...(rtcRooms.get(room)?.keys() || [])];
 
-module.exports = { handle, leave, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf };
+module.exports = { handle, leave, park, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf };
