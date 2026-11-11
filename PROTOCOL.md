@@ -400,7 +400,7 @@ The permission algorithm is the same as `permsOf` / `channelPermsOf` / `canView`
 
 `via` is `{ official, kind, name, token, url }`, worked out on the server and never trusted from the client: the official Ember apps sign in with a reserved token name only the app login flow can mint, and a website session counts as official only when the browser's `Origin` is the site. Otherwise `token` is the name the person gave their sign-in token and `url` is the page's origin (never an IP address).
 
-**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }`, plus `app` / `token` / `icon` when the session came from a registered app (the instance token's `app` claim) (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history and pins for holders only. An instance cannot tell whether a client is the official one, so it never sets `official`.
+**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }`, plus `app` / `token` / `icon` when the session came from a registered app (the instance token's `app` claim) (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history and pins for holders only. An instance cannot tell whether a client is the official one, so it never sets `official`. Holders (and the person themselves) can also ask which clients a member is connected with right now: §7.1.
 
 Backward compatible: older clients ignore the new fields. A client may add `client: { version, platform, device }` to its `auth_token` frame to say more about itself; it is optional, trimmed and capped.
 
@@ -469,7 +469,7 @@ New events:
 - `chat_shop_update { server, channel, rid, status }`: your pay request for a shop role was `paid` (role granted), `declined` or `expired` (§6.1).
 - Ember Link: `game_status`, `game_console`, `game_linked`, `game_unlinked` (§18.4).
 
-**Fan-out** is per community. Each socket subscribes to the communities its user belongs to, and a member only receives an event if they can view its channel. Instances don't relay human presence: the client gets Velora users' presence from its Velora home socket. Bot presence is instance-local (section 14).
+**Fan-out** is per community. Each socket subscribes to the communities its user belongs to, and a member only receives an event if they can view its channel. Instances don't relay human presence: the client gets Velora users' presence from its Velora home socket (Manage users holders can still ask which clients a member is connected with, §7.1). Bot presence is instance-local (section 14).
 
 **Close codes:**
 
@@ -479,6 +479,34 @@ New events:
 | 4003 | banned from instance |
 | 4008 | rate limited |
 | 4010 | instance restarting |
+
+### 7.1 Member clients (Manage users)
+
+An instance reports which clients each member is connected with right now: one entry per live gateway connection, on `/gateway` (Ember, third-party apps, scripts) or `/bot/gateway` (bots). This is how a profile shows the clients of instance-only accounts, bots, and Velora members who talk to the instance directly (with no Velora socket of their own).
+
+**Who sees it.** The person themselves, and members holding **Manage users** (bit 2048) in a server they both belong to. Nobody else, instance admins included unless they hold the bit there. The instance checks this on every reply and again before every live update; there are no IP addresses in it.
+
+**Session entry** (the same field names as Velora's presence `sessions`, §6 Manage users):
+
+| field | |
+|---|---|
+| `via` | `{ url?, kind?, app?, token?, icon? }` like a message's `via` (§6): `url` = the connection's `Origin` (never an IP address; absent for scripts that send none), `kind` = `desktop` / `android` (official app User-Agent marker) or `bot` (a `/bot/gateway` connection), `app` / `token` / `icon` = the registered Nookara app of the session (the instance token's `app` claim). An instance can write anything here, so clients take the app's name, logo and verified mark only from Velora's app registry, never from these fields. |
+| `state` | `active` (default), `background` or `notifications`, as the client last said (below) |
+| `platform`, `browser`, `mobile` | coarse, from the User-Agent (only for browser-style `Mozilla/` agents; no versions, no device model) |
+| `version`, `device`, `platform` | from the client's own `client` object in `auth` (overrides the User-Agent platform) |
+| `connected_at` | ms since epoch, when the connection authenticated |
+
+At most 8 entries (the newest), oldest first.
+
+**REST:** `GET /api/v1/servers/:sid/members/:uid/clients` (`:uid` = the member's principal id) returns `{ server, user_id, online, sessions, last_online }` (`last_online` only while offline). Errors: `not_a_member` (403, you), `user_not_found` (404, not a member there), `not_allowed` (403, no permission).
+
+**Gateway** (needs the `chat` scope):
+- `{ type: "chat_clients_watch", server, user_id }` answers with `{ type: "chat_clients", server, user_id, online, sessions, last_online }` at once and then again whenever that member's connections change (connect, disconnect, state), coalesced over 250 ms. Refused with `chat_error { request: "chat_clients_watch", error }` (same codes as REST). A socket watches at most 16 members (the oldest watch is dropped); watches end with the socket, so clients watch again after reconnecting.
+- If the watcher loses the permission (or either person leaves), the next update is `{ type: "chat_clients", server, user_id, ended: true }` and the watch is gone.
+- `{ type: "chat_clients_unwatch", server?, user_id? }` stops one watch, or all with no fields.
+- `{ type: "chat_client_state", state }` (`active` / `background` / `notifications`) says what this connection is doing. `auth` may also carry `state`, `mobile: true` and `client: { version?, platform?, device? }` (trimmed to 24 / 24 / 40 characters).
+
+Older clients ignore all of this; an instance without it answers the REST route with 404 and the watch with nothing, which clients treat as "no data".
 
 ---
 

@@ -49,6 +49,8 @@ function register(app) {
 
   // ---- members ----
   app.get(v1('/servers/:sid/members'), req => C.memberList(req.params.sid, req.user));
+  // the clients a member is connected with now (PROTOCOL §7.1): themselves or Manage users holders only
+  app.get(v1('/servers/:sid/members/:uid/clients'), req => require('../clients').memberClients(req.params.sid, req.user, req.params.uid));
   app.get(v1('/channels/:cid/viewers'), req => C.channelViewers(req.params.cid, req.user)); // who can see a channel (Ember's member list)
   app.delete(v1('/servers/:sid/members/:uid'), req => { C.moderateMember(req.params.sid, req.user, req.params.uid, req.query.ban === '1' ? 'ban' : 'kick'); });
   app.get(v1('/servers/:sid/bans'), req => C.banList(req.params.sid, req.user));

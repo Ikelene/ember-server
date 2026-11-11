@@ -10,6 +10,7 @@ const { P } = require('./perms');
 const C = () => require('./communities');
 const M = () => require('./messages');
 const V = () => require('./voice');
+const CL = () => require('./clients');
 
 const subs = new Map();   // communityId -> Set<socket>   (sockets that said chat_hello and whose user is a member)
 const byUser = new Map(); // userId -> Set<socket>        (authenticated sockets)
@@ -93,6 +94,7 @@ function broadcastAll(obj) { for (const sock of all) if (authed(sock)) send(sock
 function closeAll(code, reason) { for (const sock of all) { try { sock.close(code, reason); } catch { /* gone */ } } }
 const onlineUserIds = () => [...byUser.keys()];
 const isOnline = userId => (byUser.get(Number(userId))?.size || 0) > 0;
+const socketsOf = userId => [...(byUser.get(Number(userId)) || [])];
 
 // ---------- frames ----------
 const need = type => (/^chat_rtc|^chat_voice/.test(type) ? 'voice' : 'chat');
@@ -150,6 +152,10 @@ async function onFrame(sock, msg) {
       }
       case 'chat_profile_refresh': require('./profiles').nudge(msg.velora_id).catch(() => {}); break; // Ember saw a live Velora profile change: pull it now
       case 'chat_read': M().markRead(msg.channel, me, msg.message_id ?? msg.id); break;
+      // which clients a member is connected with (PROTOCOL §7.1): the person themselves or Manage users holders only
+      case 'chat_clients_watch': reply({ type: 'chat_clients', ...CL().watch(sock, me, msg.server, msg.user_id) }); break;
+      case 'chat_clients_unwatch': CL().unwatch(sock, me, msg.server ?? null, msg.user_id ?? null); break;
+      case 'chat_client_state': CL().setState(sock, msg.state); break;
       default:
         if (/^chat_(rtc|voice)/.test(String(msg.type))) await V().handle(sock, me, msg, reply);
     }
@@ -164,13 +170,15 @@ function doAuth(sock, msg) {
   if (s.user.banned) return sock.close(4003, 'banned');
   const st = sock.bf;
   clearTimeout(st.timer);
-  Object.assign(st, { authed: true, user: s.user, scopes: s.scopes, app: s.app || null });
+  Object.assign(st, { authed: true, user: s.user, scopes: s.scopes, app: s.app || null, connectedAt: Date.now(), client: CL().clientInfo(msg.client), mobile: msg.mobile === true });
+  if (['active', 'background', 'notifications'].includes(msg.state)) st.clientState = msg.state;
   try { db.run('UPDATE users SET last_connect = ? WHERE id = ?', Date.now(), s.user.id); } catch (e) { console.error('[gateway] last_connect', e.message); }
   if (!byUser.has(s.user.id)) byUser.set(s.user.id, new Set());
   byUser.get(s.user.id).add(sock);
   const admin = auth.isAdmin(s.user), quota = admin ? require('./relay/client').voiceQuota() : null;
   send(sock, { type: 'auth_success', user: auth.userView(s.user), instance_admin: admin, instance_owner: auth.isOwner(s.user), ...(quota ? { voice_quota: quota } : {}) });
   if (s.user.restricted) setRestricted(sock, true); // told right away; stays quiet until Velora switches it back on
+  CL().changed(s.user.id);
 }
 
 function onConnection(sock, req) {
@@ -196,6 +204,8 @@ function onConnection(sock, req) {
       }
     }
     for (const [id, set] of subs) { set.delete(sock); if (!set.size) subs.delete(id); }
+    CL().socketClosed(sock);
+    if (uid != null && db.raw()) CL().changed(uid);
     if (db.raw()) try { V().park(sock); } catch (e) { console.error('[gateway] voice leave', e.message); } // (a call survives a short drop: voice.js park / chat_rtc_resume)
   });
   // a websocket pong counts as life too: browsers answer pings themselves, even when a background tab's timers (and so its
@@ -232,4 +242,4 @@ function shutdown(code = 1001, reason = 'shutdown') {
   wss?.close();
 }
 
-module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, isOnline };
+module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, isOnline, socketsOf };

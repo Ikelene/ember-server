@@ -245,15 +245,18 @@ function memberRemoved(botId, communityId, reason) {
 function guildsOf(userId) {
   return db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', userId);
 }
-function onConnection(ws) {
-  const g = { ws, botId: null, seq: 0, last: Date.now() };
+// a bot's live connections (clients.js: the Clients row of its profile, for Manage users holders)
+const gatewaysOf = botId => [...gateways].filter(g => g.botId === Number(botId) && g.ws.readyState === 1);
+function onConnection(ws, req) {
+  const g = { ws, botId: null, seq: 0, last: Date.now(), origin: req?.headers?.origin || null, ua: req?.headers?.['user-agent'] || null, connectedAt: null };
   g.send = (t, d) => gwSend(g, t, d);
   gateways.add(g);
   ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: HEARTBEAT } }));
   if (!presenceSweep) { presenceSweep = setInterval(() => presence.sweep(), 15000); presenceSweep.unref(); }
   const noIdentify = setTimeout(() => { if (!g.botId) { g.dispose(); ws.close(4003, 'not authenticated'); } }, 20000);
   g.dispose = () => {
-    clearTimeout(noIdentify); presence.remove(g); gateways.delete(g); botVoice.drop(g);
+    clearTimeout(noIdentify); presence.remove(g); const had = gateways.delete(g); botVoice.drop(g);
+    if (had && g.botId) try { require('./clients').changed(g.botId); } catch { /* shutting down */ }
     if (!gateways.size) { clearInterval(presenceSweep); presenceSweep = null; }
   };
   ws.on('message', raw => {
@@ -270,7 +273,8 @@ function onConnection(ws) {
       if (g.botId) { g.dispose(); ws.close(4005, 'already authenticated'); return; }
       const u = fromHeader(`Bot ${String(ev.d?.token || '').replace(/^Bot\s+/i, '')}`);
       if (!u) { ws.close(4004, 'authentication failed'); return; }
-      g.botId = u.id; g.last = Date.now();
+      g.botId = u.id; g.last = Date.now(); g.connectedAt = Date.now();
+      require('./clients').changed(u.id);
       clearTimeout(noIdentify);
       const list = guildsOf(u.id);
       gwSend(g, 'READY', { v: 1, user: userObj(u), guilds: list.map(c => ({ id: String(c.id), unavailable: true })), session_id: crypto.randomBytes(8).toString('hex'), resume_gateway_url: gatewayUrl(), application: { id: String(u.id), flags: 0 } });
@@ -340,5 +344,5 @@ function dispatch(communityId, obj) {
 module.exports = {
   mine, create, update, setAvatar, resetToken, remove, info, addToServer, fromHeader, parseId, viewOf: id => view(botRow(id)), closeGatewaysOf: closeGateways,
   userObj, guildObj, channelObj, roleObj, messageObj, textIn, handleUpgrade, shutdown, dispatch, uidOf, permsToDiscord, isOnline, sendToBot,
-  ROLE_BASE, MAX_BOTS, apiUrl, gatewayUrl, memberRemoved,
+  ROLE_BASE, MAX_BOTS, apiUrl, gatewayUrl, memberRemoved, gatewaysOf,
 };
