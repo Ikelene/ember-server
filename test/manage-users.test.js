@@ -1,5 +1,5 @@
 'use strict';
-// Manage users on an instance: last login in the member list and the page each message was sent from, for holders only.
+// Manage users on an instance: last login in the member list for holders only; the client a message was sent from, for everyone.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -37,18 +37,18 @@ test('the member list shows last login to Manage users only', async () => {
   assert.equal((await alice.a.get(S('/members'))).body.members.find(m => m.username === 'bob').last_login, null); // never connected
 });
 
-test('messages carry the page they came from only for Manage users', async () => {
+test('messages carry the client they came from for everyone who sees them', async () => {
   wsB = await wsClient(base).login(bob.session); clients.push(wsB);
   const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'hello' }, { Origin: 'https://velora.example' });
   assert.equal(r.status, 200);
   const live = await wsB.waitFor(f => f.type === 'chat_message' && f.message.id === r.body.message.id);
   assert.deepEqual(live.message.via, { url: 'https://velora.example' });
   const plain = await wsC.waitFor(f => f.type === 'chat_message' && f.message.id === r.body.message.id);
-  assert.equal(plain.message.via, undefined);
+  assert.deepEqual(plain.message.via, { url: 'https://velora.example' });
   assert.equal(plain.__via, undefined);
   const h = id => m => m.id === id;
   assert.deepEqual((await bob.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://velora.example' });
-  assert.equal((await carol.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, undefined);
+  assert.deepEqual((await carol.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://velora.example' });
   assert.equal(r.body.message.via, undefined);
 });
 

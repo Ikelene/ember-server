@@ -98,7 +98,7 @@ test('local password hashing: scrypt, per-user salt, constant verify', async () 
   assert.equal(await auth.checkPassword('hunter3hunter3', h1), false);
 });
 
-test('a token made through a registered Nookara app: messages say which app (via.app / token / icon)', async () => {
+test('a token made through a registered Nookara app: messages say which app (via.app)', async () => {
   const a = api(inst.url);
   const owner = await a.post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat' }) });
   const o = api(inst.url, owner.body.session);
@@ -110,7 +110,7 @@ test('a token made through a registered Nookara app: messages say which app (via
   const sent = (await viaApp.raw('POST', `/api/v1/channels/${cid}/messages`, { message: 'from scratchcord' }, { Origin: 'https://ikelene.net' })).body.message;
   const hist = (await o.get(`/api/v1/channels/${cid}/messages`)).body.messages;
   const m = hist.find(x => x.id === sent.id);
-  assert.deepEqual(m.via, { url: 'https://ikelene.net', app: app.id, token: 'ScratchCord V2', icon: app.icon });
+  assert.deepEqual(m.via, { url: 'https://ikelene.net', app: app.id }); // (the token name and icon are stored but never sent: clients use the registry)
   // a bad claim is dropped, the login still works
   const bad = await a.post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat', app: { id: 'nope', name: 'x' } }) });
   assert.equal(bad.status, 200);

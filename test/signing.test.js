@@ -248,3 +248,29 @@ test('signed GIFs and saved uploads: HTTP, gateway, replies, edits and history',
     assert.equal(r.body.error, 'bad_signature');
   } finally { ws.close(); }
 });
+
+test('signed stickers: the signature covers the sticker id, other payloads keep no sticker key', async () => {
+  assert.equal('sticker' in mk(), false); // (text / file payloads are unchanged)
+  assert.equal(mk({ sticker: 'tabc' }).sticker, 'tabc');
+  keyRecord.user_id = '127'; keyRecord.revoked_at = null; signing.setKeyFetcher(fetcher);
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const add = async name => { const f = new FormData(); f.append('name', name); f.append('file', new Blob([PNG]), name + '.png'); const r = await a.raw('POST', `/api/v1/servers/${sid}/stickers`, f); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.sticker.tid; };
+  const one = await add('wave'), two = await add('wink');
+  const login = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '127', username: 'stickers' }) });
+  const c = api(inst.url, login.body.session); // (its own sender: the earlier tests used up the owner's send rate)
+  assert.equal((await c.post(`/api/v1/servers/${sid}/join`)).status, 200);
+  const payload = over => mk({ author: '127', community: sid, channel: cid, body: '', ...over });
+  let p = payload({ nonce: 'SSSSSSSSSSSSSSSSSSSSSS', sticker: one });
+  let r = await c.post(`/api/v1/channels/${cid}/messages`, { message: '', sticker: one, signature: sigOf(p) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.message.verified, true);
+  assert.equal(r.body.message.sticker.tid, one);
+  // signed for one sticker, sent with another: refused
+  p = payload({ nonce: 'TTTTTTTTTTTTTTTTTTTTTT', sticker: one });
+  assert.equal((await c.post(`/api/v1/channels/${cid}/messages`, { message: '', sticker: two, signature: sigOf(p) })).body.error, 'bad_signature');
+  // signed without the sticker (an old client): refused too, so a sticker can never ride on a signature that doesn't name it
+  p = payload({ nonce: 'UUUUUUUUUUUUUUUUUUUUUU' });
+  assert.equal((await c.post(`/api/v1/channels/${cid}/messages`, { message: '', sticker: one, signature: sigOf(p) })).body.error, 'bad_signature');
+  // unsigned stays allowed
+  assert.equal((await c.post(`/api/v1/channels/${cid}/messages`, { message: '', sticker: one })).body.message.verified, null);
+});

@@ -20,10 +20,12 @@ function canonical(v) {
   return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
 }
 
-function buildPayload({ iss, instance, community, channel, author, ts, nonce, body, attachments = [], reply_to = null, edit_of = null }) {
+// sticker: a sticker message's sticker id (PROTOCOL §8); absent otherwise, so every other payload is byte-for-byte what it was
+function buildPayload({ iss, instance, community, channel, author, ts, nonce, body, attachments = [], reply_to = null, edit_of = null, sticker = null }) {
   return {
     v: 1, iss, instance, community, channel, author: String(author), ts: Number(ts), nonce: String(nonce), body: String(body),
     attachments: attachments.map(String), reply_to: reply_to == null ? null : String(reply_to), edit_of: edit_of == null ? null : String(edit_of),
+    ...(sticker == null || sticker === '' ? {} : { sticker: String(sticker) }),
   };
 }
 // Hash entries are unchanged; link-only Klipy GIFs bind the stored URL.

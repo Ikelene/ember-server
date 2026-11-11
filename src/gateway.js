@@ -53,7 +53,7 @@ const dropCommunity = id => subs.delete(id);
 
 // everyone subscribed to the community who may see the event (channel events go only to members who can view that channel)
 function emit(communityId, obj, { except = null, filter = null } = {}) {
-  // `__via` (the page a message was sent from) rides along only to members with Manage users
+  // `__via` (which client a message was sent from) rides along to every member who gets the message; bots get the event without it
   let via = null;
   if (obj.__via !== undefined) { via = obj.__via; const { __via, ...rest } = obj; obj = rest; }
   try { require('./bots').dispatch(communityId, obj); } catch (e) { console.error('[gateway] bots', e.message); } // bots get the same events (Discord shape)
@@ -82,7 +82,7 @@ function emit(communityId, obj, { except = null, filter = null } = {}) {
       send(sock, { ...obj, channels: obj.channels.filter(x => vis.has(x.cid)) });
       continue;
     }
-    if (via && obj.message && (snap || (snap = C().snapById(communityId)))?.can(uid, P.MANAGE_USERS)) { send(sock, { ...obj, message: { ...obj.message, via } }); continue; }
+    if (via && obj.message) { send(sock, { ...obj, message: { ...obj.message, via } }); continue; }
     send(sock, obj);
   }
 }

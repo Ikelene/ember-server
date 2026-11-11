@@ -211,7 +211,7 @@ function cleanAttachments(list) {
 
 // ---------- signing ----------
 // -> signature row fields to store, or null when unsigned. Throws API errors.
-async function checkSignature({ me, c, ch, signature, scopes, body, attachments, replyTo, editOf, system = false }) {
+async function checkSignature({ me, c, ch, signature, scopes, body, attachments, replyTo, editOf, sticker = null, system = false }) {
   const velora = me && me.kind === 'velora';
   if (!signature) return null; // signing is optional, never required
   if (config.mode() !== 'velora' || !velora) throw err('signing_unavailable', 400);
@@ -220,7 +220,7 @@ async function checkSignature({ me, c, ch, signature, scopes, body, attachments,
   try { hashes = signing.attachmentRefs(attachments); } catch { throw err('bad_signature', 400); }
   const payload = signing.buildPayload({
     iss: signing.issuer(), instance: normalizeOrigin(config.publicUrl()), community: c.sid, channel: ch.cid, author: me.velora_id,
-    ts: signature.ts, nonce: signature.nonce, body, attachments: hashes, reply_to: replyTo, edit_of: editOf,
+    ts: signature.ts, nonce: signature.nonce, body, attachments: hashes, reply_to: replyTo, edit_of: editOf, sticker,
   });
   const res = await signing.verify({ payload, signature, veloraId: me.velora_id });
   if (!res.ok) throw err('bad_signature', 400, { reason: res.reason });
@@ -252,7 +252,7 @@ function insertMessage(ctx, f) {
   ch.last_message_id = id;
   if (f.userId && !f.system) db.run('INSERT INTO read_state (user_id, channel_id, last_read_id) VALUES (?, ?, ?) ON CONFLICT(user_id, channel_id) DO UPDATE SET last_read_id = excluded.last_read_id', f.userId, ch.id, id);
   const msg = viewById(id, snap);
-  gateway.emit(c.id, { type: 'chat_message', message: msg, __via: f.via || null });
+  gateway.emit(c.id, { type: 'chat_message', message: msg, __via: publicVia(f.via) });
   afterPost(ctx, msg, f);
   return msg;
 }
@@ -345,7 +345,7 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (!sendLimit.hit(me.id)) throw err('rate_limited', 429);
   let reply = null;
   if (replyTo != null && /^\d{1,15}$/.test(String(replyTo))) reply = db.get('SELECT id FROM messages WHERE id = ? AND channel_id = ?', Number(replyTo), ch.id)?.id ?? null;
-  const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: reply, editOf: null });
+  const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: reply, editOf: null, sticker: stickerId });
   // @everyone / @here and role mentions only count when allowed (Mention everyone, or a mentionable role)
   const big = snap.can(me.id, P.MENTION_EVERYONE);
   let everyone = 0;
@@ -367,7 +367,7 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
   if (text !== undefined) assertLength(c, text);
   if (body !== r.body) mod().beforePost({ ch, c, snap }, me, body, { edit: true });
   const atts = attachments === undefined ? json(r.attachments, []) : cleanAttachments(attachments);
-  const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: r.reply_to, editOf: r.id });
+  const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: r.reply_to, editOf: r.id, sticker: r.sticker_id });
   db.run('UPDATE messages SET body = ?, edited_at = ?, sig_kid = ?, sig_sig = ?, sig_ts = ?, sig_nonce = ?, verified = ?, embeds = ?, components = ?, interaction = ?, attachments = ? WHERE id = ?',
     body, silent ? r.edited_at : Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null,
     nextEmbeds?.length ? JSON.stringify(nextEmbeds) : null, nextComps?.length ? JSON.stringify(nextComps) : null,
@@ -427,12 +427,13 @@ function react(id, me, emojiRaw, on) {
   if (emoji === '\u2b50') require('./starboard').onStar({ ch, c, snap }, r.id, list.find(x => x.emoji === '\u2b50')?.count || 0);
 }
 
-// ---------- which page a message was sent from (Manage users) ----------
+// ---------- which client a message was sent from (everyone who can see the message) ----------
 // Stored with the message as { url, kind? }: url = the Origin of the request (never an IP address), kind = 'desktop' /
 // 'android' when the official Ember apps' User-Agent marker (BonfireDesktop/, BonfireAndroid/) says so. Ember turns it
 // into a name with Velora's official clients list (GET /api/clients/official, matched by url host + kind).
-// Only the copies that go to people with Manage users carry it (`via`); messageView never does, so bots, bridges,
-// exports and everyone else see nothing.
+// Every member who gets the message gets it too (chat_message / chat_message_update, history, search, pins), as
+// { url, kind?, app? } only: the token's name and icon stay in the database (clients name an app from Nookara's registry).
+// messageView never carries it, so bots, bridges and exports see nothing.
 const appKind = ua => (/\bBonfireDesktop\//.test(String(ua || '')) ? 'desktop' : /\bBonfireAndroid\//.test(String(ua || '')) ? 'android' : null);
 // app: the registered Nookara app the session signed in through (auth.js appClaim): { app: id, token: name, icon }, the same
 // fields Velora's own messages carry for an app, so Ember names it the same way
@@ -444,9 +445,13 @@ const viaOf = (origin, ua, app = null) => {
   if (app?.id) Object.assign(v, { app: app.id, ...(app.name ? { token: app.name } : {}), ...(app.icon ? { icon: app.icon } : {}) });
   return v;
 };
-function parseVia(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
+function parseVia(v) { try { return publicVia(v ? JSON.parse(v) : null); } catch { return null; } }
+// what members see: the address, the official apps' kind and the registered app's id (never the token's name or icon)
+function publicVia(v) {
+  if (!v || typeof v !== 'object' || !v.url) return null;
+  return { url: v.url, ...(v.kind ? { kind: v.kind } : {}), ...(v.app ? { app: v.app } : {}) };
+}
 function attachVia(rows, snap, me, msgs) {
-  if (!snap.can(me.id, P.MANAGE_USERS)) return msgs;
   msgs.forEach((m, i) => { const v = parseVia(rows[i]?.via); if (v) m.via = v; });
   return msgs;
 }
