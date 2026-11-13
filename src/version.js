@@ -52,14 +52,17 @@ function stats() {
 }
 const runtime = () => ({ node: process.version, uptime_s: Math.round((Date.now() - startedAt) / 1000), started_at: new Date(startedAt).toISOString(), platform: process.platform });
 
-// ---- update check against Velora's published "latest" (cache ~1 h, silent on failure) ----
+// ---- update check against Nookara's published "latest" (cache 10 min, silent on failure) ----
+// fresh = an admin pressed Refresh: ask again unless the last real check was under FRESH_MIN ago (so Refresh can't hammer Nookara)
 const LATEST_URL = () => process.env.BONFIRE_LATEST_URL || 'https://nookara.cc/bonfire/server-latest.json';
-const OK_TTL = 3600 * 1000, FAIL_TTL = 10 * 60 * 1000;
+const OK_TTL = 10 * 60 * 1000, FAIL_TTL = 5 * 60 * 1000, FRESH_MIN = 15 * 1000;
 let latest = { at: 0, ttl: 0, v: null, pending: null };
-async function fetchLatest() {
+let now = () => Date.now(); // (tests move the clock)
+async function fetchLatest({ fresh = false } = {}) {
   if (process.env.BONFIRE_UPDATE_CHECK === '0') return null;
   if (latest.pending) return latest.pending;
-  if (latest.at && Date.now() - latest.at < latest.ttl) return latest.v;
+  const age = now() - latest.at;
+  if (latest.at && (fresh ? age < FRESH_MIN : age < latest.ttl)) return latest.v;
   latest.pending = (async () => {
     try {
       const r = await fetch(LATEST_URL(), { signal: AbortSignal.timeout(5000), headers: { Accept: 'application/json' } });
@@ -70,19 +73,19 @@ async function fetchLatest() {
       latest.v = { version: s('version'), commit: s('commit'), commit_short: s('commit_short') || (s('commit') || '').slice(0, 7) || null, commit_date: s('commit_date'), built_at: s('built_at'), build_id: s('build_id') || s('commit'), dirty: !!j.dirty, message: s('message') };
       latest.ttl = OK_TTL;
     } catch { latest.ttl = FAIL_TTL; /* keep the previous value, if any */ }
-    latest.at = Date.now();
+    latest.at = now();
     return latest.v;
   })();
   try { return await latest.pending; } finally { latest.pending = null; }
 }
 // {outdated, latest, checked_at} or null when we cannot tell (unbuilt server, check disabled, Velora unreachable)
-async function update() {
+async function update({ fresh = false } = {}) {
   const me = build();
-  const l = await fetchLatest();
+  const l = await fetchLatest({ fresh });
   if (!l || !me.build_id) return null;
   let outdated = l.build_id !== me.build_id;
   if (outdated && l.built_at && me.built_at) outdated = Date.parse(l.built_at) > Date.parse(me.built_at); // never nag a server that is ahead
   return { outdated, latest: l, checked_at: new Date(latest.at).toISOString() };
 }
 
-module.exports = { build, stats, runtime, update, startedAt };
+module.exports = { build, stats, runtime, update, startedAt, _resetLatest: () => { latest = { at: 0, ttl: 0, v: null, pending: null }; }, _setNow: f => { now = f || (() => Date.now()); } };

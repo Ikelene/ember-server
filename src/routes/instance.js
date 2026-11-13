@@ -53,7 +53,9 @@ function register(app, { restart }) {
       out.plan = managed.usage();
       out.runtime = V.runtime();
       out.stats = V.stats();
-      out.update = await V.update();
+      // ?refresh=1 (Server info > Refresh): really ask Nookara again instead of the cached answer
+      out.update = await V.update({ fresh: String(req.query?.refresh || '') === '1' });
+      if (out.update) out.update.one_click = require('../selfupdate').support().supported; // the "Update now" button can do it from Ember
     }
     return out;
   });
