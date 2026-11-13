@@ -27,6 +27,7 @@ const botCall = async (method, p, body) => {
 const say = (name, content = 'hi', extra = {}) => botCall('POST', `/channels/${chId}/messages`, { content, alias: { name, ...extra } });
 const history = async (who = alice) => (await who.a.get(`/api/v1/channels/${general}/messages`)).body.messages;
 const inHistory = async (id, who) => (await history(who)).find(x => x.id === id);
+const flagFor = async who => { const b = (await who.a.get(S)).body; return (b.server || b).unmarked_aliases; };
 const setUnmarked = (who, on) => who.a.patch(S + '/settings', { advanced: { unmarked_aliases: on } });
 
 test.before(async () => { inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', restart: () => {} }); base = inst.url; });
@@ -57,6 +58,7 @@ let oldId;
 test('off by default: settings say false, aliases are marked (unmarked: false, no member_id)', async () => {
   const s = (await alice.a.get(S + '/settings')).body.settings;
   assert.equal(s.advanced.unmarked_aliases, false);
+  assert.equal(await flagFor(carol), false, 'members see the switch is off (role editors hide the permission)');
   const r = await say('carol', 'before it was on');
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.alias, { name: 'carol', avatar_url: null, unmarked: false });
@@ -81,6 +83,8 @@ test('only the owner can change it (not an Administrator, not with a bad value);
   const e = (log.entries || log.audit || []).find(x => x.action === 'unmarked_aliases_update');
   assert.ok(e, 'audit entry');
   assert.equal(e.details.enabled, true);
+  assert.equal(await flagFor(carol), true, 'and that it is on now, without Manage server');
+  assert.equal(await flagFor(zed), undefined, 'not a member: nothing');
 });
 
 test('on, but the bot lacks "Use unmarked aliases": still marked', async () => {

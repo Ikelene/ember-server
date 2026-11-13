@@ -124,7 +124,8 @@ function serverView(c, snap, me) {
     sid: c.sid, name: c.name, description: c.description, icon: c.icon_url || null, banner: c.banner_url || null,
     is_default: false, discoverable: !!c.listed, member_count: memberCount(c.id), member_cap: memberLimit(c), read_only: managed.readOnly(),
     max_message_length: S().get(c).messages.max_length, link_previews: S().get(c).messages.link_previews,
-    ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id) } : {}),
+    // unmarked_aliases: the Danger zone switch, so role editors only offer "Use unmarked aliases" while it can do something
+    ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id), unmarked_aliases: !!S().get(c).advanced?.unmarked_aliases } : {}),
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
     invite: role ? c.invite_code : undefined, // every member can invite people
     join_policy: c.join_policy, allow_signing: config.mode() === 'velora', // signing: always allowed in velora mode, never required
