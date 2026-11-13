@@ -27,6 +27,7 @@ function register(app) {
     return { message: await M.editMessage(req.params.id, req.user, text, { signature: req.body?.signature, scopes: req.scopes, alias: req.body?.alias }) };
   });
   app.delete(v1('/messages/:id'), req => { M.deleteMessage(req.params.id, req.user); });
+  app.get(v1('/messages/:id/reactions'), req => M.reactors(req.params.id, req.user));
   app.put(v1('/messages/:id/reactions/:emoji'), req => { M.react(req.params.id, req.user, req.params.emoji, true); });
   app.delete(v1('/messages/:id/reactions/:emoji'), req => { M.react(req.params.id, req.user, req.params.emoji, false); });
   app.put(v1('/messages/:id/pin'), req => { M.pinMessage(req.params.id, req.user, true); });

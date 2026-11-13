@@ -334,6 +334,14 @@ test('messages over the gateway, history, edit, react, pin, delete', async () =>
   assert.equal(rx.reactions[0].count, 1);
   assert.equal(rx.username, 'bob');
   assert.equal(rx.user_id, bob.user.id);
+  // everyone who reacted, per emoji, with their face (View Reactions)
+  const who = (await alice.a.get(`/api/v1/messages/${m.id}/reactions`)).body.reactions;
+  assert.equal(who[0].emoji, '🔥');
+  assert.equal(who[0].count, 1);
+  assert.equal(who[0].users[0].username, 'bob');
+  assert.equal(who[0].users[0].id, bob.user.id);
+  assert.ok('pfp' in who[0].users[0] && 'display_name' in who[0].users[0]);
+  assert.equal((await alice.a.get('/api/v1/messages/999999/reactions')).status, 404);
   assert.equal((await bob.a.put(`/api/v1/messages/${m.id}/reactions/notanemoji`)).body.error, 'unknown_emoji');
   assert.equal((await bob.a.put(`/api/v1/messages/${m.id}/pin`)).status, 403);
   assert.equal((await alice.a.put(`/api/v1/messages/${m.id}/pin`)).status, 200);

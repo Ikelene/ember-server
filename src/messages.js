@@ -170,6 +170,26 @@ function reactionsFor(ids) {
   }
   return out;
 }
+// everyone who reacted to one message, per emoji (the message payload only names the first 25): GET /messages/:id/reactions.
+// Same order and de-duplication as reactionsFor; each person as the usual author shape (id, username, display_name, pfp...).
+const REACTORS_MAX = 1000;
+function reactors(id, me) {
+  const { r } = messageCtx(id, me);
+  const rows = db.raw().prepare('SELECT r.emoji, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM reactions r JOIN users u ON u.id = r.user_id WHERE r.message_id = ? ORDER BY r.created_at, r.rowid').all(r.id);
+  const emojiIds = [...new Set(rows.map(x => customReaction(x.emoji)).filter(Boolean))];
+  const emojis = new Map(emojiIds.length ? db.all(`SELECT * FROM emojis WHERE eid IN (${db.inList(emojiIds)})`, ...emojiIds).map(e => [e.eid, e]) : []);
+  const out = [], seen = new Set();
+  for (const x of rows) {
+    const key = reactionKey(x.emoji);
+    if (seen.has(key + '|' + x.principal)) continue;
+    seen.add(key + '|' + x.principal);
+    let e = out.find(y => y.emoji === key);
+    if (!e) { e = { emoji: key, ...reactionImage(x.emoji, emojis), count: 0, users: [] }; out.push(e); }
+    e.count++;
+    if (e.users.length < REACTORS_MAX) e.users.push(person(x.principal, x.kind, x.username, x.display_name, x.pfp, x.velora_id));
+  }
+  return { reactions: out };
+}
 function withReactions(msgs) {
   const map = reactionsFor(msgs.map(m => m.id));
   msgs.forEach(m => { const r = map.get(Number(m.id)); if (r) m.reactions = r; });
@@ -536,6 +556,6 @@ function markRead(cid, me, id) {
 
 module.exports = {
   viaOf, appKind, MSG_MAX, SELECT_MSG, cleanAlias, messageView, viewById, reactionsFor, withReactions, cleanAttachments, postMessage, systemMessage, insertMessage, editMessage, deleteMessage,
-  react, history, search, searchServer, pinMessage, pins, markRead, checkSignature,
+  react, reactors, history, search, searchServer, pinMessage, pins, markRead, checkSignature,
   onPost, onEdit, onDelete, postBridged, editBridged, deleteBridged, postWebhook, ctxOf, _sendLimit: sendLimit,
 };
