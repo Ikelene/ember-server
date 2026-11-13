@@ -75,7 +75,14 @@ function register(app) {
   get('/users/@me/guilds', (req, bot) => db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', bot.id)
     .map(c => ({ id: String(c.id), name: c.name, icon: c.icon_url ? 'bonfire' : null, icon_url: c.icon_url || null, owner: false })));
   del('/users/@me/guilds/:gid', (req, bot) => { C.removeMember(guild(bot, req.params.gid).c, bot.id, 'left'); });
-  post('/users/@me/channels', () => { throw err('cannot_dm_bot', 403); }); // no DMs for bots
+  // DMs aren't on Ember servers: they're Nookara's. A bot linked to a Nookara bot (gallery) opens them there with the same token:
+  // POST https://nookara.cc/chat/api/v1/users/@me/channels and the gateway wss://nookara.cc/chat/gateway (MESSAGE_CREATE without guild_id)
+  post('/users/@me/channels', (req, bot) => {
+    const g = db.get('SELECT gallery_id FROM bots WHERE user_id = ?', bot.id);
+    throw err('cannot_dm_bot', 403, { message: g?.gallery_id
+      ? 'DMs live on Nookara, not on this server: open it with the same token at https://nookara.cc/chat/api/v1/users/@me/channels'
+      : 'DMs live on Nookara. Only a bot that is also a Nookara bot (added from the bot gallery) can DM people.' });
+  });
   get('/users/:uid', req => {
     const u = /^\d{1,15}$/.test(req.params.uid) && auth().userById(Number(req.params.uid));
     if (!u) throw err('user_not_found', 404);

@@ -432,7 +432,9 @@ test('bot REST: token auth, guilds, send / edit / react / delete, Discord shapes
   // the logs channel is not postable, for bots either
   const logsId = chans.find(c => c.name === 'logs').id;
   assert.equal((await call('POST', `/bot/v1/channels/${logsId}/messages`, { content: 'x' })).body.code, 50013);
-  assert.equal((await call('POST', '/bot/v1/users/@me/channels', {})).status, 403);
+  const dmTry = await call('POST', '/bot/v1/users/@me/channels', {});
+  assert.equal(dmTry.status, 403);
+  assert.match(dmTry.body.message, /Nookara/); // (DMs are Nookara's: the bot is told where)
   // 150 requests / 10 s per bot
   let limited = null;
   for (let i = 0; i < 160 && !limited; i++) { const r = await call('GET', '/bot/v1/users/@me'); if (r.status === 429) limited = r; }
