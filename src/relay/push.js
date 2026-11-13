@@ -7,6 +7,10 @@ const config = require('../config');
 const gateway = require('../gateway');
 const notify = require('../notify');
 const client = require('./client');
+const { readable } = require('../notif-text');
+// a phone shows text only: custom emojis as :name:, role mentions by the role's name, <t:> as a date, spoilers hidden
+const roleName = rid => db.get('SELECT name FROM roles WHERE rid = ?', String(rid))?.name || null;
+const text = s => readable(s, { roles: roleName });
 
 let WINDOW = 30 * 1000;
 const slots = new Map(); // `${userId}:${cid}` -> { until, count, last, timer }
@@ -21,7 +25,7 @@ function body(u, payload, count) {
   const title = count > 1 ? `${count} new mentions in #${payload.channel}` : kind === 'reply' ? `${from} replied to you` : `${from} mentioned you`;
   return {
     user_id: String(u.velora_id), kind, community_name: trim(payload.server, 80), channel_name: trim(payload.channel, 80),
-    title: trim(title, 100), preview: trim(count > 1 ? `${from}: ${payload.body}` : payload.body, 300),
+    title: trim(title, 100), preview: trim(text(count > 1 ? `${from}: ${payload.body}` : payload.body), 300),
     // on the instance's own origin (Velora requires it); the fragment is the client's route for this channel
     url: `${config.publicUrl()}/#/s/${payload.sid}/${payload.cid}`,
   };
