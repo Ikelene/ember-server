@@ -97,10 +97,14 @@ function register(app) {
   app.post(v1('/servers/:sid/emojis'), async req => {
     C.memberCommunity(req.params.sid, req.user);
     const { buffer, filename, fields } = await uploads.readMultipart(req, { maxBytes: 2 * 1024 * 1024 });
+    await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id); // a copy of a locked emoji/sticker
     return C.createEmoji(req.params.sid, req.user, { buffer, name: fields.name, filename });
   });
   app.patch(v1('/servers/:sid/emojis/:eid'), req => { C.renameEmoji(req.params.sid, req.user, req.params.eid, req.body?.name); });
   app.delete(v1('/servers/:sid/emojis/:eid'), req => { C.deleteEmoji(req.params.sid, req.user, req.params.eid); });
+
+  // clone locks (clonelock.js): may these exact bytes be copied? { locked } - asked by Nookara and other Ember servers
+  app.get(v1('/clone-check'), A, req => require('../clonelock').check(req.query.sha256, req.query.velora_id));
 
   // ---- stickers ----
   app.get(v1('/stickers'), req => C.allStickers(req.user));
@@ -108,6 +112,7 @@ function register(app) {
   app.post(v1('/servers/:sid/stickers'), async req => {
     C.memberCommunity(req.params.sid, req.user);
     const { buffer, filename, fields } = await uploads.readMultipart(req, { maxBytes: 512 * 1024 });
+    await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id);
     return C.createSticker(req.params.sid, req.user, { buffer, name: fields.name, filename });
   });
   app.patch(v1('/servers/:sid/stickers/:tid'), req => { C.renameSticker(req.params.sid, req.user, req.params.tid, req.body?.name); });

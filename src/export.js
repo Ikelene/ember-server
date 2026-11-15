@@ -200,6 +200,7 @@ function importCommunity(me, buffer, parsed) {
       try {
         const eid = 'e' + randHex(5);
         const { file, animated } = uploads.saveEmoji(Buffer.from(data), eid);
+        require('./clonelock').forget();
         db.run('INSERT INTO emojis (eid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', eid, c.id, clean(e.name, 32).replace(/[^A-Za-z0-9_]/g, '_') || 'emoji', animated ? 1 : 0, file, me.id, now());
         emojiMap.set(e.eid, { eid, name: clean(e.name, 32).replace(/[^A-Za-z0-9_]/g, '_') || 'emoji', animated });
       } catch { /* skip an unusable emoji */ }
@@ -212,6 +213,7 @@ function importCommunity(me, buffer, parsed) {
       try {
         const tid = 't' + randHex(5);
         const { file, animated } = uploads.saveSticker(Buffer.from(data), tid);
+        require('./clonelock').forget();
         db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', tid, c.id, clean(s.name, 32).replace(/[^A-Za-z0-9_]/g, '_') || 'sticker', animated ? 1 : 0, file, me.id, now());
         stickerMap.set(s.tid, tid);
       } catch { /* skip an unusable sticker */ }

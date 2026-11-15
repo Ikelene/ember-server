@@ -26,6 +26,8 @@ const DEFAULTS = {
   // Danger zone > Advanced (owner only): bots' alias messages show with no alias mark, under a matching member's name colour and
   // profile (messages.js aliasFor). Never exported or imported: it has to be turned on by hand on each server.
   advanced: { unmarked_aliases: false },
+  // Settings > Emojis: "Allow cloning server emojis & stickers" - off = other servers and personal emojis/stickers can't copy them (clonelock.js)
+  emojis: { allow_cloning: true },
 };
 const SPAM_DEFAULTS = { per_minute: 30, burst: 8, pause_seconds: 0 };
 const AUDIT_CATEGORIES = ['user_moderation', 'role_management', 'channel_management', 'message_moderation', 'server_management'];
@@ -176,6 +178,9 @@ const SECTION_RULES = {
   },
   advanced: {
     unmarked_aliases: v => bool(v, 'invalid_unmarked_aliases'),
+  },
+  emojis: {
+    allow_cloning: v => bool(v, 'invalid_allow_cloning'),
   },
 };
 const ADMIN_ONLY = { messages: ['preview_proxy'], automod: ['word_file'] };

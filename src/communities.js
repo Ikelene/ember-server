@@ -104,6 +104,9 @@ const cfgOf = ch => { try { return JSON.parse(ch.config || '{}') || {}; } catch 
 const setCategories = (c, cats) => { c.categories = JSON.stringify(cats); db.run('UPDATE communities SET categories = ? WHERE id = ?', c.categories, c.id); };
 
 // ---------- views ----------
+const clonelock = () => require('./clonelock');
+// a server's owner or someone with Administrator there: may copy its emojis + stickers even with cloning off
+const canManageClones = (c, uid) => { const s = snapOf(c); return s.isMember(uid) && s.perms(uid) === perms.ALL_PERMS; };
 const roleView = r => ({
   rid: r.rid, name: r.name, color: r.color || null, icon: r.icon_url || null, position: r.position,
   upload_max_mb: r.upload_max_mb ?? null, permissions: Number(r.permissions), hoist: !!r.hoist, mentionable: !!r.mentionable, is_default: !!r.is_default,
@@ -124,6 +127,7 @@ function serverView(c, snap, me) {
     sid: c.sid, name: c.name, description: c.description, icon: c.icon_url || null, banner: c.banner_url || null,
     is_default: false, discoverable: !!c.listed, member_count: memberCount(c.id), member_cap: memberLimit(c), read_only: managed.readOnly(),
     max_message_length: S().get(c).messages.max_length, link_previews: S().get(c).messages.link_previews,
+    allow_cloning: clonelock().allowsCloning(c), // Settings > Emojis: other servers / personal emojis may copy this server's emojis + stickers (clonelock.js)
     // unmarked_aliases: the Danger zone switch, so role editors only offer "Use unmarked aliases" while it can do something
     ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id), unmarked_aliases: !!S().get(c).advanced?.unmarked_aliases } : {}),
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
@@ -855,7 +859,7 @@ function allEmojis(me) {
   const out = [];
   for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)) {
     const emojis = db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(emojiView);
-    if (emojis.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, emojis });
+    if (emojis.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, emojis, allow_cloning: clonelock().allowsCloning(c) });
   }
   return { servers: out };
 }
@@ -868,6 +872,7 @@ function createEmoji(sid, me, { buffer, name, filename }) {
   const up = require('./uploads');
   const eid = 'e' + require('./util').randHex(5);
   const { file, animated } = up.saveEmoji(buffer, eid);
+  clonelock().saved(c.id, buffer);
   const nm = emojiName(name) || emojiName(String(filename || '').replace(/\.[^.]+$/, '')) || 'emoji';
   db.run('INSERT INTO emojis (eid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', eid, c.id, nm, animated ? 1 : 0, file, me.id, now());
   emojisChanged(c);
@@ -888,6 +893,7 @@ function deleteEmoji(sid, me, eid) {
   const e = db.get('SELECT * FROM emojis WHERE eid = ? AND community_id = ?', eid, c.id);
   if (!e) throw err('not_found', 404);
   db.run('DELETE FROM emojis WHERE id = ?', e.id);
+  clonelock().forget();
   require('./uploads').removeFiles([e.file]);
   emojisChanged(c);
   audit(c, me, 'emoji_delete', { target: { kind: 'emoji', id: e.eid, name: e.name } });
@@ -905,7 +911,7 @@ function allStickers(me) {
   const out = [];
   for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)) {
     const stickers = stickersOf(c);
-    if (stickers.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, stickers });
+    if (stickers.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, stickers, allow_cloning: clonelock().allowsCloning(c) });
   }
   return { servers: out };
 }
@@ -915,6 +921,7 @@ function createSticker(sid, me, { buffer, name, filename }) {
   if (db.get('SELECT COUNT(*) AS n FROM stickers WHERE community_id = ?', c.id).n >= LIMITS.stickers) throw err('too_many_stickers');
   const tid = 't' + require('./util').randHex(5);
   const { file, animated } = require('./uploads').saveSticker(buffer, tid);
+  clonelock().saved(c.id, buffer);
   const nm = emojiName(name) || emojiName(String(filename || '').replace(/\.[^.]+$/, '')) || 'sticker';
   db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', tid, c.id, nm, animated ? 1 : 0, file, me.id, now());
   stickersChanged(c);
@@ -936,6 +943,7 @@ function deleteSticker(sid, me, tid) {
   const s = db.get('SELECT * FROM stickers WHERE tid = ? AND community_id = ?', tid, c.id);
   if (!s) throw err('not_found', 404);
   db.run('DELETE FROM stickers WHERE id = ?', s.id);
+  clonelock().forget();
   require('./uploads').removeFiles([s.file]);
   stickersChanged(c);
   audit(c, me, 'sticker_delete', { target: { kind: 'sticker', id: s.tid, name: s.name } });
@@ -1032,6 +1040,7 @@ function setNotify(me, target, body = {}) {
 }
 
 module.exports = {
+  canManageClones,
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
   effectiveUploadMax, roleView, serverView, channelView, memberView, readState, mentionCounts, myServers, serverDetail,
   createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
