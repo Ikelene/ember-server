@@ -107,7 +107,7 @@ function cleanAlias(me, raw) {
 // the sticker a message was sent with; a row that is gone later stays visible as a deleted one
 function stickerOf(tid) {
   const s = db.get('SELECT * FROM stickers WHERE tid = ?', tid);
-  return s ? { tid: s.tid, name: s.name, url: C.stickerView(s).url, animated: !!s.animated } : { tid, name: null, url: null, animated: false, deleted: true };
+  return s ? { tid: s.tid, name: s.name, url: C.stickerView(s).url, animated: !!s.animated, ...(C.stickerView(s).origin ? { origin: C.stickerView(s).origin } : {}) } : { tid, name: null, url: null, animated: false, deleted: true };
 }
 function messageView(r, snap) {
   const c = snap.c;

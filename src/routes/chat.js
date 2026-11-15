@@ -97,8 +97,9 @@ function register(app) {
   app.post(v1('/servers/:sid/emojis'), async req => {
     C.memberCommunity(req.params.sid, req.user);
     const { buffer, filename, fields } = await uploads.readMultipart(req, { maxBytes: 2 * 1024 * 1024 });
-    await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id); // a copy of a locked emoji/sticker
-    return C.createEmoji(req.params.sid, req.user, { buffer, name: fields.name, filename });
+    // a copy of a locked emoji/sticker is refused; a copy remembers where it was first seen
+    const origin = await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id);
+    return C.createEmoji(req.params.sid, req.user, { buffer, name: fields.name, filename, origin });
   });
   app.patch(v1('/servers/:sid/emojis/:eid'), req => { C.renameEmoji(req.params.sid, req.user, req.params.eid, req.body?.name); });
   app.delete(v1('/servers/:sid/emojis/:eid'), req => { C.deleteEmoji(req.params.sid, req.user, req.params.eid); });
@@ -112,8 +113,8 @@ function register(app) {
   app.post(v1('/servers/:sid/stickers'), async req => {
     C.memberCommunity(req.params.sid, req.user);
     const { buffer, filename, fields } = await uploads.readMultipart(req, { maxBytes: 512 * 1024 });
-    await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id);
-    return C.createSticker(req.params.sid, req.user, { buffer, name: fields.name, filename });
+    const origin = await require('../clonelock').assertCloneAllowed(buffer, req.user, fields.from, C.memberCommunity(req.params.sid, req.user).c.id);
+    return C.createSticker(req.params.sid, req.user, { buffer, name: fields.name, filename, origin });
   });
   app.patch(v1('/servers/:sid/stickers/:tid'), req => { C.renameSticker(req.params.sid, req.user, req.params.tid, req.body?.name); });
   app.delete(v1('/servers/:sid/stickers/:tid'), req => { C.deleteSticker(req.params.sid, req.user, req.params.tid); });

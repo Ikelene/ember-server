@@ -842,7 +842,9 @@ const setRoleIcon = (sid, me, rid, url) => updateRole(sid, me, rid, { icon_url: 
 
 // ---------- emojis (Manage server; usable anywhere) ----------
 const emojiName = n => String(n || '').replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 32);
-const emojiView = e => ({ eid: e.eid, name: e.name, animated: !!e.animated, url: `${instanceOrigin()}/uploads/${e.file}` });
+// origin: where a cloned one was first seen (clonelock.js), only on copies
+const originOf = r => (r.origin ? require('./clonelock').parseOrigin(r.origin) : null);
+const emojiView = e => ({ eid: e.eid, name: e.name, animated: !!e.animated, url: `${instanceOrigin()}/uploads/${e.file}`, ...(originOf(e) ? { origin: originOf(e) } : {}) });
 function emojiCommunity(sid, me, needManage) {
   const r = memberCommunity(sid, me);
   if (needManage && !r.snap.can(me.id, P.MANAGE_SERVER)) throw err('not_allowed', 403);
@@ -863,7 +865,7 @@ function allEmojis(me) {
   }
   return { servers: out };
 }
-function createEmoji(sid, me, { buffer, name, filename }) {
+function createEmoji(sid, me, { buffer, name, filename, origin = null }) {
   const { c } = emojiCommunity(sid, me, true);
   if (!buffer) throw err('no_file');
   const have = db.get('SELECT COUNT(*) AS n FROM emojis WHERE community_id = ?', c.id).n;
@@ -872,12 +874,12 @@ function createEmoji(sid, me, { buffer, name, filename }) {
   const up = require('./uploads');
   const eid = 'e' + require('./util').randHex(5);
   const { file, animated } = up.saveEmoji(buffer, eid);
-  clonelock().saved(c.id, buffer);
   const nm = emojiName(name) || emojiName(String(filename || '').replace(/\.[^.]+$/, '')) || 'emoji';
-  db.run('INSERT INTO emojis (eid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', eid, c.id, nm, animated ? 1 : 0, file, me.id, now());
+  const row = db.run('INSERT INTO emojis (eid, community_id, name, animated, file, created_by, created_at, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', eid, c.id, nm, animated ? 1 : 0, file, me.id, now(), origin ? JSON.stringify(origin) : null);
+  clonelock().saved(c.id, buffer, 'emojis', Number(row.lastInsertRowid));
   emojisChanged(c);
   audit(c, me, 'emoji_create', { target: { kind: 'emoji', id: eid, name: nm } });
-  return { emoji: emojiView({ eid, name: nm, animated, file }) };
+  return { emoji: emojiView({ eid, name: nm, animated, file, origin: origin ? JSON.stringify(origin) : null }) };
 }
 function renameEmoji(sid, me, eid, name) {
   const { c } = emojiCommunity(sid, me, true);
@@ -900,7 +902,7 @@ function deleteEmoji(sid, me, eid) {
 }
 
 // ---------- stickers (Manage server; server-only: sent as a message of their own server's channels) ----------
-const stickerView = s => ({ tid: s.tid, name: s.name, animated: !!s.animated, url: `${instanceOrigin()}/uploads/${s.file}` });
+const stickerView = s => ({ tid: s.tid, name: s.name, animated: !!s.animated, url: `${instanceOrigin()}/uploads/${s.file}`, ...(originOf(s) ? { origin: originOf(s) } : {}) });
 const stickersOf = c => db.all('SELECT * FROM stickers WHERE community_id = ? ORDER BY id', c.id).map(stickerView);
 function stickersChanged(c) { gateway.emit(c.id, { type: 'chat_stickers_update', server: c.sid, stickers: stickersOf(c) }); }
 function listStickers(sid, me) {
@@ -915,18 +917,18 @@ function allStickers(me) {
   }
   return { servers: out };
 }
-function createSticker(sid, me, { buffer, name, filename }) {
+function createSticker(sid, me, { buffer, name, filename, origin = null }) {
   const { c } = emojiCommunity(sid, me, true);
   if (!buffer) throw err('no_file');
   if (db.get('SELECT COUNT(*) AS n FROM stickers WHERE community_id = ?', c.id).n >= LIMITS.stickers) throw err('too_many_stickers');
   const tid = 't' + require('./util').randHex(5);
   const { file, animated } = require('./uploads').saveSticker(buffer, tid);
-  clonelock().saved(c.id, buffer);
   const nm = emojiName(name) || emojiName(String(filename || '').replace(/\.[^.]+$/, '')) || 'sticker';
-  db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', tid, c.id, nm, animated ? 1 : 0, file, me.id, now());
+  const row = db.run('INSERT INTO stickers (tid, community_id, name, animated, file, created_by, created_at, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', tid, c.id, nm, animated ? 1 : 0, file, me.id, now(), origin ? JSON.stringify(origin) : null);
+  clonelock().saved(c.id, buffer, 'stickers', Number(row.lastInsertRowid));
   stickersChanged(c);
   audit(c, me, 'sticker_create', { target: { kind: 'sticker', id: tid, name: nm } });
-  return { sticker: stickerView({ tid, name: nm, animated, file }) };
+  return { sticker: stickerView({ tid, name: nm, animated, file, origin: origin ? JSON.stringify(origin) : null }) };
 }
 function renameSticker(sid, me, tid, name) {
   const { c } = emojiCommunity(sid, me, true);
@@ -951,12 +953,12 @@ function deleteSticker(sid, me, tid) {
 
 // click an emoji: which community it is from
 function emojiInfo(eid, me) {
-  const e = db.get('SELECT e.eid, e.name, e.animated, e.community_id FROM emojis e WHERE e.eid = ?', String(eid));
+  const e = db.get('SELECT e.eid, e.name, e.animated, e.community_id, e.origin FROM emojis e WHERE e.eid = ?', String(eid));
   if (!e) throw err('not_found', 404);
   const c = db.get('SELECT * FROM communities WHERE id = ?', e.community_id);
   const joined = snapOf(c).isMember(me.id);
   const open = joined || !!c.listed;
-  return { emoji: { eid: e.eid, name: e.name, animated: !!e.animated }, server: open ? { sid: c.sid, name: c.name, icon: c.icon_url || null, discoverable: !!c.listed, joined, member_count: memberCount(c.id) } : null };
+  return { emoji: { eid: e.eid, name: e.name, animated: !!e.animated }, ...(originOf(e) ? { origin: originOf(e) } : {}), server: open ? { sid: c.sid, name: c.name, icon: c.icon_url || null, discoverable: !!c.listed, joined, member_count: memberCount(c.id) } : null };
 }
 
 // ---------- roles shop (self-assign roles; priced ones are paid through Velora, see relay/shop.js) ----------

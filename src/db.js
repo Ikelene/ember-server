@@ -225,6 +225,9 @@ const MIGRATIONS = [
   );
   CREATE INDEX stickers_community ON stickers(community_id);
   ALTER TABLE messages ADD COLUMN sticker_id TEXT;`,
+  // v16: where a cloned emoji / sticker was first seen (clonelock.js): JSON { type: 'server', name, host } | { type: 'user', user_id, username }
+  `ALTER TABLE emojis ADD COLUMN origin TEXT;
+  ALTER TABLE stickers ADD COLUMN origin TEXT;`,
 ];
 
 function open() {
