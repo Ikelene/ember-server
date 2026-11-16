@@ -59,7 +59,11 @@ function register(app, { restart }) {
     }
     return out;
   });
-  app.get('/', { auth: false }, () => ({ software: 'bonfire-server', version: pkg.version, protocol: 1, open_protocol: true, about: "Ember is an open chat protocol, not a Velora-only product: anyone can write an Ember client and use or run Ember servers. Velora's web, desktop and Android apps are just the clients the Velora ecosystem uses.", protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md', discovery: '/.well-known/bonfire' }));
+  // public numbers for the landing page (and anyone): counts only, nothing a stranger couldn't already see
+  app.get('/api/v1/instance/stats', { auth: false }, () => require('../landing').publicStats());
+  // a browser gets the landing page (landing.js); every other client the same JSON as always
+  app.get('/', { auth: false }, (req, res) => (require('../landing').wantsHtml(req) ? require('../landing').sendPage(req, res) : rootJson()));
+  const rootJson = () => ({ software: 'bonfire-server', version: pkg.version, protocol: 1, open_protocol: true, about: "Ember is an open chat protocol, not a Velora-only product: anyone can write an Ember client and use or run Ember servers. Velora's web, desktop and Android apps are just the clients the Velora ecosystem uses.", protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md', discovery: '/.well-known/bonfire' });
 
   // ---- auth ----
   app.post('/api/v1/auth/velora', { auth: false }, async req => {

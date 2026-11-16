@@ -255,6 +255,21 @@ Restore validates the archive, takes an automatic safety backup with note `befor
 
 Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds the image on the Docker LXC with the commit baked in (`BONFIRE_BUILD_*` build args), publishes `server-latest.json` (`POST VELORA/bonfire/server-latest`, Bearer = the hostd secret), and bonfire-hostd (`POST /update-all`) recreates every hosted container on the new image one at a time, health-checked, rolled back on failure. bonfire-hostd also does this check every 10 minutes by itself.
 
+### 5c.1 Landing page and public stats (`GET /`, `GET /api/v1/instance/stats`)
+
+`GET /` (and `HEAD /`) with `text/html` (or `application/xhtml+xml`) in `Accept` returns an HTML landing page: the server's card (banner, icon, name, description, member count, join policy), live numbers, an "Open in Ember" link (`https://ember.nookara.cc/server/<host>` on https, else `https://ember.nookara.cc/#/i/<encoded origin>`) and Open Graph / Twitter tags. Any other `Accept` (none, `*/*`, `application/json`) gets the same JSON as before. No other path changes.
+
+`GET /api/v1/instance/stats` needs no sign-in and returns counts only (cached 5 s):
+
+```json
+{ "name": "...", "description": "...", "icon_url": "https://...", "banner_url": null,
+  "members": 375, "online": 11, "connections": 14, "channels": 9,
+  "uptime_s": 86400, "started_at": "2026-11-15T00:00:00.000Z", "version": "0.1.0",
+  "join_policy": "open", "url": "https://chat.example", "ember_url": "https://ember.nookara.cc/server/chat.example" }
+```
+
+`online` = people with at least one signed-in gateway socket (bots left out); `connections` = every signed-in socket, bots too. Nobody is named.
+
 ### 5d. Profile freshness (Velora accounts)
 
 A Velora member's `username` / `display_name` / `pfp` follow their Velora profile: the instance refreshes them from `GET VELORA/bonfire/profiles?ids=1,2,3` (public, ≤ 100 ids, `{ profiles: [{ id, username, display_name, pfp }] }`) on every gateway `chat_hello` (at most once per account per 10 minutes), every 15 minutes for members, and at sign-in. A change emits `chat_identity_update { user, previous_username }` to every community the person is in; system lines (`body_parts`) already render the current name. Clients should patch every cached `author` / `subject` / member whose `id` equals `user.id` (principal, e.g. `v:12`). A client that learned about a change sooner (Velora's own `user_update` event) may send `chat_profile_refresh { velora_id }` to make the instance re-read that one profile right away (no reply; throttled to one fetch per account per 15 s). Env `BONFIRE_PROFILE_SYNC=0` turns the refresh off (so does `velora_registration: "off"`).

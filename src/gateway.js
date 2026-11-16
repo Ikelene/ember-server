@@ -93,6 +93,12 @@ function broadcastAll(obj) { for (const sock of all) if (authed(sock)) send(sock
 
 function closeAll(code, reason) { for (const sock of all) { try { sock.close(code, reason); } catch { /* gone */ } } }
 const onlineUserIds = () => [...byUser.keys()];
+// the public landing page (landing.js): how many people and signed-in sockets, never who
+function counts() {
+  let online = 0, sockets = 0;
+  for (const set of byUser.values()) { sockets += set.size; if (set.values().next().value?.bf?.user?.kind !== 'bot') online++; }
+  return { online, connections: sockets }; // online = people (bots left out), connections = every signed-in socket, bots too
+}
 const isOnline = userId => (byUser.get(Number(userId))?.size || 0) > 0;
 const socketsOf = userId => [...(byUser.get(Number(userId)) || [])];
 
@@ -242,4 +248,4 @@ function shutdown(code = 1001, reason = 'shutdown') {
   wss?.close();
 }
 
-module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, isOnline, socketsOf };
+module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, counts, isOnline, socketsOf };
