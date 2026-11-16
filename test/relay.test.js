@@ -453,7 +453,7 @@ test('directory: listed toggle pushes the listing, unlisting removes it', T, asy
   assert.equal((await alice.a.get('/api/v1/instance/settings')).body.listed, true); // same value as the community's
   await until(() => V.directory.length >= 1, 3000, 'directory push');
   const inv = (await alice.a.get(`/api/v1/servers/${sid}`)).body.server.invite;
-  assert.deepEqual(V.directory.at(-1), { listed: true, name: 'Imported Guild', description: 'from discord', icon_url: null, member_count: 3, invite_url: `${VURL}/chat#/i/${encodeURIComponent(IURL)}/invite/${inv}`, tags: ['gaming', 'chat'] });
+  assert.deepEqual(V.directory.at(-1), { listed: true, name: 'Imported Guild', description: 'from discord', icon_url: null, banner_url: null, member_count: 3, invite_url: `${VURL}/chat#/i/${encodeURIComponent(IURL)}/invite/${inv}`, tags: ['gaming', 'chat'] });
   assert.equal((await alice.a.get('/api/v1/instance/settings')).body.velora.directory.listed, true);
   const n = V.directory.length;
   await directory.push(); // nothing changed: no push

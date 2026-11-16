@@ -18,7 +18,7 @@ function payload() {
   if (!c || !c.listed) return { listed: false };
   const cfg = config.get(), origin = cfg.public_url;
   return {
-    listed: true, name: c.name, description: c.description || '', icon_url: abs(c.icon_url), member_count: C.memberCount(c.id),
+    listed: true, name: c.name, description: c.description || '', icon_url: abs(c.icon_url), banner_url: abs(c.banner_url), member_count: C.memberCount(c.id),
     // the community's permanent invite, opened in Ember on the web
     invite_url: `${emberBase(cfg.velora_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
     tags: Array.isArray(cfg.tags) ? cfg.tags.slice(0, 8) : [],
@@ -34,9 +34,10 @@ async function push(force = false) {
   busy = true;
   try {
     let body = { ...p }, out;
-    for (let i = 0; i < 3; i++) { // Velora only stores https links: drop a link it refuses rather than the whole listing
+    for (let i = 0; i < 4; i++) { // Velora only stores https links: drop a link it refuses rather than the whole listing
       try { out = await client.call('PUT', '/bonfire/relay/directory', body); break; } catch (e) {
         if (e.code === 'invalid_icon_url' && body.icon_url) { body.icon_url = null; continue; }
+        if (e.code === 'invalid_banner_url' && body.banner_url) { body.banner_url = null; continue; }
         if (e.code === 'invalid_invite_url' && body.invite_url) { body.invite_url = null; continue; }
         throw e;
       }
