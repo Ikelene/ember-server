@@ -178,7 +178,8 @@ function readState(userId, channelIds) {
   for (const r of db.raw().prepare(`SELECT channel_id, last_read_id FROM read_state WHERE user_id = ? AND channel_id IN (${db.inList(channelIds)})`).all(userId, ...channelIds)) out.set(r.channel_id, Number(r.last_read_id));
   return out;
 }
-// mentions of you (@you, a reply to you, @everyone/@here, your roles) waiting in each channel since you last read it
+// mentions of you (<@your principal>, a reply to you, @everyone/@here, your roles) waiting in each channel since you last read it.
+// Only a token pings (Discord's format): a plain "@name" in the text is just text.
 function mentionCounts(me, channelIds) {
   if (!channelIds.length) return new Map();
   const roleIds = db.all('SELECT role_id FROM member_roles WHERE user_id = ?', me.id).map(r => r.role_id);
@@ -189,7 +190,7 @@ function mentionCounts(me, channelIds) {
      LEFT JOIN read_state rs ON rs.channel_id = m.channel_id AND rs.user_id = ?
      WHERE m.channel_id IN (${db.inList(channelIds)}) AND m.id > COALESCE(rs.last_read_id, 0) AND (m.user_id IS NULL OR m.user_id <> ?)
        AND (m.body LIKE ? ESCAPE '\\' OR r.user_id = ? OR m.mention_everyone > 0${roleSql}) GROUP BY m.channel_id`)
-    .all(me.id, ...channelIds, me.id, `%@${lc(me.username)}%`, me.id, ...roleIds.map(id => `,${id},`));
+    .all(me.id, ...channelIds, me.id, `%<@${String(me.principal).replace(/[\\%_]/g, x => `\\${x}`)}>%`, me.id, ...roleIds.map(id => `,${id},`));
   return new Map(rows.map(r => [r.channel_id, Number(r.n)]));
 }
 // how many messages from other people are waiting in each channel since you last read it (no read state = all read)
@@ -951,14 +952,36 @@ function deleteSticker(sid, me, tid) {
   audit(c, me, 'sticker_delete', { target: { kind: 'sticker', id: s.tid, name: s.name } });
 }
 
-// click an emoji: which community it is from
+// click an emoji: which community it is from (or, for one a Discord / Fluxer bridge brought in, where it came from)
 function emojiInfo(eid, me) {
   const e = db.get('SELECT e.eid, e.name, e.animated, e.community_id, e.origin FROM emojis e WHERE e.eid = ?', String(eid));
-  if (!e) throw err('not_found', 404);
+  if (!e) {
+    const ext = require('./bridge/bridge').foreignEmojiInfo(eid);
+    if (ext) return ext;
+    throw err('not_found', 404);
+  }
   const c = db.get('SELECT * FROM communities WHERE id = ?', e.community_id);
   const joined = snapOf(c).isMember(me.id);
   const open = joined || !!c.listed;
   return { emoji: { eid: e.eid, name: e.name, animated: !!e.animated }, ...(originOf(e) ? { origin: originOf(e) } : {}), server: open ? { sid: c.sid, name: c.name, icon: c.icon_url || null, discoverable: !!c.listed, joined, member_count: memberCount(c.id) } : null };
+}
+
+// a pasted link to a channel / message (Ember's link pill): what the server and channel are called. Members see it when they
+// can see the channel; anyone else only when the server is listed, and only a channel @everyone can see.
+function linkInfo(sid, cid, me) {
+  const c = db.get('SELECT * FROM communities WHERE sid = ?', String(sid));
+  if (!c) throw err('not_found', 404);
+  const snap = snapOf(c);
+  const ch = snap.channels.find(x => x.cid === String(cid));
+  if (!ch) throw err('not_found', 404);
+  const server = { sid: c.sid, name: c.name, icon: c.icon_url || null };
+  const chView = { cid: ch.cid, name: ch.name };
+  if (me && snap.isMember(me.id)) return { server, channel: snap.canView(ch, me.id) ? chView : null, joined: true };
+  if (!c.listed) throw err('not_found', 404);
+  const base = perms.basePerms({ isMember: true, isOwner: false, roles: snap.roles, roleIds: new Set() });
+  const g = perms.gameView(ch, base);
+  const open = g !== null ? g : perms.canView(base, perms.channelPerms(base, { overwrites: snap.ow.get(ch.id), everyoneId: snap.everyone?.id, roleIds: new Set() }), true);
+  return { server, channel: open ? chView : null, joined: false };
 }
 
 // ---------- roles shop (self-assign roles; priced ones are paid through Velora, see relay/shop.js) ----------
@@ -1041,7 +1064,7 @@ function setNotify(me, target, body = {}) {
   return cur;
 }
 
-module.exports = {
+module.exports = { linkInfo,
   canManageClones,
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
   effectiveUploadMax, roleView, serverView, channelView, memberView, readState, mentionCounts, myServers, serverDetail,

@@ -24,6 +24,10 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS bridge_msgs_ext ON bridge_msgs(ext_message_id, platform);
   CREATE INDEX IF NOT EXISTS bridge_msgs_at ON bridge_msgs(created_at);
   CREATE TABLE IF NOT EXISTS bridge_from (message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, src TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS bridge_emojis (
+    eid TEXT PRIMARY KEY, platform TEXT NOT NULL, ext_id TEXT NOT NULL, name TEXT NOT NULL, animated INTEGER NOT NULL DEFAULT 0,
+    file TEXT NOT NULL, guild_name TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL
+  );
 `;
 function ensure() {
   const raw = db.raw();

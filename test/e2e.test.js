@@ -276,7 +276,7 @@ test('join policy: request -> accept (with gateway events); invite codes always 
 test('messages over the gateway, history, edit, react, pin, delete', async () => {
   const wa = await wsClient(base).login(alice.session); clients.push(wa);
   const wb = await wsClient(base).login(bob.session); clients.push(wb);
-  wa.send({ type: 'chat_send', nonce: 'n1', channel: generalCid, message: 'hello @bob' });
+  wa.send({ type: 'chat_send', nonce: 'n1', channel: generalCid, message: `hello <@${bob.user.id}>` });
   const ack = await wa.waitFor(f => f.type === 'chat_ack');
   assert.equal(ack.nonce, 'n1');
   const m = ack.message;
@@ -284,11 +284,11 @@ test('messages over the gateway, history, edit, react, pin, delete', async () =>
   assert.equal(m.channel, generalCid);
   assert.equal(m.server, sid);
   assert.equal(m.author.id, alice.user.id);
-  assert.equal(m.body, 'hello @bob');
+  assert.equal(m.body, `hello <@${bob.user.id}>`);
   assert.equal(m.signature, null);
   assert.equal(m.verified, null);
   const got = await wb.waitFor(f => f.type === 'chat_message' && f.message.id === m.id);
-  assert.equal(got.message.body, 'hello @bob');
+  assert.equal(got.message.body, `hello <@${bob.user.id}>`);
   // bob's unread/mention counters
   const d = await bob.a.get(`/api/v1/servers/${sid}`);
   const g = d.body.channels.find(c => c.cid === generalCid);
@@ -317,7 +317,7 @@ test('messages over the gateway, history, edit, react, pin, delete', async () =>
   assert.equal(rest.body.message.reply.id, m.id);
   assert.equal(rest.body.message.reply.author.username, 'alice');
   const h = await alice.a.get(`/api/v1/channels/${generalCid}/messages?limit=10`);
-  assert.deepEqual(h.body.messages.map(x => x.body), ['hello @bob', 'hi alice']);
+  assert.deepEqual(h.body.messages.map(x => x.body), [`hello <@${bob.user.id}>`, 'hi alice']);
   assert.equal(h.body.has_more, false);
   assert.equal(h.body.channel.cid, generalCid);
   assert.equal((await alice.a.get(`/api/v1/channels/${generalCid}/messages?before=${rest.body.message.id}`)).body.messages.length, 1);

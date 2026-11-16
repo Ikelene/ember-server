@@ -174,17 +174,31 @@ function memberNames(communityId) {
   nameCache.set(communityId, { at: Date.now(), map });
   return map;
 }
+// messages from this moment on carry <@principal> / <#cid> tokens; before it a plain @name was a mention
+const TOKENS_SINCE = Date.parse('2026-11-17T00:00:00Z');
 // an Ember message view -> a Discord message object
 function messageObj(m, c, snap) {
   const ch = snap.channels.find(x => x.cid === m.channel);
   const names = memberNames(c.id), mentions = [];
-  const content = String(m.body || '')
-    .replace(/(^|[^\w])@([\w.-]{2,32})/g, (all, pre, name) => {
+  const addMention = (id, name, kind) => { if (!mentions.some(x => x.id === String(id))) mentions.push({ id: String(id), username: name, global_name: name, bot: kind === 'bot' }); };
+  let content = String(m.body || '')
+    // Ember's <@principal> -> the bot API's numeric <@id>
+    .replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (all, p) => {
+      const u = db.get('SELECT id, username, kind FROM users WHERE principal = ?', p);
+      if (!u) return all;
+      addMention(u.id, u.username, u.kind);
+      return `<@${u.id}>`;
+    })
+    .replace(/<#(c[0-9a-f]{10})>/g, (all, cid) => { const x = snap.channels.find(y => y.cid === cid); return x ? `<#${x.id}>` : all; });
+  if (new Date(m.created_at).getTime() < TOKENS_SINCE) {
+    content = content.replace(/(^|[^\w<])@([\w.-]{2,32})/g, (all, pre, name) => {
       const id = names.get(name.toLowerCase());
       if (!id) return all;
-      if (!mentions.some(x => x.id === String(id))) mentions.push({ id: String(id), username: name, global_name: name, bot: db.get('SELECT kind FROM users WHERE id = ?', id)?.kind === 'bot' });
+      addMention(id, name, db.get('SELECT kind FROM users WHERE id = ?', id)?.kind);
       return `${pre}<@${id}>`;
-    })
+    });
+  }
+  content = content
     .replace(/<@&(r[0-9a-f]{10})>/g, (all, rid) => { const r = snap.roles.find(x => x.rid === rid); return r ? `<@&${ROLE_BASE + r.id}>` : all; });
   const au = m.author, auId = au?.id ? uidOf(au.id) : null;
   const author = au ? (auId ? userObj({ ...au, id: auId }) : { id: '0', username: au.username, global_name: au.username, discriminator: '0', avatar: null, avatar_url: au.pfp || null, bot: !!au.webhook })
@@ -215,12 +229,13 @@ function messageObj(m, c, snap) {
 function textIn(c, snap, text, allowed) {
   let t = String(text ?? '').slice(0, M().MSG_MAX);
   const ids = [...new Set([...t.matchAll(/<@!?(\d+)>/g)].map(x => Number(x[1])))].slice(0, 50);
-  const names = new Map(ids.length ? db.all(`SELECT u.id, u.username FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ? AND u.id IN (${db.inList(ids)})`, c.id, ...ids).map(r => [r.id, r.username]) : []);
+  const names = new Map(ids.length ? db.all(`SELECT u.id, u.username, u.principal FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ? AND u.id IN (${db.inList(ids)})`, c.id, ...ids).map(r => [r.id, r]) : []);
   const pingUsers = !allowed || !Array.isArray(allowed.parse) || allowed.parse.includes('users');
   const okIds = new Set((allowed?.users || []).map(String));
-  t = t.replace(/<@!?(\d+)>/g, (all, id) => { const n = names.get(Number(id)); return !n ? '@someone' : pingUsers || okIds.has(id) ? `@${n}` : `@​${n}`; });
+  // a ping becomes Ember's <@principal> token; one allowed_mentions turns off is just the name (no ping)
+  t = t.replace(/<@!?(\d+)>/g, (all, id) => { const n = names.get(Number(id)); return !n ? '@someone' : pingUsers || okIds.has(id) ? `<@${n.principal}>` : `@​${n.username}`; });
   t = t.replace(/<@&(\d+)>/g, (all, id) => { const r = snap.roles.find(x => ROLE_BASE + x.id === Number(id)); return r ? `<@&${r.rid}>` : '@role'; });
-  t = t.replace(/<#(\d+)>/g, (all, id) => { const ch = snap.channels.find(x => x.id === Number(id)); return ch ? `#${ch.name}` : '#channel'; });
+  t = t.replace(/<#(\d+)>/g, (all, id) => { const ch = snap.channels.find(x => x.id === Number(id)); return ch ? `<#${ch.cid}>` : '#channel'; });
   if (allowed && Array.isArray(allowed.parse) && !allowed.parse.includes('everyone')) t = t.replace(/@(everyone|here)\b/g, '@​$1');
   return t;
 }

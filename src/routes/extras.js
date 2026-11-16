@@ -19,6 +19,8 @@ function register(app) {
   const scope = (req, s) => { if (!req.scopes.includes(s)) throw err('insufficient_scope', 403); };
 
   app.get(v1('/emojis/:eid/info'), req => C.emojiInfo(req.params.eid, req.user));
+  // a pasted channel / message link: the server + channel names for Ember's link pill
+  app.get(v1('/link-info/:sid/:cid'), req => C.linkInfo(req.params.sid, req.params.cid, req.user));
 
   // ---- roles shop ----
   // priced roles are paid through Velora (relay/shop.js, PROTOCOL §6.1 / §12.5)

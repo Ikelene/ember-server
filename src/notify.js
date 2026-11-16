@@ -17,11 +17,21 @@ function effective(prefs, sid, cid) {
   return { muted: !!muted, level, push: ch.push !== false && sv.push !== false };
 }
 
+// message text -> what a notification shows: <@v:42> -> @name, <#cid> -> #channel, <:name:eid> -> :name:, <@&rid> -> @role
+function plainBody(body, snap) {
+  return String(body || '')
+    .replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'unknown-user'}`)
+    .replace(/<#(c[0-9a-f]{10})>/g, (_, cid) => `#${snap?.channels.find(x => x.cid === cid)?.name || 'unknown'}`)
+    .replace(/<a?:(\w{1,32}):e[0-9a-f]{10}>/g, ':$1:')
+    .replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${snap?.roles.find(r => r.rid === rid)?.name || 'role'}`);
+}
+
 // msg = the message view; ctx = { ch, c, snap }. Called for ordinary posts (not system / webhook / bridged).
+// A person is pinged by a <@principal> token (Discord's format); a plain "@name" in the text is just text.
 function deliver(ctx, msg, authorId) {
   const { ch, c, snap } = ctx;
-  const body = String(msg.body || '');
-  const names = new Set((body.match(/(^|[\s(])@([A-Za-z0-9_.-]{2,32})/g) || []).map(x => x.trim().replace(/^\(?@/, '').toLowerCase()));
+  const body = plainBody(msg.body, snap);
+  const pinged = new Set([...String(msg.body || '').matchAll(/<@!?((?:[vlb]:)?\d{1,20})>/g)].map(x => x[1]));
   const prefs = new Map();
   for (const r of db.all('SELECT user_id, target, level, muted_until, push FROM notify WHERE target IN (?, ?)', c.sid, ch.cid)) {
     if (!prefs.has(r.user_id)) prefs.set(r.user_id, new Map());
@@ -37,7 +47,7 @@ function deliver(ctx, msg, authorId) {
     const isOn = online.has(u.id);
     let hit = n.level === 'all' || msg.mention_everyone === 'everyone' || (msg.mention_everyone === 'here' && isOn) || (msg.reply?.author?.id && msg.reply.author.id === u.principal);
     if (!hit && msg.mention_roles?.length) { const ids = snap.roleIds(u.id); hit = snap.roles.some(r => ids.has(r.id) && msg.mention_roles.includes(r.rid)); }
-    if (!hit && names.size) hit = names.has(String(u.username).toLowerCase());
+    if (!hit && pinged.size) hit = pinged.has(String(u.principal));
     if (!hit) continue;
     if (isOn) gateway.pushToUser(u.id, payload);
     else if (n.push) off.push(u.id);
@@ -45,4 +55,4 @@ function deliver(ctx, msg, authorId) {
   if (off.length) notifyOffline(off, payload);
 }
 
-module.exports = { effective, deliver, notifyOffline, setOfflineHandler };
+module.exports = { effective, deliver, notifyOffline, setOfflineHandler, plainBody };

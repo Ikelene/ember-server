@@ -119,6 +119,7 @@ function textOut(ctx, msg) {
   let t = String(msg.body || '');
   t = t.replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${ctx.snap.roles.find(r => r.rid === rid)?.name || 'role'}`);
   t = t.replace(/<a?:(\w+):e[0-9a-f]{10}>/g, (_, n) => `:${n}:`);
+  t = require('../notify').plainBody(t, ctx.snap); // <@principal> / <#cid> tokens as names
   for (const a of msg.attachments || []) if (a?.url) t += ` ${a.url}`;
   if (msg.reply?.author?.username) t = `(replying to ${msg.reply.author.username}) ${t}`;
   t = t.replace(/\s*\n\s*/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').trim();

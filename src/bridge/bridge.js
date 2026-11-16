@@ -144,6 +144,32 @@ async function hostFile(p, a, maxBytes) {
 
 // ---------------------------------------------------------------- text both ways
 const emojisOf = communityId => db.all('SELECT eid, name, animated FROM emojis WHERE community_id = ?', communityId);
+// an emoji from over there that this server doesn't have: copied here once (uploads/emojis/<eid>.<ext>, the eid made from
+// where it came from, so the same emoji always gets the same one) so <:name:eid> shows it in Ember like any custom emoji.
+// It isn't one of the server's emojis (no slot used, not in its list); /emojis/:eid/info says where it came from.
+const crypto = require('crypto');
+const foreignName = n => String(n || 'emoji').replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || 'emoji';
+async function foreignEmoji(link, extId, name, animated) {
+  store.ensure();
+  const p = link.platform;
+  const eid = `e${crypto.createHash('sha256').update(`bridge:${p}:${extId}`).digest('hex').slice(0, 10)}`;
+  const tok = a => `<${a ? 'a' : ''}:${foreignName(name)}:${eid}>`;
+  const have = db.get('SELECT animated FROM bridge_emojis WHERE eid = ?', eid);
+  if (have) return tok(!!have.animated);
+  try {
+    const buf = await download(`${PL.platform(p).cdn}/emojis/${extId}.${animated ? 'gif' : 'png'}?size=128`, 2 << 20);
+    const { file, animated: anim } = uploads.saveEmoji(buf, eid);
+    const g = db.get('SELECT guild_name FROM bridge_guilds WHERE id = ?', link.bridge_id);
+    db.run('INSERT OR IGNORE INTO bridge_emojis (eid, platform, ext_id, name, animated, file, guild_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      eid, p, String(extId), foreignName(name), anim ? 1 : 0, file, g?.guild_name || '', now());
+    return tok(!!anim);
+  } catch (e) { log('bridge', `foreign emoji ${p} ${extId}: ${e.message}`); return null; }
+}
+function foreignEmojiInfo(eid) {
+  store.ensure();
+  const r = db.get('SELECT eid, platform, name, animated, guild_name FROM bridge_emojis WHERE eid = ?', String(eid));
+  return r ? { emoji: { eid: r.eid, name: r.name, animated: !!r.animated }, server: null, external: { platform: (() => { try { return PL.platform(r.platform).name; } catch { return r.platform; } })(), server: r.guild_name || null } } : null;
+}
 // Discord / Fluxer text -> Ember text. Mentions become plain names (with a zero-width space after @), so nothing pings here.
 async function textIn(link, d) {
   let t = String(d.content || '');
@@ -158,31 +184,55 @@ async function textIn(link, d) {
     const chans = await guildThing(p, link.guild_id, 'channels').catch(() => []);
     t = t.replace(/<#(\d+)>/g, (_, id) => {
       const here = linkByExt(p, id);
-      const ch = here && db.get('SELECT name FROM channels WHERE id = ?', here.channel_id);
-      return `#${ch ? ch.name : ((Array.isArray(chans) ? chans : []).find(x => String(x.id) === id)?.name || 'channel')}`;
+      const ch = here && db.get('SELECT cid, name FROM channels WHERE id = ?', here.channel_id);
+      return ch ? `<#${ch.cid}>` : `#${(Array.isArray(chans) ? chans : []).find(x => String(x.id) === id)?.name || 'channel'}`; // a linked channel is a real Ember channel
     });
   }
   if (/<a?:\w+:\d+>/.test(t)) {
     const mine = emojisOf(link.community_id);
-    t = t.replace(/<(a?):(\w+):(\d+)>/g, (_, a, n) => {
+    const found = new Map();
+    for (const [, a, n, id] of t.matchAll(/<(a?):(\w+):(\d+)>/g)) {
+      if (found.has(id) || found.size >= 30) continue;
       const e = mine.find(x => x.name.toLowerCase() === n.toLowerCase());
-      return e ? `<${e.animated ? 'a' : ''}:${e.name}:${e.eid}>` : `:${n}:`;
-    });
+      found.set(id, e ? `<${e.animated ? 'a' : ''}:${e.name}:${e.eid}>` : (await foreignEmoji(link, id, n, !!a)) || `:${n}:`);
+    }
+    t = t.replace(/<(a?):(\w+):(\d+)>/g, (all, a, n, id) => found.get(id) || `:${n}:`);
   }
   // nothing that pings: @everyone / @here, and Ember's own role / user tokens typed over there
-  return t.replace(/@(everyone|here)\b/g, `@${ZW}$1`).replace(/<@&/g, `<${ZW}@&`);
+  return t.replace(/@(everyone|here)\b/g, `@${ZW}$1`).replace(/<@&/g, `<${ZW}@&`).replace(/<@([vlb]:)/g, `<${ZW}@$1`);
 }
 // Ember text -> Discord / Fluxer text (role tokens as names, custom emojis matched by name)
 async function textOut(link, body, communityId) {
   let t = String(body || '');
   const roles = db.all('SELECT rid, name FROM roles WHERE community_id = ?', communityId);
   t = t.replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${roles.find(r => r.rid === rid)?.name || 'role'}`);
+  // <@principal> -> @name (webhooks post with allowed_mentions off, so it never pings over there)
+  t = t.replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'someone'}`);
+  // <#cid> -> their channel when it's linked there too, else #name
+  t = t.replace(/<#(c[0-9a-f]{10})>/g, (_, cid) => {
+    const ch = db.get('SELECT id, name FROM channels WHERE cid = ?', cid);
+    const there = ch && linksOfChannel(ch.id).find(l => l.bridge_id === link.bridge_id);
+    return there ? `<#${there.ext_channel_id}>` : `#${ch ? ch.name : 'channel'}`;
+  });
   if (/<a?:\w+:e[0-9a-f]{10}>/.test(t)) {
     const theirs = await guildThing(link.platform, link.guild_id, 'emojis').catch(() => []);
-    t = t.replace(/<(a?):(\w+):(e[0-9a-f]{10})>/g, (_, a, n) => {
+    // the picture of one of our emojis (the server's own, or one a bridge brought in)
+    const urlOf = eid => {
+      const row = db.get('SELECT file FROM emojis WHERE eid = ?', eid) || (store.ensure(), db.get('SELECT file FROM bridge_emojis WHERE eid = ?', eid));
+      return row ? `${origin()}/uploads/${row.file}` : null;
+    };
+    // a message that's only emojis: the pictures themselves (Discord / Fluxer show a lone picture link as the picture)
+    const only = /^\s*(?:<a?:\w+:e[0-9a-f]{10}>\s*)+$/.test(t);
+    const missing = [];
+    t = t.replace(/<(a?):(\w+):(e[0-9a-f]{10})>/g, (all, a, n, eid) => {
       const e = (Array.isArray(theirs) ? theirs : []).find(x => String(x.name).toLowerCase() === n.toLowerCase());
-      return e ? `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>` : `:${n}:`;
+      if (e) return `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`;
+      const url = urlOf(eid);
+      if (!url) return `:${n}:`;
+      if (only) { missing.push(url); return ''; }
+      return `[:${n}:](<${url}>)`; // they don't have it: its name, linking to the picture
     });
+    if (only && missing.length) t = `${t.trim()} ${[...new Set(missing)].slice(0, 4).join(' ')}`.trim();
   }
   return t;
 }
@@ -483,5 +533,5 @@ const idle = () => Promise.all([...queues.values()]); // tests: wait for queued 
 
 module.exports = {
   init, shutdown, onEvent, onPost, onEdit, onDelete, channelTag, settingsView, saveSettings, platforms, guilds, status, link, setEnabled, unlink, setChannel,
-  hookName, textIn, textOut, idle, clients, RETENTION,
+  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo,
 };

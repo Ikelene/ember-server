@@ -252,10 +252,15 @@ test('mentions: chat_mention to online targets, notifyOffline for the rest, mute
   await frank.a.post(S('/join'));
   try {
     const gotBob = wb.waitFor(f => f.type === 'chat_mention' && f.body === '@bob look');
-    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: '@bob look' });
+    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: `<@${bob.user.id}> look` });
     const m = await gotBob;
     assert.deepEqual({ ...m, id: undefined }, { type: 'chat_mention', id: undefined, server: 'Camp', sid, channel: 'general', cid: general, from: 'alice', pfp: null, body: '@bob look' });
     assert.deepEqual(calls, []); // nobody offline was mentioned
+    // a plain "@name" is just text: it pings nobody (only a <@principal> token does)
+    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: '@bob @frank plain text' });
+    await sleep(100);
+    assert.equal(wb.frames.some(f => f.type === 'chat_mention' && f.body === '@bob @frank plain text'), false);
+    assert.deepEqual(calls, []);
     // @everyone: bob and carol online, frank offline -> the hook gets frank only
     await alice.a.post(`/api/v1/channels/${general}/messages`, { message: '@everyone ping' });
     await wb.waitFor(f => f.type === 'chat_mention' && f.body === '@everyone ping');
@@ -273,21 +278,21 @@ test('mentions: chat_mention to online targets, notifyOffline for the rest, mute
     const role = (await alice.a.post(S('/roles'), { name: 'Crew', mentionable: true })).body.role;
     await alice.a.put(S(`/members/${encodeURIComponent(bob.user.id)}/roles/${role.rid}`));
     await alice.a.post(`/api/v1/channels/${general}/messages`, { message: `hey <@&${role.rid}>` });
-    await wb.waitFor(f => f.type === 'chat_mention' && f.body.startsWith('hey <@&'));
+    await wb.waitFor(f => f.type === 'chat_mention' && f.body === 'hey @Crew'); // the notification shows names, not tokens
     // replies ping the author
     const mine = (await bob.a.post(`/api/v1/channels/${general}/messages`, { message: 'question' })).body.message;
     await alice.a.post(`/api/v1/channels/${general}/messages`, { message: 'answer', reply_to: mine.id });
     await wb.waitFor(f => f.type === 'chat_mention' && f.body === 'answer');
     // a muted channel stays quiet, level "all" pings for everything
     assert.equal((await bob.a.put(`/api/v1/notify/${general}`, { mute_minutes: -1 })).status, 200);
-    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: '@bob while muted' });
+    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: `<@${bob.user.id}> while muted` });
     await sleep(150);
     assert.equal(wb.frames.some(f => f.type === 'chat_mention' && f.body === '@bob while muted'), false);
     await bob.a.put(`/api/v1/notify/${general}`, { mute_minutes: 0, level: 'all' });
     await alice.a.post(`/api/v1/channels/${general}/messages`, { message: 'no mention at all' });
     await wb.waitFor(f => f.type === 'chat_mention' && f.body === 'no mention at all');
     await bob.a.put(`/api/v1/notify/${general}`, { level: 'none' });
-    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: '@bob level none' });
+    await alice.a.post(`/api/v1/channels/${general}/messages`, { message: `<@${bob.user.id}> level none` });
     await sleep(150);
     assert.equal(wb.frames.some(f => f.body === '@bob level none'), false);
     await bob.a.put(`/api/v1/notify/${general}`, { level: 'default' });
@@ -407,7 +412,7 @@ test('bot REST: token auth, guilds, send / edit / react / delete, Discord shapes
   assert.equal(sent.body.content, `hello <@${aliceNum}>`);
   assert.deepEqual([sent.body.author.bot, sent.body.author.username, sent.body.mentions.length, sent.body.embeds[0].title], [true, 'EchoBot', 1, 'T']);
   const ev = (await gotMsg).message;
-  assert.deepEqual([ev.body, ev.author.id, ev.author.bot], ['hello @alice', bot.id, true]);
+  assert.deepEqual([ev.body, ev.author.id, ev.author.bot], [`hello <@${alice.user.id}>`, bot.id, true]); // Ember keeps the ping as a <@principal> token
   assert.equal((await gotMention).body, 'hello @alice');
   // edit / react / pin / read / delete
   assert.equal((await call('PATCH', `/bot/v1/channels/${channelId}/messages/${sent.body.id}`, { content: 'edited' })).body.content, 'edited');
