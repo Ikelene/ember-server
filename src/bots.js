@@ -212,7 +212,7 @@ function messageObj(m, c, snap) {
     ...(m.interaction ? { interaction: { id: m.interaction.id, type: m.interaction.type, name: m.interaction.name, user: m.interaction.user ? { id: String(uidOf(m.interaction.user.id) || 0), username: m.interaction.user.username } : undefined }, interaction_metadata: { id: m.interaction.id, type: m.interaction.type } } : {}),
     reactions: (m.reactions || []).map(x => { const cm = /^<a?:(\w+):(e[0-9a-f]{10})>$/.exec(x.emoji); return { emoji: cm ? { id: cm[2], name: cm[1] } : { id: null, name: x.emoji }, count: x.count, me: false }; }),
     timestamp: new Date(m.created_at).toISOString(), edited_timestamp: m.edited_at ? new Date(m.edited_at).toISOString() : null,
-    member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: null } : undefined,
+    member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: snap.nick(auId) } : undefined,
     channel_name: ch?.name, guild_name: c.name, bonfire: { cid: m.channel, sid: c.sid, bridge: au?.bridge || undefined },
     alias: botAlias(m.alias), // Ember extension: { name, avatar_url, unmarked, member_id? } when a bot posted under an alias; author is still the real bot
   };

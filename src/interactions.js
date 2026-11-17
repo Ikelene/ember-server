@@ -27,7 +27,7 @@ const channelOf = (it) => db.get('SELECT * FROM channels WHERE id = ?', it.chann
 const commUser = id => auth.userById(id);
 
 const memberObj = (c, snap, u) => ({
-  user: B().userObj(u), nick: null, roles: [...snap.roleIds(u.id)].map(id => String(B().ROLE_BASE + id)), flags: 0, pending: false, deaf: false, mute: false,
+  user: B().userObj(u), nick: snap.nick(u.id), roles: [...snap.roleIds(u.id)].map(id => String(B().ROLE_BASE + id)), flags: 0, pending: false, deaf: false, mute: false,
   joined_at: new Date(db.get('SELECT joined_at FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)?.joined_at || Date.now()).toISOString(),
   permissions: B().permsToDiscord(snap.perms(u.id)),
 });

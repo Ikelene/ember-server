@@ -108,6 +108,25 @@ test('roles shop: free roles self-assign, priced roles need a Velora account (40
   assert.equal((await bob.a.del(`/api/v1/channels/${shop}/shop/${free.rid}`)).body.items[0].has, false);
 });
 
+test('roles shop: categories with a display style, order kept, a shop-only colour per role', async () => {
+  const shop = (await alice.a.get(S(''))).body.channels.find(c => c.type === 'roles').cid;
+  const roles = (await alice.a.get(S(''))).body.roles;
+  const gamer = roles.find(r => r.name === 'Gamer'), vip = roles.find(r => r.name === 'VIP');
+  const cfg = (await alice.a.patch(`/api/v1/channels/${shop}`, { config: {
+    categories: [{ id: 'pings', name: ' Pings ', style: 'buttons' }, { id: 'perks', name: 'Perks', style: 'weird' }, { id: 'bad id!', name: 'x' }, { id: 'empty', name: '' }],
+    items: [{ rid: vip.rid, price: 50, cat: 'perks', color: '#00FF88' }, { rid: gamer.rid, cat: 'pings', color: 'red' }],
+  } })).body.channel.config;
+  assert.deepEqual(cfg.categories, [{ id: 'pings', name: 'Pings', style: 'buttons' }, { id: 'perks', name: 'Perks', style: 'cards' }]);
+  assert.deepEqual(cfg.items, [{ rid: vip.rid, price: 50, desc: '', cat: 'perks', color: '#00ff88' }, { rid: gamer.rid, price: 0, desc: '', cat: 'pings' }]);
+  const v = (await bob.a.get(`/api/v1/channels/${shop}/shop`)).body;
+  assert.deepEqual(v.categories, cfg.categories);
+  assert.deepEqual(v.items.map(i => [i.role.name, i.cat, i.color]), [['VIP', 'perks', '#00ff88'], ['Gamer', 'pings', null]]);
+  assert.equal(v.items[1].role.color, '#ff0000'); // the role itself keeps its colour
+  // an item pointing at a category that is gone falls back to no category
+  const c2 = (await alice.a.patch(`/api/v1/channels/${shop}`, { config: { items: [{ rid: gamer.rid, cat: 'pings' }] } })).body.channel.config;
+  assert.deepEqual(c2, { items: [{ rid: gamer.rid, price: 0, desc: '' }], categories: [] });
+});
+
 test('starboard: a message joins the board at the threshold, stays, and counts keep updating', async () => {
   const board = (await alice.a.get(S(''))).body.channels.find(c => c.type === 'starboard').cid;
   assert.equal((await alice.a.patch(`/api/v1/channels/${board}`, { config: { watch: [], min: 2 } })).body.channel.config.min, 2);

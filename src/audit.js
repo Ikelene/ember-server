@@ -8,7 +8,7 @@ const { now } = require('./util');
 // action -> category
 const ACTIONS = {
   member_kick: 'user_moderation', member_ban: 'user_moderation', member_unban: 'user_moderation', member_timeout: 'user_moderation',
-  timeout_remove: 'user_moderation', join_accept: 'user_moderation', join_deny: 'user_moderation',
+  timeout_remove: 'user_moderation', member_nick: 'user_moderation', join_accept: 'user_moderation', join_deny: 'user_moderation',
   role_create: 'role_management', role_update: 'role_management', role_delete: 'role_management', role_order: 'role_management',
   member_role_add: 'role_management', member_role_remove: 'role_management',
   channel_create: 'channel_management', channel_update: 'channel_management', channel_delete: 'channel_management',

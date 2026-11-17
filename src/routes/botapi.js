@@ -67,7 +67,7 @@ function register(app) {
   };
   const inChannel = (ctx, mid) => { const r = /^\d{1,15}$/.test(String(mid)) && db.get('SELECT id FROM messages WHERE id = ? AND channel_id = ?', Number(mid), ctx.ch.id); if (!r) throw err('message_not_found', 404); return r.id; };
   const full = (ctx, id) => M.withReactions([M.viewById(id, ctx.snap)])[0];
-  const member = (c, snap, u) => ({ user: B.userObj(u), nick: null, roles: [...snap.roleIds(u.id)].map(id => String(B.ROLE_BASE + id)), joined_at: new Date(db.get('SELECT joined_at FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id).joined_at).toISOString(), deaf: false, mute: false });
+  const member = (c, snap, u) => ({ user: B.userObj(u), nick: snap.nick(u.id), roles: [...snap.roleIds(u.id)].map(id => String(B.ROLE_BASE + id)), joined_at: new Date(db.get('SELECT joined_at FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id).joined_at).toISOString(), deaf: false, mute: false });
 
   get('/gateway/bot', () => ({ url: B.gatewayUrl(), shards: 1, session_start_limit: { total: 1000, remaining: 1000, reset_after: 0, max_concurrency: 1 } }));
   get('/users/@me', (req, bot) => B.userObj(bot));
@@ -114,6 +114,21 @@ function register(app) {
     if (!u || !snap.isMember(u.id)) throw err('user_not_found', 404);
     C.setMemberRole(c.sid, bot, u.principal, r.rid, on);
   };
+  // nickname: '@me' (Discord's PATCH /guilds/:gid/members/@me) or someone else (Manage users, above them). Same rules as communities.setNick
+  const setNick = (req, bot) => {
+    const { c, snap } = guild(bot, req.params.gid);
+    let p = '@me';
+    if (req.params.uid && req.params.uid !== '@me') {
+      const u = /^\d{1,15}$/.test(req.params.uid) && auth().userById(Number(req.params.uid));
+      if (!u || !snap.isMember(u.id)) throw err('user_not_found', 404);
+      p = u.principal;
+    }
+    if (req.body && 'nick' in req.body) C.setNick(c.sid, bot, p, req.body.nick);
+    const u = p === '@me' ? bot : auth().userByPrincipal(p);
+    return member(c, C.snapOf(c), u);
+  };
+  patch('/guilds/:gid/members/@me', setNick);
+  patch('/guilds/:gid/members/:uid', setNick);
   put('/guilds/:gid/members/:uid/roles/:rid', setRole(true));
   del('/guilds/:gid/members/:uid/roles/:rid', setRole(false));
 

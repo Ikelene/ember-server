@@ -14,6 +14,7 @@ const { err, clean, randId, now } = require('./util');
 const LIMITS = { joined: 100, channels: 60, members: 5000, roles: 100, emojis: 100, stickers: 30 };
 // `game` = an Ember Link (Minecraft) channel, src/game; a `logs` channel may also be a CloudLink bridge, src/bridge/cloudlink.js
 const CHANNEL_TYPES = ['text', 'logs', 'roles', 'welcome', 'link', 'voice', 'starboard', 'game'];
+const SHOP_CATS = 10, SHOP_STYLES = ['cards', 'buttons']; // roles shop categories and how each one is drawn
 const STAR_SKIP = ['starboard', 'voice', 'link', 'roles']; // channels a starboard can't watch
 const identity = require('./identity');
 const CHANNEL_ICONS = ['hash', 'megaphone', 'lock', 'message-circle', 'gamepad-2', 'music', 'image', 'code', 'bug', 'lightbulb', 'help-circle', 'star', 'heart', 'book-open', 'coffee', 'sparkles', 'trophy', 'video', 'palette', 'terminal', 'globe', 'bell', 'shield', 'rocket', 'scroll-text', 'smile', 'flame', 'zap', 'gift', 'pin'];
@@ -37,7 +38,12 @@ class Snap {
       if (!this.ow.has(o.channel_id)) this.ow.set(o.channel_id, new Map());
       this.ow.get(o.channel_id).set(o.role_id, { allow: o.allow, deny: o.deny });
     }
-    this._mr = new Map(); this._mem = new Map();
+    this._mr = new Map(); this._mem = new Map(); this._nicks = null;
+  }
+  // a member's nickname on this server (null = none). One query for the whole server, then cached for this snapshot
+  nick(uid) {
+    if (!this._nicks) this._nicks = new Map(db.all('SELECT user_id, nick FROM members WHERE community_id = ? AND nick IS NOT NULL', this.c.id).map(r => [Number(r.user_id), r.nick]));
+    return this._nicks.get(Number(uid)) || null;
   }
   isMember(uid) {
     uid = Number(uid);
@@ -142,7 +148,7 @@ function publicConfig(ch, snap) {
   const cfg = cfgOf(ch);
   if (ch.type === 'voice') return { allow_call_in: !!cfg.allow_call_in, user_limit: Number(cfg.user_limit) || 0 };
   if (ch.type === 'link') return { url: cfg.url || '' };
-  if (ch.type === 'roles') return { items: (cfg.items || []).filter(i => snap.roles.some(r => r.rid === i.rid)) };
+  if (ch.type === 'roles') return { items: (cfg.items || []).filter(i => snap.roles.some(r => r.rid === i.rid)), categories: cfg.categories || [] };
   if (ch.type === 'welcome') return { allow_chat: !!cfg.allow_chat, join: cfg.join || [], leave: cfg.leave || [] };
   if (ch.type === 'starboard') return { watch: (cfg.watch || []).filter(cid => snap.channels.some(x => x.cid === cid)), min: starMin(cfg) };
   if (ch.type === 'logs') return require('./bridge/cloudlink').publicChannelConfig(ch); // {} = webhooks, or the CloudLink bridge settings
@@ -165,8 +171,10 @@ function channelView(snap, ch) {
 function memberView(snap, u) {
   const isOwner = snap.isOwner(u.id);
   const ids = snap.roleIds(u.id);
+  const nick = snap.nick(u.id);
   return {
-    ...userView(u), color: null, role: perms.roleLabel(isOwner, snap.perms(u.id)),
+    ...userView(u), ...(nick ? { display_name: nick, global_display_name: u.display_name } : {}), nick,
+    color: null, role: perms.roleLabel(isOwner, snap.perms(u.id)),
     roles: snap.roles.filter(r => ids.has(r.id)).map(r => r.rid), presence: u.kind === 'bot' ? require('./bot-presence').presence.status(u.id) : null, joined_at: u.joined_at ?? undefined,
     timeout_until: require('./moderation').timeoutUntil(snap.c, u.id) || undefined,
   };
@@ -449,6 +457,25 @@ function removeMember(c, userId, why) {
   }
   memberChanged(c, userId, why);
 }
+// Server nickname: shown on this server instead of the person's display name. Yourself always (bots too); someone else needs
+// Manage users and to sit above them. nick '' / null clears it.
+const NICK_MAX = 32;
+function setNick(sid, me, targetPrincipal, raw) {
+  const { c, snap } = memberCommunity(sid, me);
+  const t = targetPrincipal === '@me' ? me : userByPrincipalOrThrow(targetPrincipal);
+  if (!snap.isMember(t.id)) throw err('not_a_member', 404);
+  const self = Number(t.id) === Number(me.id);
+  if (!self && (!snap.can(me.id, P.MANAGE_USERS) || snap.top(t.id) >= snap.top(me.id))) throw err('not_allowed', 403);
+  if (raw != null && typeof raw !== 'string') throw err('invalid_nick', 400, { message: 'nick must be a string or null' });
+  const nick = clean(String(raw || '').replace(/[\r\n\u2028\u2029]/g, ' ').replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, ''), NICK_MAX + 1) || null;
+  if (nick && nick.length > NICK_MAX) throw err('invalid_nick', 400, { message: `nick must be at most ${NICK_MAX} characters` });
+  const before = snap.nick(t.id);
+  if (before === nick) return { nick };
+  db.run('UPDATE members SET nick = ? WHERE community_id = ? AND user_id = ?', nick, c.id, t.id);
+  memberChanged(c, t.id, 'role'); // ('role' = "this member changed": every client updates the member in place)
+  audit(c, me, 'member_nick', { target: who(t), details: { name: nick || '(removed)' } });
+  return { nick };
+}
 function leaveServer(sid, me) {
   const { c, snap } = memberCommunity(sid, me);
   if (snap.isOwner(me.id)) throw err('owner_cannot_leave', 400); // delete it instead
@@ -625,15 +652,25 @@ function cleanConfig(type, raw, snap, me, current = null) {
   }
   if (type === 'roles') {
     const mine = snap.top(me.id), items = [];
+    // categories: headings in the shop, in this order, each drawn as big cards or as small toggle buttons
+    const categories = [];
+    for (const k of (Array.isArray(raw.categories) ? raw.categories : []).slice(0, SHOP_CATS)) {
+      const id = String(k?.id || ''), name = clean(k?.name, 40);
+      if (!/^[a-z0-9]{1,12}$/i.test(id) || !name || categories.some(x => x.id === id)) continue;
+      categories.push({ id, name, style: SHOP_STYLES.includes(k.style) ? k.style : 'cards' });
+    }
     for (const it of (Array.isArray(raw.items) ? raw.items : []).slice(0, 25)) {
       const r = snap.roles.find(x => x.rid === it?.rid);
       if (!r || r.is_default || items.some(x => x.rid === r.rid)) continue;
       if (Number(r.permissions) & P.ADMIN) throw err('shop_admin_role');
       if (r.position >= mine) throw err('role_too_high', 403);
-      items.push({ rid: r.rid, price: Math.min(Math.max(Math.trunc(Number(it.price) || 0), 0), 1000000), desc: clean(it.desc, 200) });
+      const item = { rid: r.rid, price: Math.min(Math.max(Math.trunc(Number(it.price) || 0), 0), 1000000), desc: clean(it.desc, 200) };
+      if (categories.some(k => k.id === it.cat)) item.cat = String(it.cat);
+      if (/^#[0-9a-f]{6}$/i.test(String(it.color || ''))) item.color = String(it.color).toLowerCase(); // the role's colour in this shop only
+      items.push(item);
     }
     if (items.length && !snap.can(me.id, P.MANAGE_ROLES)) throw err('not_allowed', 403);
-    return { items };
+    return categories.length ? { items, categories } : { items };
   }
   return {}; // text
 }
@@ -996,9 +1033,9 @@ function shopView(cid, me) {
   const bought = new Set(db.all('SELECT role_id FROM role_purchases WHERE community_id = ? AND user_id = ?', snap.c.id, me.id).map(b => b.role_id)); // paid through Velora (relay/shop.js)
   const items = (cfgOf(ch).items || []).map(it => {
     const r = snap.roles.find(x => x.rid === it.rid);
-    return r && { role: roleView(r), price: it.price || 0, desc: it.desc || '', has: mine.has(r.id), owned: !it.price || snap.isOwner(me.id) || bought.has(r.id) };
+    return r && { role: roleView(r), price: it.price || 0, desc: it.desc || '', has: mine.has(r.id), owned: !it.price || snap.isOwner(me.id) || bought.has(r.id), cat: it.cat || null, color: it.color || null };
   }).filter(Boolean);
-  return { items, balance: null, owner_free: snap.isOwner(me.id) };
+  return { items, categories: cfgOf(ch).categories || [], balance: null, owner_free: snap.isOwner(me.id) };
 }
 function shopRole(cid, me, rid, on) {
   const { ch, c, snap } = shopChannel(cid, me);
@@ -1067,7 +1104,7 @@ function setNotify(me, target, body = {}) {
 module.exports = { linkInfo,
   canManageClones,
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
-  effectiveUploadMax, roleView, serverView, channelView, memberView, readState, mentionCounts, myServers, serverDetail,
+  effectiveUploadMax, roleView, serverView, channelView, memberView, setNick, readState, mentionCounts, myServers, serverDetail,
   createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
   channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,

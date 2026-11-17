@@ -228,6 +228,8 @@ const MIGRATIONS = [
   // v16: where a cloned emoji / sticker was first seen (clonelock.js): JSON { type: 'server', name, host } | { type: 'user', user_id, username }
   `ALTER TABLE emojis ADD COLUMN origin TEXT;
   ALTER TABLE stickers ADD COLUMN origin TEXT;`,
+  // v17: a member's nickname on one server (shown there instead of their display name)
+  `ALTER TABLE members ADD COLUMN nick TEXT;`,
 ];
 
 function open() {

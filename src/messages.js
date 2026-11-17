@@ -45,6 +45,8 @@ function identityView(subjectId, subjectParts, subjectName, subjectPrincipal, fa
   return { body: fallback };
 }
 const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, velora_id: vid || null, ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
+// the same person with their nickname on snap's server (display_name = the nick, global_display_name = their own name)
+const nicked = (p, snap, userId) => { const n = p && userId != null && snap?.nick ? snap.nick(userId) : null; return n ? { ...p, display_name: n, global_display_name: p.display_name, nick: n } : p; };
 // webhook / bridged posts: a name and picture, no account
 const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, velora_id: null, name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
 // author.bridge_from (where a bridged post was relayed from: a Velocity backend, "Discord" via CloudLink...) lives in bridge/store.js
@@ -81,7 +83,7 @@ function aliasView(name, avatar, { snap, userId, kind, channelId } = {}) {
   if (!snap.isMember(userId) || !snap.can(userId, P.UNMARKED_ALIASES)) return out;
   out.unmarked = true;
   const m = aliasMember(snap, name);
-  if (m) { out.member_id = m.principal; out.member = person(m.principal, m.kind, m.username, m.display_name, m.pfp, m.velora_id); }
+  if (m) { out.member_id = m.principal; out.member = nicked(person(m.principal, m.kind, m.username, m.display_name, m.pfp, m.velora_id), snap, m.id); }
   return out;
 }
 const ALIAS_MAX = 32, ALIAS_AVATAR_MAX = 500;
@@ -112,11 +114,11 @@ function stickerOf(tid) {
 function messageView(r, snap) {
   const c = snap.c;
   const author = r.system ? null
-    : r.u_principal ? person(r.u_principal, r.u_kind, r.u_username, r.u_dn, r.u_pfp, r.u_vid)
+    : r.u_principal ? nicked(person(r.u_principal, r.u_kind, r.u_username, r.u_dn, r.u_pfp, r.u_vid), snap, r.user_id)
     : (r.webhook_id || r.bridge) ? outsider(r.author_name || 'Webhook', r.author_avatar, r.bridge, r.bridge ? bridgeFrom(r.id) : null)
     : r.author_name ? { id: null, kind: null, username: r.author_name, display_name: r.author_name, pfp: r.author_avatar || null, velora_id: null, name_only: true } : null;
   const replyAuthor = r.r_system ? null
-    : r.r_principal ? person(r.r_principal, r.r_kind, r.r_username, r.r_dn, r.r_pfp, r.r_vid)
+    : r.r_principal ? nicked(person(r.r_principal, r.r_kind, r.r_username, r.r_dn, r.r_pfp, r.r_vid), snap, r.r_user_id)
     : r.r_author_name ? { id: null, kind: null, username: r.r_author_name, display_name: r.r_author_name, pfp: null, velora_id: null, name_only: true } : null;
   const rid = id => snap.roles.find(x => x.id === Number(id))?.rid;
   const rep = r.r_id ? identityView(r.r_subject_user_id, r.r_subject_parts, r.r_subject_username, r.r_subject_principal, r.r_body || '') : null;
@@ -174,8 +176,8 @@ function reactionsFor(ids) {
 // Same order and de-duplication as reactionsFor; each person as the usual author shape (id, username, display_name, pfp...).
 const REACTORS_MAX = 1000;
 function reactors(id, me) {
-  const { r } = messageCtx(id, me);
-  const rows = db.raw().prepare('SELECT r.emoji, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM reactions r JOIN users u ON u.id = r.user_id WHERE r.message_id = ? ORDER BY r.created_at, r.rowid').all(r.id);
+  const { r, snap } = messageCtx(id, me);
+  const rows = db.raw().prepare('SELECT r.emoji, u.id AS uid, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM reactions r JOIN users u ON u.id = r.user_id WHERE r.message_id = ? ORDER BY r.created_at, r.rowid').all(r.id);
   const emojiIds = [...new Set(rows.map(x => customReaction(x.emoji)).filter(Boolean))];
   const emojis = new Map(emojiIds.length ? db.all(`SELECT * FROM emojis WHERE eid IN (${db.inList(emojiIds)})`, ...emojiIds).map(e => [e.eid, e]) : []);
   const out = [], seen = new Set();
@@ -186,7 +188,7 @@ function reactors(id, me) {
     let e = out.find(y => y.emoji === key);
     if (!e) { e = { emoji: key, ...reactionImage(x.emoji, emojis), count: 0, users: [] }; out.push(e); }
     e.count++;
-    if (e.users.length < REACTORS_MAX) e.users.push(person(x.principal, x.kind, x.username, x.display_name, x.pfp, x.velora_id));
+    if (e.users.length < REACTORS_MAX) e.users.push(nicked(person(x.principal, x.kind, x.username, x.display_name, x.pfp, x.velora_id), snap, x.uid));
   }
   return { reactions: out };
 }
