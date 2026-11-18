@@ -529,6 +529,12 @@ Older clients ignore all of this; an instance without it answers the REST route 
 
 ---
 
+### 7.2 Who is here, and sleep mode
+
+Servers that advertise `features.member_presence` say who is here: a person's member `presence` is `"online"` while they have a socket open to this server, or a fresh sleep sign-up (below), else `"offline"`; their communities get `chat_presence` when that changes (settled 2 s, as for bots in §14).
+
+Servers that advertise `features.wake` let a client close its socket to save data without looking gone. Before closing, the client calls `POST /api/v1/wake` (any session; answers `{ ok, ttl_ms, pings }`) and renews it well inside `ttl_ms` (5 minutes) for as long as it wants to stay reachable. While the sign-up is fresh the person counts as here (above), and the first new message they can see sends one ping for them through Velora (§12.12); `pings: false` means this server can't send them (not registered with Velora, or a local account). One ping per sign-up: nothing more until the person connects again, which ends the sign-up (so does `DELETE /api/v1/wake`). A client that stops renewing is gone once `ttl_ms` passes.
+
 ## 8. Message signing
 
 Signing is available only in velora mode and only to sessions whose `scp` contains `"sign"`. It is **optional**: every community in velora mode accepts signed messages, and no community can require them (unsigned messages are always accepted, with `verified: null`).
@@ -758,6 +764,10 @@ Velora staff can ban an instance by key (`ik_…`) or by url host (`chat.example
 - **Voice broker** (§10, §12.7): see §10.
 - **Directory** (§12.9): while `listed` is on, the instance PUTs `{ listed: true, name, description, icon_url (absolute), banner_url (absolute), member_count, invite_url, tags }`, where `invite_url` is the community's permanent invite opened in Ember on the web (`VELORA/chat#/i/<instance>/invite/<code>`). It re-pushes (debounced) when any of that changes and every 6 h; turning `listed` off sends `{ listed: false }`. A link Velora refuses (it stores only `https`) is dropped from the listing instead of failing it.
 - **Import** (§12.6): `POST /api/v1/import/velora { ticket }` (instance admins, only while no community exists) downloads `relay/import/bundle?ticket=` and runs the zip importer (§9). Velora's errors come back with the same codes plus a `message`: `404 ticket_invalid`, `403 ticket_wrong_instance`, `409 not_ready` (`retry: true`), `410 ticket_expired` / `import_failed`; `503 velora_not_registered` / `velora_off` when the instance cannot reach the relays.
+
+### 12.12 `POST /bonfire/relay/wake`
+
+`{ user_ids: [velora user id, ...] }` (at most 200): people signed up for wake pings (§7.2) have something new on this instance. Velora checks each person has this instance in their list (muted ones too: a ping is not a notification) and sends `{ "type": "instance_wake", "instance": "<instance origin>" }` to their open Velora sockets; clients mark the instance unread. Nothing is stored, pushed or emailed. Answers `{ ok, delivered, delivered_ids }`: the instance treats only `delivered_ids` as pinged, so someone whose client couldn't be reached gets the next message's ping.
 
 ## 13. Webhooks
 

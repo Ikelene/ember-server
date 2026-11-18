@@ -17,6 +17,9 @@ function register(app) {
   app.get(v1('/settings'), req => ({ settings: C.getSettings(req.user), defaults: C.SETTING_DEFAULTS }));
   app.patch(v1('/settings'), req => ({ settings: C.setSettings(req.user, req.body) }));
   app.get(v1('/notify'), req => ({ notify: C.notifyList(req.user) }));
+  // sleep mode (§7.2): still here while the client sleeps, and one ping through Velora when something new arrives
+  app.post(v1('/wake'), req => require('../wake').subscribe(req.user));
+  app.delete(v1('/wake'), req => { require('../wake').end(req.user.id); });
   app.put(v1('/notify/:target'), req => ({ notify: C.setNotify(req.user, req.params.target, req.body || {}) }));
 
   // ---- servers ----

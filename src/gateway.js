@@ -54,6 +54,7 @@ const dropCommunity = id => subs.delete(id);
 // everyone subscribed to the community who may see the event (channel events go only to members who can view that channel)
 function emit(communityId, obj, { except = null, filter = null } = {}) {
   // `__via` (which client a message was sent from) rides along to every member who gets the message; bots get the event without it
+  if (obj.type === 'chat_message') { try { require('./wake').onMessage(communityId, obj.message); } catch (e) { console.error('[gateway] wake', e.message); } }
   let via = null;
   if (obj.__via !== undefined) { via = obj.__via; const { __via, ...rest } = obj; obj = rest; }
   try { require('./bots').dispatch(communityId, obj); } catch (e) { console.error('[gateway] bots', e.message); } // bots get the same events (Discord shape)
@@ -100,15 +101,17 @@ function counts() {
   return { online, connections: sockets }; // online = people (bots left out), connections = every signed-in socket, bots too
 }
 const isOnline = userId => (byUser.get(Number(userId))?.size || 0) > 0;
-// people's connections (PROTOCOL §7.4): member lists say who is connected to this server right now, and a person's communities hear
+// people's connections (PROTOCOL §7.2): member lists say who is connected to this server right now, and a person's communities hear
 // when that changes, settled for 2 s like bots (a quick reconnect sends nothing)
 const peopleSent = new Set(), peoplePending = new Map();
+// connected, or signed up for wake pings while their client sleeps (wake.js, §7.2): both count as here
+const present = userId => isOnline(userId) || require('./wake').active(userId);
 function peopleChanged(userId) {
   userId = Number(userId);
   clearTimeout(peoplePending.get(userId));
   const t = setTimeout(() => {
     peoplePending.delete(userId);
-    const on = isOnline(userId);
+    const on = present(userId);
     if (on === peopleSent.has(userId)) return;
     if (on) peopleSent.add(userId); else peopleSent.delete(userId);
     if (!db.raw()) return;
@@ -202,6 +205,7 @@ function doAuth(sock, msg) {
   try { db.run('UPDATE users SET last_connect = ? WHERE id = ?', Date.now(), s.user.id); } catch (e) { console.error('[gateway] last_connect', e.message); }
   if (!byUser.has(s.user.id)) byUser.set(s.user.id, new Set());
   byUser.get(s.user.id).add(sock);
+  require('./wake').end(s.user.id); // (connected again: the sleep sign-up is over)
   peopleChanged(s.user.id);
   const admin = auth.isAdmin(s.user), quota = admin ? require('./relay/client').voiceQuota() : null;
   send(sock, { type: 'auth_success', user: auth.userView(s.user), instance_admin: admin, instance_owner: auth.isOwner(s.user), ...(quota ? { voice_quota: quota } : {}) });
@@ -271,4 +275,4 @@ function shutdown(code = 1001, reason = 'shutdown') {
   wss?.close();
 }
 
-module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, counts, isOnline, socketsOf };
+module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, counts, isOnline, socketsOf, present, peopleChanged };
