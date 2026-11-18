@@ -98,11 +98,14 @@ test('READY -> online, join payload, gallery rows, member-only events, multiple 
   const joined = await human.waitFor(f => f.type === 'chat_member_update' && f.user_id === bot.id && f.change === 'joined');
   assert.equal(joined.member.presence, 'online');
   assert.equal((await botMember()).presence, 'online');
-  assert.equal((await members()).find(m => m.id === owner.user.id).presence, null);
+  // people too (features.member_presence): the owner has a socket open, so the list says online, and members heard it (outsiders didn't)
+  assert.equal((await members()).find(m => m.id === owner.user.id).presence, 'online');
+  await human.waitFor(f => f.type === 'chat_presence' && f.user_id === owner.user.id && f.presence === 'online');
+  assert.ok(!other.frames.some(f => f.type === 'chat_presence' && f.user_id === owner.user.id));
   const online = await human.waitFor(f => f.type === 'chat_presence' && f.user_id === bot.id);
   assert.deepEqual(online, { type: 'chat_presence', server: sid, user_id: bot.id, username: 'dotbot', presence: 'online' });
   assert.equal((await outsider.a.get(`/api/v1/servers/${sid}/members`)).status, 403);
-  assert.ok(!other.frames.some(f => f.type === 'chat_presence'));
+  assert.ok(!other.frames.some(f => f.type === 'chat_presence' && f.user_id === bot.id));
   assert.equal(Object.hasOwn(auth.userView(auth.userById(uid)), 'presence'), false, 'generic user views do not leak status');
 
   db.run('UPDATE bots SET gallery_id = ? WHERE user_id = ?', '12345', uid);
@@ -112,29 +115,29 @@ test('READY -> online, join payload, gallery rows, member-only events, multiple 
   await close(a);
   await sleep(2100);
   assert.equal((await botMember()).presence, 'online');
-  assert.equal(human.frames.filter(f => f.type === 'chat_presence').length, 1);
+  assert.equal(human.frames.filter(f => f.type === 'chat_presence' && f.user_id === bot.id).length, 1);
   await close(b);
   assert.equal((await botMember()).presence, 'offline');
-  await human.waitFor(f => f.type === 'chat_presence' && f.presence === 'offline');
-  assert.ok(!other.frames.some(f => f.type === 'chat_presence'));
+  await human.waitFor(f => f.type === 'chat_presence' && f.user_id === bot.id && f.presence === 'offline');
+  assert.ok(!other.frames.some(f => f.type === 'chat_presence' && f.user_id === bot.id));
 });
 
 test('socket errors drop presence immediately and publish offline after debounce', async () => {
   human.frames.length = 0;
   const ws = await connect(), uid = Number(bot.id.slice(2));
-  await human.waitFor(f => f.type === 'chat_presence' && f.presence === 'online');
+  await human.waitFor(f => f.type === 'chat_presence' && f.user_id === bot.id && f.presence === 'online');
   const g = [...presence.connections.get(uid)][0];
   g.ws.emit('error', new Error('simulated transport error'));
   assert.equal(presence.status(uid), 'offline');
-  await human.waitFor(f => f.type === 'chat_presence' && f.presence === 'offline');
-  assert.ok(!other.frames.some(f => f.type === 'chat_presence'));
+  await human.waitFor(f => f.type === 'chat_presence' && f.user_id === bot.id && f.presence === 'offline');
+  assert.ok(!other.frames.some(f => f.type === 'chat_presence' && f.user_id === bot.id));
   ws.terminate();
 });
 
 test('stale READY socket is swept without waiting for close; removed members receive no presence', async () => {
   const ws = await connect(), uid = Number(bot.id.slice(2));
   human.frames.length = 0;
-  await human.waitFor(f => f.type === 'chat_presence' && f.presence === 'online');
+  await human.waitFor(f => f.type === 'chat_presence' && f.user_id === bot.id && f.presence === 'online');
   // Unsubscribe the viewer before the debounced offline event.
   const c = db.get('SELECT * FROM communities WHERE sid = ?', sid);
   C.removeMember(c, auth.userByPrincipal(owner.user.id).id, 'left');
@@ -143,7 +146,7 @@ test('stale READY socket is swept without waiting for close; removed members rec
   assert.equal(presence.status(uid), 'offline');
   assert.equal((await owner.a.get(`/api/v1/servers/${sid}/members`)).status, 403);
   await sleep(2200);
-  assert.ok(!human.frames.some(f => f.type === 'chat_presence'));
-  assert.ok(!other.frames.some(f => f.type === 'chat_presence'));
+  assert.ok(!human.frames.some(f => f.type === 'chat_presence' && f.user_id === bot.id));
+  assert.ok(!other.frames.some(f => f.type === 'chat_presence' && f.user_id === bot.id));
   ws.terminate();
 });

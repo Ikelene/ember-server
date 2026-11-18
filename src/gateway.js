@@ -100,6 +100,27 @@ function counts() {
   return { online, connections: sockets }; // online = people (bots left out), connections = every signed-in socket, bots too
 }
 const isOnline = userId => (byUser.get(Number(userId))?.size || 0) > 0;
+// people's connections (PROTOCOL §7.4): member lists say who is connected to this server right now, and a person's communities hear
+// when that changes, settled for 2 s like bots (a quick reconnect sends nothing)
+const peopleSent = new Set(), peoplePending = new Map();
+function peopleChanged(userId) {
+  userId = Number(userId);
+  clearTimeout(peoplePending.get(userId));
+  const t = setTimeout(() => {
+    peoplePending.delete(userId);
+    const on = isOnline(userId);
+    if (on === peopleSent.has(userId)) return;
+    if (on) peopleSent.add(userId); else peopleSent.delete(userId);
+    if (!db.raw()) return;
+    const u = auth.userById(userId);
+    if (!u || u.kind === 'bot') return;
+    for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ?', userId)) {
+      emit(c.id, { type: 'chat_presence', server: c.sid, user_id: u.principal, username: u.username, presence: on ? 'online' : 'offline' });
+    }
+  }, 2000);
+  t.unref?.();
+  peoplePending.set(userId, t);
+}
 const socketsOf = userId => [...(byUser.get(Number(userId)) || [])];
 
 // ---------- frames ----------
@@ -181,6 +202,7 @@ function doAuth(sock, msg) {
   try { db.run('UPDATE users SET last_connect = ? WHERE id = ?', Date.now(), s.user.id); } catch (e) { console.error('[gateway] last_connect', e.message); }
   if (!byUser.has(s.user.id)) byUser.set(s.user.id, new Set());
   byUser.get(s.user.id).add(sock);
+  peopleChanged(s.user.id);
   const admin = auth.isAdmin(s.user), quota = admin ? require('./relay/client').voiceQuota() : null;
   send(sock, { type: 'auth_success', user: auth.userView(s.user), instance_admin: admin, instance_owner: auth.isOwner(s.user), ...(quota ? { voice_quota: quota } : {}) });
   if (s.user.restricted) setRestricted(sock, true); // told right away; stays quiet until Velora switches it back on
@@ -206,6 +228,7 @@ function onConnection(sock, req) {
       const set = byUser.get(uid); set?.delete(sock);
       if (set && !set.size) {
         byUser.delete(uid);
+        peopleChanged(uid);
         try { db.run('UPDATE users SET last_online = ? WHERE id = ?', Date.now(), uid); } catch (e) { console.error('[gateway] last_online', e.message); }
       }
     }

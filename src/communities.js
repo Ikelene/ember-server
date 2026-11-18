@@ -175,7 +175,7 @@ function memberView(snap, u) {
   return {
     ...userView(u), ...(nick ? { display_name: nick, global_display_name: u.display_name } : {}), nick,
     color: null, role: perms.roleLabel(isOwner, snap.perms(u.id)),
-    roles: snap.roles.filter(r => ids.has(r.id)).map(r => r.rid), presence: u.kind === 'bot' ? require('./bot-presence').presence.status(u.id) : null, joined_at: u.joined_at ?? undefined,
+    roles: snap.roles.filter(r => ids.has(r.id)).map(r => r.rid), presence: u.kind === 'bot' ? require('./bot-presence').presence.status(u.id) : require('./gateway').isOnline(u.id) ? 'online' : 'offline', joined_at: u.joined_at ?? undefined,
     timeout_until: require('./moderation').timeoutUntil(snap.c, u.id) || undefined,
   };
 }
