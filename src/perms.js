@@ -11,10 +11,12 @@ const P = {
   MANAGE_USERS: 2048, // last login of members and the page each message was sent from (Velora's own chat also shows invisible people and devices)
   VIEW: 1024, // channel-level only
   UNMARKED_ALIASES: 4096, // a bot's alias messages show with no alias mark, when the server's Danger zone turns unmarked aliases on (messages.js)
+  CHANGE_NICKNAME: 8192, // set your own server nickname (@everyone has it by default)
+  MANAGE_NICKNAMES: 16384, // set anyone's server nickname whose top role is below yours (your own too)
 };
 const CHANNEL_BITS = P.VIEW | P.SEND | P.ATTACH; // what a channel's per-role settings can allow / deny
-const ALL_PERMS = 1023 | P.MANAGE_USERS | P.UNMARKED_ALIASES;
-const EVERYONE_DEFAULT = P.SEND | P.ATTACH;
+const ALL_PERMS = 1023 | P.MANAGE_USERS | P.UNMARKED_ALIASES | P.CHANGE_NICKNAME | P.MANAGE_NICKNAMES;
+const EVERYONE_DEFAULT = P.SEND | P.ATTACH | P.CHANGE_NICKNAME;
 
 // community-wide permissions: owner = all, Administrator = all, otherwise OR of @everyone + held roles
 function basePerms({ isMember = true, isOwner = false, roles = [], roleIds = new Set() }) {

@@ -457,15 +457,16 @@ function removeMember(c, userId, why) {
   }
   memberChanged(c, userId, why);
 }
-// Server nickname: shown on this server instead of the person's display name. Yourself always (bots too); someone else needs
-// Manage users and to sit above them. nick '' / null clears it.
+// Server nickname: shown on this server instead of the person's display name. Your own needs Change nickname (or Manage
+// nicknames); someone else's needs Manage nicknames and to sit above them (bots too). nick '' / null clears it.
 const NICK_MAX = 32;
 function setNick(sid, me, targetPrincipal, raw) {
   const { c, snap } = memberCommunity(sid, me);
   const t = targetPrincipal === '@me' ? me : userByPrincipalOrThrow(targetPrincipal);
   if (!snap.isMember(t.id)) throw err('not_a_member', 404);
   const self = Number(t.id) === Number(me.id);
-  if (!self && (!snap.can(me.id, P.MANAGE_USERS) || snap.top(t.id) >= snap.top(me.id))) throw err('not_allowed', 403);
+  if (self ? !(snap.can(me.id, P.CHANGE_NICKNAME) || snap.can(me.id, P.MANAGE_NICKNAMES))
+    : (!snap.can(me.id, P.MANAGE_NICKNAMES) || snap.top(t.id) >= snap.top(me.id))) throw err('not_allowed', 403);
   if (raw != null && typeof raw !== 'string') throw err('invalid_nick', 400, { message: 'nick must be a string or null' });
   const nick = clean(String(raw || '').replace(/[\r\n\u2028\u2029]/g, ' ').replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, ''), NICK_MAX + 1) || null;
   if (nick && nick.length > NICK_MAX) throw err('invalid_nick', 400, { message: `nick must be at most ${NICK_MAX} characters` });

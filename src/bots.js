@@ -153,7 +153,7 @@ const userObj = u => ({ id: String(u.id), username: u.username, global_name: u.d
 function permsToDiscord(p) {
   let d = 1024n | 65536n | 16384n | 64n; // view, read history, embed links, add reactions
   if (p & P.ADMIN) d |= 8n;
-  const map = [[P.SEND, 2048n], [P.MANAGE_CHANNELS, 16n], [P.MANAGE_SERVER, 32n], [P.MANAGE_ROLES, 1n << 28n], [P.KICK, 2n], [P.BAN, 4n], [P.MANAGE_MESSAGES, 8192n], [P.MENTION_EVERYONE, 131072n], [P.ATTACH, 32768n]];
+  const map = [[P.SEND, 2048n], [P.MANAGE_CHANNELS, 16n], [P.MANAGE_SERVER, 32n], [P.MANAGE_ROLES, 1n << 28n], [P.KICK, 2n], [P.BAN, 4n], [P.MANAGE_MESSAGES, 8192n], [P.MENTION_EVERYONE, 131072n], [P.ATTACH, 32768n], [P.CHANGE_NICKNAME, 1n << 26n], [P.MANAGE_NICKNAMES, 1n << 27n]];
   for (const [b, x] of map) if (p & b) d |= x;
   return String(d);
 }
