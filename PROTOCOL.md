@@ -115,7 +115,7 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
   "name": "My Instance", "description": "", "icon_url": null,
   "public_url": "http://localhost:4100", "previous_urls": [],
   "accounts_mode": "velora" | "local",
-  "velora": { "issuer": "http://localhost:3000", "jwks_url": "http://localhost:3000/.well-known/bonfire/jwks.json" } | null,
+  "velora": { "issuer": "http://localhost:3000", "jwks_url": "http://localhost:3000/.well-known/bonfire/jwks.json", "signing_issuers": ["http://localhost:3000"] } | null,
   "claimed": true,
   "registration": "open" | "closed",
   "features": { "signing": true, "voice": false, "uploads": true, "youtube": false, "minecraft": true, "bridges": { "discord": false, "fluxer": false, "cloudlink": true } },
@@ -555,6 +555,7 @@ Signing is available only in velora mode and only to sessions whose `scp` contai
 
 **What the client signs:** the UTF-8 bytes of `"bonfire-msg-v1\n" + canonical(payload)`.
 - `canonical` means JSON with object keys sorted recursively, no whitespace, and numbers as integers.
+- `iss` is one of the instance's `velora.signing_issuers` (discovery, §3), preferred first. On any Nookara address that list is `["https://nookara.cc", "https://velora.ikelene.net"]`: both are accepted, and clients sign with `https://nookara.cc`. Instances older than the list check `iss` against their own `velora_url`, so a client signs with exactly `velora.issuer` there. The instance stores no `iss`; anyone re-checking a stored signature tries each Nookara issuer.
 - `payload` has these fields:
 ```json
 {
