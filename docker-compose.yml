@@ -10,8 +10,9 @@ services:
     environment:
       # the public https origin people (and Velora) reach this instance at; it is the JWT audience
       BONFIRE_PUBLIC_URL: "http://localhost:4100"
-      # local = accounts live on this instance; velora = sign in with a Velora account
-      BONFIRE_ACCOUNTS_MODE: "local"
+      # local = accounts live on this instance; velora = sign in with a Nookara account
+      # left unset, the admin panel decides (default local); setting it locks the choice there
+      # BONFIRE_ACCOUNTS_MODE: "local"
       # BONFIRE_VELORA_URL: "https://nookara.cc"
       # BONFIRE_OWNER: "v:123"        # pre-claim for a Velora user instead of using the setup code
       # EMBER_ACCEPT_OPERATOR_TERMS: "1"   # you accept the Ember Server Operator Terms (https://nookara.cc/operator-terms); needed for BONFIRE_OWNER setups
