@@ -228,14 +228,24 @@ async function loginLocal(username, password) {
 const ownerRow = () => { const id = db.metaGet('owner_user_id'); return id ? userById(Number(id)) : null; };
 const isOwner = u => !!u && String(db.metaGet('owner_user_id')) === String(u.id);
 const isAdmin = u => !!u && (isOwner(u) || !!db.get('SELECT 1 FROM instance_admins WHERE user_id = ?', u.id));
+// the owner is an account that can't sign in under the running accounts mode (a local account after switching to Velora
+// accounts, or a Velora one after switching to local): the instance takes a new owner with the setup code, like an unclaimed one
+const ownerStranded = () => { const o = ownerRow(); return !!o && o.kind !== (config.mode() === 'local' ? 'local' : 'velora'); };
+// returns the previous owner's id when ownership moved from someone else (their communities moved with it), else null
 function setOwner(userId) {
-  db.metaSet('owner_user_id', String(userId));
-  db.run('INSERT OR IGNORE INTO instance_admins (user_id) VALUES (?)', userId);
+  const old = db.metaGet('owner_user_id');
+  const moved = old && String(old) !== String(userId) ? Number(old) : null;
+  db.tx(() => {
+    db.metaSet('owner_user_id', String(userId));
+    db.run('INSERT OR IGNORE INTO instance_admins (user_id) VALUES (?)', userId);
+    if (moved) db.run('UPDATE communities SET owner_id = ? WHERE owner_id = ?', userId, moved);
+  });
+  return moved;
 }
 
 module.exports = {
   userView, botVerified, userById, userByPrincipal, upsertVeloraUser, refreshVeloraProfile, setRestricted, ensureVeloraPlaceholder,
   createSession, resolveSession, revokeSession, bearer,
   verifyVeloraJwt, setJwksFetcher, keyFor, loginVelora, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
-  claimed, ownerRow, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,
+  claimed, ownerRow, ownerStranded, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,
 };

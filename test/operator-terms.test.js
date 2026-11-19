@@ -55,13 +55,16 @@ test('headless setup: BONFIRE_OWNER is ignored without the flag, and works with 
     const a = await start(mk());
     try { assert.equal((await api(a.url).get('/.well-known/bonfire')).body.claimed, false); assert.ok(a.setup.current()); } finally { await a.close(); }
     process.env.EMBER_ACCEPT_OPERATOR_TERMS = '1';
+    const l = await start(mk()); // a Velora owner on local accounts could never sign in: still the setup code
+    try { assert.equal((await api(l.url).get('/.well-known/bonfire')).body.claimed, false); assert.ok(l.setup.current()); } finally { await l.close(); }
+    process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
     const b = await start(mk());
     try {
       assert.equal((await api(b.url).get('/.well-known/bonfire')).body.claimed, true);
       assert.equal(terms.view().via, 'headless');
       assert.equal(terms.view().accepted_by, 'env');
     } finally { await b.close(); }
-  } finally { delete process.env.BONFIRE_OWNER; delete process.env.EMBER_ACCEPT_OPERATOR_TERMS; }
+  } finally { delete process.env.BONFIRE_OWNER; delete process.env.EMBER_ACCEPT_OPERATOR_TERMS; process.env.BONFIRE_ACCOUNTS_MODE = 'local'; }
 });
 
 // an instance whose database predates the terms: claimed, no acceptance recorded

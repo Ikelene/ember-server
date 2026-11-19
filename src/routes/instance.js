@@ -27,7 +27,7 @@ function discovery() {
     name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
     accounts_mode: mode,
     velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json` } : null,
-    claimed: auth.claimed(),
+    claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
     features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true },
     max_upload_mb: cfg.max_upload_mb,
@@ -84,7 +84,8 @@ function register(app, { restart }) {
   // ---- claim + settings + admins ----
   app.post('/api/v1/instance/claim', req => {
     if (!claimLimit.hit(req.ip)) throw err('rate_limited', 429);
-    if (auth.claimed()) throw err('already_claimed', 409);
+    if (auth.claimed() && !auth.ownerStranded()) throw err('already_claimed', 409);
+    if (req.user.kind === 'bot') throw err('bots_cannot_claim', 403);
     if (!setup.check(req.body?.code)) throw err('invalid_code', 403);
     require('../operator-terms').requireForSetup(req.body, req.user); // setup cannot finish without accepting the Ember Server Operator Terms
     setup.claim(req.user);
@@ -97,7 +98,11 @@ function register(app, { restart }) {
     managed.guardSettings(req.body, config.get());
     // switching to local accounts: Velora sign-in stops working, so someone must be able to sign in with a password and switch back
     if (req.body?.accounts_mode === 'local' && config.get().accounts_mode !== 'local' && !auth.localAdmins().length) throw err('local_admin_required', 409);
-    config.update(req.body); if (req.body?.max_backups !== undefined) require('../backups').prune(); return settingsView();
+    config.update(req.body); if (req.body?.max_backups !== undefined) require('../backups').prune();
+    // the owner switching to accounts their own account isn't: after the restart they claim it again with this code (and keep the community)
+    const next = config.adminView().accounts_mode, me = req.user;
+    if (req.body?.accounts_mode !== undefined && auth.isOwner(me) && me.kind !== (next === 'local' ? 'local' : 'velora')) return { ...settingsView(), handover_code: setup.handoverCode() };
+    return settingsView();
   });
   // Ember Server Operator Terms: an instance set up before they existed accepts from the dashboard notice (never blocks chat); anyone signed in can read the status
   app.get('/api/v1/instance/operator-terms', () => require('../operator-terms').view());

@@ -180,7 +180,9 @@ A third principal kind is the **bot** (`b:<n>`, `"kind": "bot"`): its user objec
 
 **Claim.** On first boot an unclaimed instance writes a setup code (`XXXX-XXXX`, Crockford base32) to stdout and to `DATA_DIR/setup-code.txt`. An authenticated user claims it with `POST /api/v1/instance/claim { code }`, which returns `{ ok: true }`. That user becomes the instance owner and an admin, and the code file is deleted.
 
-If the env var `BONFIRE_OWNER=v:<velora id>` is set, the instance boots already claimed by that user. While unclaimed, local-mode registration is always allowed so the first user can create an account.
+If the env var `BONFIRE_OWNER=v:<velora id>` is set (Velora mode only), the instance boots already claimed by that user. While unclaimed, local-mode registration is always allowed so the first user can create an account.
+
+**Stranded owner.** When the owner's account can't sign in under the running `accounts_mode` (`local` owner in Velora mode, Velora owner in local mode), the instance behaves as unclaimed for claiming: discovery reports `claimed: false`, a setup code is printed and saved at boot, and `POST /api/v1/instance/claim` accepts it. The claimer becomes the owner and an admin, every community the old owner owned becomes theirs, and they are added as a member. The old owner stays an admin row but can't sign in. Registration rules don't change (local registration still follows `registration`; switching to local needs a local admin, below). In Velora mode `BONFIRE_OWNER` takes over from a stranded owner at boot. Bots can't claim (`403 bots_cannot_claim`).
 
 **Settings.** `GET /api/v1/instance/settings` (admins) returns the settings below; `PATCH` with a partial object updates them.
 
@@ -188,7 +190,7 @@ If the env var `BONFIRE_OWNER=v:<velora id>` is set, the instance boots already 
 |---|---|---|
 | `name`, `description`, `icon_url` | string | |
 | `public_url` | origin | |
-| `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `BONFIRE_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
+| `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. When the owner switches to the kind their own account isn't, the PATCH response adds `handover_code`: after the restart they sign in with an account of the new kind and claim with it (see Stranded owner). GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `BONFIRE_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
 | `velora_url` | origin | default `https://nookara.cc` |
 | `registration` | `"open"` / `"closed"` | local mode |
 | `max_upload_mb` | int 1–500 | instance ceiling (managed: follows the plan) |
