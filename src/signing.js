@@ -2,7 +2,7 @@
 // Message signing (PROTOCOL §8): canonical JSON, payload build, verification against Velora device keys.
 const crypto = require('crypto');
 const config = require('./config');
-const { fromB64url, normalizeOrigin } = require('./util');
+const { fromB64url, normalizeOrigin, canonVelora } = require('./util');
 
 const PREFIX = 'bonfire-msg-v1\n';
 const KEY_TTL = 10 * 60 * 1000;
@@ -83,6 +83,9 @@ async function verify({ payload, signature, veloraId, now = Date.now() }) {
   return ok ? { ok: true } : { ok: false, reason: 'bad_signature' };
 }
 
-const issuer = () => normalizeOrigin(config.get().velora_url);
+// the "iss" a signed message carries. Every Nookara client signs with Velora's original address, https://velora.ikelene.net
+// (pinned through the move to nookara.cc), so an instance whose velora_url is any Nookara name checks against that
+const SIGNED_ISS = 'https://velora.ikelene.net';
+const issuer = () => (canonVelora(config.get().velora_url) === 'https://nookara.cc' ? SIGNED_ISS : normalizeOrigin(config.get().velora_url));
 
 module.exports = { canonical, buildPayload, attachmentRefs, signingBytes, verify, setKeyFetcher, issuer, PREFIX };
