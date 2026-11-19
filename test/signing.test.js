@@ -275,10 +275,14 @@ test('signed stickers: the signature covers the sticker id, other payloads keep 
   assert.equal((await c.post(`/api/v1/channels/${cid}/messages`, { message: '', sticker: one })).body.message.verified, null);
 });
 
-test('an instance on any Nookara address checks signatures against the issuer every client signs with', () => {
+test('an instance on any Nookara address accepts nookara.cc and velora.ikelene.net, nookara.cc first', () => {
   const was = process.env.BONFIRE_VELORA_URL;
   try {
-    for (const u of ['https://nookara.cc', 'https://velora.ikelene.net', 'https://ember.nookara.cc/']) { process.env.BONFIRE_VELORA_URL = u; assert.equal(signing.issuer(), 'https://velora.ikelene.net', u); }
-    process.env.BONFIRE_VELORA_URL = 'https://id.example.org'; assert.equal(signing.issuer(), 'https://id.example.org');
+    for (const u of ['https://nookara.cc', 'https://velora.ikelene.net', 'https://ember.nookara.cc/']) {
+      process.env.BONFIRE_VELORA_URL = u;
+      assert.deepEqual(signing.issuers(), ['https://nookara.cc', 'https://velora.ikelene.net'], u);
+      assert.equal(signing.issuer(), 'https://nookara.cc');
+    }
+    process.env.BONFIRE_VELORA_URL = 'https://id.example.org'; assert.deepEqual(signing.issuers(), ['https://id.example.org']);
   } finally { process.env.BONFIRE_VELORA_URL = was; }
 });

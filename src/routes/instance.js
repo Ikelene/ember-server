@@ -26,7 +26,8 @@ function discovery() {
     build: V.build(), // PROTOCOL §3: { version, commit, commit_short, commit_date, built_at, dirty, build_id }
     name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
     accounts_mode: mode,
-    velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json` } : null,
+    // signing_issuers: the "iss" a message signature may name here, preferred first (clients sign with the first one they know)
+    velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json`, signing_issuers: require('../signing').issuers() } : null,
     claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
     features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true },

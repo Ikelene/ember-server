@@ -559,7 +559,7 @@ Signing is available only in velora mode and only to sessions whose `scp` contai
 ```json
 {
   "v": 1,
-  "iss": "<normalized velora origin>",
+  "iss": "<one of the instance's velora.signing_issuers>",
   "instance": "<normalized instance origin>",
   "community": "<sid>",
   "channel": "<cid>",

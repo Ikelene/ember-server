@@ -240,11 +240,16 @@ async function checkSignature({ me, c, ch, signature, scopes, body, attachments,
   if (!scopes?.includes('sign')) throw err('insufficient_scope', 403);
   let hashes;
   try { hashes = signing.attachmentRefs(attachments); } catch { throw err('bad_signature', 400); }
-  const payload = signing.buildPayload({
-    iss: signing.issuer(), instance: normalizeOrigin(config.publicUrl()), community: c.sid, channel: ch.cid, author: me.velora_id,
-    ts: signature.ts, nonce: signature.nonce, body, attachments: hashes, reply_to: replyTo, edit_of: editOf, sticker,
-  });
-  const res = await signing.verify({ payload, signature, veloraId: me.velora_id });
+  // the signature doesn't say which issuer it named: try each one this instance accepts (two at most, the key lookup is cached)
+  let res = null;
+  for (const iss of signing.issuers()) {
+    const payload = signing.buildPayload({
+      iss, instance: normalizeOrigin(config.publicUrl()), community: c.sid, channel: ch.cid, author: me.velora_id,
+      ts: signature.ts, nonce: signature.nonce, body, attachments: hashes, reply_to: replyTo, edit_of: editOf, sticker,
+    });
+    res = await signing.verify({ payload, signature, veloraId: me.velora_id });
+    if (res.ok || res.reason !== 'bad_signature') break; // only a signature over different bytes is worth another issuer
+  }
   if (!res.ok) throw err('bad_signature', 400, { reason: res.reason });
   return { sig_kid: signature.kid, sig_sig: signature.sig, sig_ts: Number(signature.ts), sig_nonce: String(signature.nonce), verified: 1 };
 }

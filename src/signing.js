@@ -83,9 +83,11 @@ async function verify({ payload, signature, veloraId, now = Date.now() }) {
   return ok ? { ok: true } : { ok: false, reason: 'bad_signature' };
 }
 
-// the "iss" a signed message carries. Every Nookara client signs with Velora's original address, https://velora.ikelene.net
-// (pinned through the move to nookara.cc), so an instance whose velora_url is any Nookara name checks against that
-const SIGNED_ISS = 'https://velora.ikelene.net';
-const issuer = () => (canonVelora(config.get().velora_url) === 'https://nookara.cc' ? SIGNED_ISS : normalizeOrigin(config.get().velora_url));
+// the "iss" values a signed message may carry, preferred first (discovery lists them as velora.signing_issuers).
+// On any Nookara address: https://nookara.cc, and Velora's original https://velora.ikelene.net, which every client signed
+// with until clients learned this list (and older app builds still do). Anyone else: their velora_url.
+const NOOKARA_ISS = ['https://nookara.cc', 'https://velora.ikelene.net'];
+const issuers = () => (canonVelora(config.get().velora_url) === 'https://nookara.cc' ? NOOKARA_ISS : [normalizeOrigin(config.get().velora_url)]);
+const issuer = () => issuers()[0];
 
-module.exports = { canonical, buildPayload, attachmentRefs, signingBytes, verify, setKeyFetcher, issuer, PREFIX };
+module.exports = { canonical, buildPayload, attachmentRefs, signingBytes, verify, setKeyFetcher, issuer, issuers, PREFIX };

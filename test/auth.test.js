@@ -81,7 +81,7 @@ test('BONFIRE_OWNER pre-claims the instance; discovery shows the velora block', 
   assert.equal(wk.accounts_mode, 'velora');
   assert.equal(wk.claimed, true);
   assert.equal(wk.public_url, 'https://chat.test');
-  assert.deepEqual(wk.velora, { issuer: 'http://velora.test', jwks_url: 'http://velora.test/.well-known/bonfire/jwks.json' });
+  assert.deepEqual(wk.velora, { issuer: 'http://velora.test', jwks_url: 'http://velora.test/.well-known/bonfire/jwks.json', signing_issuers: ['http://velora.test'] });
   assert.equal(wk.features.signing, true);
   assert.equal(inst.setup.current(), null);
   const r = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'owner' }) });
