@@ -450,6 +450,18 @@ Dashboard: `GET /servers/:sid/dashboard` (Manage server) -> `{ members, bots, ba
 
 ---
 
+### 6.7 Server profiles
+
+Servers that advertise `features.server_profiles` let a member look different on that server only: a picture, banner, name colour, bio and pronouns, plus their server nickname as the name shown there. Setting them needs the role permission `32768` ("Customize profile", off for `@everyone` unless the server turns it on; owners and Administrator have it).
+
+- `GET /api/v1/servers/:sid/members/@me/profile` -> `{ profile, nick, can_customize }` (`profile` null = they use their global one).
+- `PATCH /api/v1/servers/:sid/members/@me/profile` `{ bio?, pronouns?, color?, display_name? }` (`null` or `''` clears a field; `color` is `#rrggbb`; bio up to 300, pronouns up to 40; `display_name` sets the nickname). Errors: `not_allowed` (403), `invalid_color`, `bio_too_long`, `pronouns_too_long`.
+- `POST /api/v1/servers/:sid/members/@me/profile/pfp` or `/banner` (multipart image, up to 4 MB) and `DELETE` the same path (back to the global one for that field).
+- `DELETE /api/v1/servers/:sid/members/@me/profile`: everything back to the global profile, nickname included. No permission needed.
+- `POST /api/v1/servers/:sid/members/:uid/profile/reset`: Manage users, and above them (never the owner), resets someone's. It is audit-logged (`member_profile_reset`), and a Velora account is told through Velora's notification inbox (§12.13).
+
+The member object (member lists, `chat_member_update`) carries `profile: { pfp?, banner?, color?, bio?, pronouns? }` with only the fields that are set, and no `profile` at all for someone using their global one. Clients show those instead of the person's account profile on this server (avatars and name colours in the member list and messages, and their profile card).
+
 ## 7. Gateway (WebSocket)
 
 Connect to `ws(s)://INSTANCE/gateway`.
@@ -768,6 +780,10 @@ Velora staff can ban an instance by key (`ik_…`) or by url host (`chat.example
 ### 12.12 `POST /bonfire/relay/wake`
 
 `{ user_ids: [velora user id, ...] }` (at most 200): people signed up for wake pings (§7.2) have something new on this instance. Velora checks each person has this instance in their list (muted ones too: a ping is not a notification) and sends `{ "type": "instance_wake", "instance": "<instance origin>" }` to their open Velora sockets; clients mark the instance unread. Nothing is stored, pushed or emailed. Answers `{ ok, delivered, delivered_ids }`: the instance treats only `delivered_ids` as pinged, so someone whose client couldn't be reached gets the next message's ping.
+
+### 12.13 `POST /bonfire/relay/notice`
+
+`{ user_id, kind: "profile_reset", community_name }`: something this instance did to a person that they should hear about. Velora writes the wording itself (an instance can't put its own text in someone's inbox) and adds it to their notification inbox, for people who have this instance in their list. Answers `{ ok, delivered }`.
 
 ## 13. Webhooks
 

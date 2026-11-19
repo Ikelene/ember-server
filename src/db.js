@@ -232,6 +232,8 @@ const MIGRATIONS = [
   `ALTER TABLE members ADD COLUMN nick TEXT;`,
   // v18: Change nickname (8192) is a permission now; @everyone keeps what it could do before (set your own)
   `UPDATE roles SET permissions = permissions | 8192 WHERE is_default = 1;`,
+  // v19: a member's profile on this server only (server-profile.js): JSON { pfp, banner, color, bio, pronouns }
+  `ALTER TABLE members ADD COLUMN profile TEXT;`,
 ];
 
 function open() {

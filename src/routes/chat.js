@@ -55,6 +55,19 @@ function register(app) {
   // the clients a member is connected with now (PROTOCOL §7.1): themselves or Manage users holders only
   app.get(v1('/servers/:sid/members/:uid/clients'), req => require('../clients').memberClients(req.params.sid, req.user, req.params.uid));
   app.get(v1('/channels/:cid/viewers'), req => C.channelViewers(req.params.cid, req.user)); // who can see a channel (Ember's member list)
+  // server profiles (§6.7): your look on this server only; Manage users resets someone's
+  const SP = () => require('../server-profile');
+  app.get(v1('/servers/:sid/members/@me/profile'), req => SP().get(req.params.sid, req.user));
+  app.patch(v1('/servers/:sid/members/@me/profile'), req => SP().update(req.params.sid, req.user, req.body || {}));
+  app.delete(v1('/servers/:sid/members/@me/profile'), req => SP().clearOwn(req.params.sid, req.user));
+  app.post(v1('/servers/:sid/members/@me/profile/:kind'), async req => {
+    if (!['pfp', 'banner'].includes(req.params.kind)) throw err('not_found', 404);
+    const { buffer } = await uploads.readMultipart(req, { maxBytes: IMG_MAX });
+    if (!buffer) throw err('no_file');
+    return SP().setImage(req.params.sid, req.user, req.params.kind, buffer);
+  });
+  app.delete(v1('/servers/:sid/members/@me/profile/:kind'), req => SP().setImage(req.params.sid, req.user, req.params.kind, null));
+  app.post(v1('/servers/:sid/members/:uid/profile/reset'), req => SP().reset(req.params.sid, req.user, req.params.uid));
   app.patch(v1('/servers/:sid/members/:uid'), req => C.setNick(req.params.sid, req.user, req.params.uid, req.body?.nick)); // { nick } (uid '@me' = yourself)
   app.delete(v1('/servers/:sid/members/:uid'), req => { C.moderateMember(req.params.sid, req.user, req.params.uid, req.query.ban === '1' ? 'ban' : 'kick'); });
   app.get(v1('/servers/:sid/bans'), req => C.banList(req.params.sid, req.user));

@@ -13,9 +13,10 @@ const P = {
   UNMARKED_ALIASES: 4096, // a bot's alias messages show with no alias mark, when the server's Danger zone turns unmarked aliases on (messages.js)
   CHANGE_NICKNAME: 8192, // set your own server nickname (@everyone has it by default)
   MANAGE_NICKNAMES: 16384, // set anyone's server nickname whose top role is below yours (your own too)
+  CUSTOMIZE_PROFILE: 32768, // your own picture, banner, name colour, bio, pronouns and name on this server only (server-profile.js)
 };
 const CHANNEL_BITS = P.VIEW | P.SEND | P.ATTACH; // what a channel's per-role settings can allow / deny
-const ALL_PERMS = 1023 | P.MANAGE_USERS | P.UNMARKED_ALIASES | P.CHANGE_NICKNAME | P.MANAGE_NICKNAMES;
+const ALL_PERMS = 1023 | P.MANAGE_USERS | P.UNMARKED_ALIASES | P.CHANGE_NICKNAME | P.MANAGE_NICKNAMES | P.CUSTOMIZE_PROFILE;
 const EVERYONE_DEFAULT = P.SEND | P.ATTACH | P.CHANGE_NICKNAME;
 
 // community-wide permissions: owner = all, Administrator = all, otherwise OR of @everyone + held roles

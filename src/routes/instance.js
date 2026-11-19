@@ -29,7 +29,7 @@ function discovery() {
     velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json` } : null,
     claimed: auth.claimed(),
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
-    features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true },
+    features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true },
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
     managed: managed.view(), // Velora-hosted plan + limits (PROTOCOL §19), null on a normal instance

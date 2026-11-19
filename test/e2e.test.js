@@ -36,7 +36,7 @@ test('discovery, CORS and preflight', async () => {
   assert.equal(r.body.registration, 'open');
   assert.equal(r.body.velora, null);
   assert.equal(typeof r.body.features.youtube, 'boolean'); // true only when yt-dlp is installed
-  assert.deepEqual({ ...r.body.features, youtube: undefined }, { signing: false, voice: false, uploads: true, youtube: undefined, minecraft: true, bridges: { discord: false, fluxer: false, cloudlink: true }, member_presence: true, wake: true });
+  assert.deepEqual({ ...r.body.features, youtube: undefined }, { signing: false, voice: false, uploads: true, youtube: undefined, minecraft: true, bridges: { discord: false, fluxer: false, cloudlink: true }, member_presence: true, wake: true, server_profiles: true });
   assert.equal(r.body.community, null); // not set up yet
   assert.equal('public_communities' in r.body, false);
   assert.equal(r.headers.get('access-control-allow-origin'), '*');
@@ -141,7 +141,7 @@ test('create a community: defaults, detail shape', async () => {
   sid = d.server.sid;
   assert.match(sid, /^s[0-9a-f]{10}$/);
   assert.equal(d.server.role, 'owner');
-  assert.equal(d.server.perms, 7167 | 8192 | 16384);
+  assert.equal(d.server.perms, 7167 | 8192 | 16384 | 32768);
   assert.equal(d.server.join_policy, 'request');
   assert.equal(d.server.instance, base.replace('127.0.0.1', 'localhost'));
   assert.equal(d.server.allow_uploads, true);

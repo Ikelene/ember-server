@@ -38,7 +38,12 @@ class Snap {
       if (!this.ow.has(o.channel_id)) this.ow.set(o.channel_id, new Map());
       this.ow.get(o.channel_id).set(o.role_id, { allow: o.allow, deny: o.deny });
     }
-    this._mr = new Map(); this._mem = new Map(); this._nicks = null;
+    this._mr = new Map(); this._mem = new Map(); this._nicks = null; this._profiles = null;
+  }
+  // a member's profile on this server (server-profile.js), null = they use their global one. Cached like nicknames
+  profile(uid) {
+    if (!this._profiles) this._profiles = new Map(db.all('SELECT user_id, profile FROM members WHERE community_id = ? AND profile IS NOT NULL', this.c.id).map(r => [Number(r.user_id), require('./server-profile').parse(r.profile)]));
+    return this._profiles.get(Number(uid)) || null;
   }
   // a member's nickname on this server (null = none). One query for the whole server, then cached for this snapshot
   nick(uid) {
@@ -177,6 +182,7 @@ function memberView(snap, u) {
     color: null, role: perms.roleLabel(isOwner, snap.perms(u.id)),
     roles: snap.roles.filter(r => ids.has(r.id)).map(r => r.rid), presence: u.kind === 'bot' ? require('./bot-presence').presence.status(u.id) : require('./gateway').present(u.id) ? 'online' : 'offline', joined_at: u.joined_at ?? undefined,
     timeout_until: require('./moderation').timeoutUntil(snap.c, u.id) || undefined,
+    ...(u.kind !== 'bot' && snap.profile(u.id) ? { profile: snap.profile(u.id) } : {}), // their look on this server only (§6.7)
   };
 }
 
@@ -460,12 +466,12 @@ function removeMember(c, userId, why) {
 // Server nickname: shown on this server instead of the person's display name. Your own needs Change nickname (or Manage
 // nicknames); someone else's needs Manage nicknames and to sit above them (bots too). nick '' / null clears it.
 const NICK_MAX = 32;
-function setNick(sid, me, targetPrincipal, raw) {
+function setNick(sid, me, targetPrincipal, raw, { asProfile = false } = {}) {
   const { c, snap } = memberCommunity(sid, me);
   const t = targetPrincipal === '@me' ? me : userByPrincipalOrThrow(targetPrincipal);
   if (!snap.isMember(t.id)) throw err('not_a_member', 404);
   const self = Number(t.id) === Number(me.id);
-  if (self ? !(snap.can(me.id, P.CHANGE_NICKNAME) || snap.can(me.id, P.MANAGE_NICKNAMES))
+  if (self ? !(snap.can(me.id, P.CHANGE_NICKNAME) || snap.can(me.id, P.MANAGE_NICKNAMES) || (asProfile && snap.can(me.id, P.CUSTOMIZE_PROFILE)))
     : (!snap.can(me.id, P.MANAGE_NICKNAMES) || snap.top(t.id) >= snap.top(me.id))) throw err('not_allowed', 403);
   if (raw != null && typeof raw !== 'string') throw err('invalid_nick', 400, { message: 'nick must be a string or null' });
   const nick = clean(String(raw || '').replace(/[\r\n\u2028\u2029]/g, ' ').replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, ''), NICK_MAX + 1) || null;
