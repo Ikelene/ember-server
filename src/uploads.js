@@ -30,11 +30,53 @@ function sniff(b) {
   return null;
 }
 
-// drop APP1 (EXIF / XMP: camera, GPS...) segments from a JPEG, byte-level
+// the EXIF Orientation (1-8) inside one APP1 segment's payload ("Exif\0\0" + TIFF), or 0 when it has none
+function exifOrientation(p) {
+  try {
+    if (p.length < 14 || p.toString('latin1', 0, 6) !== 'Exif\0\0') return 0;
+    const t = p.subarray(6), le = t.toString('latin1', 0, 2) === 'II';
+    if (!le && t.toString('latin1', 0, 2) !== 'MM') return 0;
+    const u16 = o => (le ? t.readUInt16LE(o) : t.readUInt16BE(o)), u32 = o => (le ? t.readUInt32LE(o) : t.readUInt32BE(o));
+    const ifd = u32(4), n = u16(ifd);
+    for (let k = 0; k < n; k++) {
+      const e = ifd + 2 + k * 12;
+      if (u16(e) === 0x0112) { const v = u16(e + 8); return v >= 1 && v <= 8 ? v : 0; }
+    }
+  } catch { /* cut short: no orientation */ }
+  return 0;
+}
+// a tiny APP1 holding only Orientation, so phone photos (stored sideways + "turn me" in EXIF) still show the right way up
+function orientationApp1(o) {
+  const s = Buffer.alloc(36);
+  s.writeUInt16BE(0xffe1, 0); s.writeUInt16BE(34, 2);
+  s.write('Exif\0\0MM', 4, 'latin1'); s.writeUInt16BE(0x2a, 12); s.writeUInt32BE(8, 14); // big-endian TIFF, IFD0 at 8
+  s.writeUInt16BE(1, 18); // one entry: 0x0112 SHORT x1 = o; next IFD 0 (already zero)
+  s.writeUInt16BE(0x0112, 20); s.writeUInt16BE(3, 22); s.writeUInt32BE(1, 24); s.writeUInt16BE(o, 28);
+  return s;
+}
+// the Orientation a JPEG says it should be shown with (1 = as stored)
+function jpegOrientation(b) {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return 1;
+  let i = 2;
+  while (i + 4 <= b.length && b[i] === 0xff) {
+    const marker = b[i + 1];
+    if (marker === 0xff) { i++; continue; }
+    if (marker === 0xda || marker === 0xd9) break;
+    if (marker >= 0xd0 && marker <= 0xd7 || marker === 0x01) { i += 2; continue; }
+    const len = b.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > b.length) break;
+    if (marker === 0xe1) { const o = exifOrientation(b.subarray(i + 4, i + 2 + len)); if (o) return o; }
+    i += 2 + len;
+  }
+  return 1;
+}
+
+// drop APP1 (EXIF / XMP: camera, GPS...) segments from a JPEG, byte-level. Only the Orientation survives (in a new minimal
+// APP1 where the EXIF one was), since without it a phone photo shows sideways.
 function stripJpegExif(b) {
   if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return b;
   const parts = [b.subarray(0, 2)];
-  let i = 2;
+  let i = 2, turned = false;
   while (i + 4 <= b.length) {
     if (b[i] !== 0xff) break;
     const marker = b[i + 1];
@@ -44,6 +86,10 @@ function stripJpegExif(b) {
     const len = b.readUInt16BE(i + 2);
     if (len < 2 || i + 2 + len > b.length) break;
     if (marker !== 0xe1) parts.push(b.subarray(i, i + 2 + len)); // keep everything but APP1
+    else if (!turned) {
+      const o = exifOrientation(b.subarray(i + 4, i + 2 + len));
+      if (o > 1) { parts.push(orientationApp1(o)); turned = true; }
+    }
     i += 2 + len;
   }
   parts.push(b.subarray(i));
@@ -59,7 +105,10 @@ function dimensions(b, ext) {
       while (i + 9 < b.length) {
         if (b[i] !== 0xff) { i++; continue; }
         const m = b[i + 1];
-        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+          const h = b.readUInt16BE(i + 5), w = b.readUInt16BE(i + 7);
+          return jpegOrientation(b) >= 5 ? { width: h, height: w } : { width: w, height: h }; // (5-8 turn it a quarter: as shown)
+        }
         if (m === 0xff || (m >= 0xd0 && m <= 0xd8) || m === 0x01) { i += m === 0xff ? 1 : 2; continue; }
         i += 2 + b.readUInt16BE(i + 2);
       }
