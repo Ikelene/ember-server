@@ -243,7 +243,8 @@ function myServers(me) {
       online: 0, // instances don't relay presence
       unread: unreadChannels.length > 0,
       unread_channels: unreadChannels,
-      unread_count: list.reduce((n, ch) => n + (counts.get(ch.id) || 0), 0),
+      // only the unmuted unread channels count (it counted muted ones too, so Ember showed their messages as unread)
+      unread_count: list.reduce((n, ch) => n + (unreadChannels.includes(ch.cid) ? counts.get(ch.id) || 0 : 0), 0),
     };
   });
 }

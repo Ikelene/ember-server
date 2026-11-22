@@ -298,9 +298,11 @@ test('messages over the gateway, history, edit, react, pin, delete', async () =>
   const row = async () => (await bob.a.get('/api/v1/servers')).body.servers.find(x => x.sid === sid);
   assert.equal((await row()).unread, true);
   assert.deepEqual((await row()).unread_channels, [generalCid]);
+  assert.ok((await row()).unread_count >= 1);
   assert.equal((await bob.a.put(`/api/v1/notify/${generalCid}`, { mute_minutes: -1 })).status, 200);
   assert.equal((await row()).unread, false);
   assert.deepEqual((await row()).unread_channels, []);
+  assert.equal((await row()).unread_count, 0, 'a muted channel adds nothing to the count either');
   assert.equal((await bob.a.put(`/api/v1/notify/${generalCid}`, { mute_minutes: 0 })).status, 200);
   assert.equal((await bob.a.post(`/api/v1/channels/${generalCid}/read`, { id: m.id })).status, 200);
   assert.equal((await bob.a.get(`/api/v1/servers/${sid}`)).body.channels.find(c => c.cid === generalCid).mentions, 0);
