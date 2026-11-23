@@ -24,7 +24,15 @@ function body(u, payload, count) {
     title: trim(title, 100), preview: trim(count > 1 ? `${from}: ${payload.body}` : payload.body, 300),
     // on the instance's own origin (Velora requires it); the fragment is the client's route for this channel
     url: `${config.publicUrl()}/#/s/${payload.sid}/${payload.cid}`,
+    // who wrote it, so the phone notification shows their name and picture (not the community's)
+    author_name: trim(from, 64),
+    ...(avatarUrl(payload.pfp) ? { author_avatar: avatarUrl(payload.pfp) } : {}),
   };
+}
+// the author's picture as an absolute https link (a relative one is on this instance)
+function avatarUrl(p) {
+  if (!p || typeof p !== 'string') return null;
+  try { const u = new URL(p, config.publicUrl() + '/'); return u.protocol === 'https:' && !u.username && !u.password ? u.href.slice(0, 500) : null; } catch { return null; }
 }
 async function send(u, payload, count) {
   if (!client.registered() || gateway.isOnline(u.id)) return null;

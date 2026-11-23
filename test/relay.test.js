@@ -293,8 +293,9 @@ test('push: offline Velora members, coalesced per user + channel, never when con
   assert.equal(relayCalls('POST /notify').length, 1); // coalesced
   await until(() => relayCalls('POST /notify').length === 2, 3000, 'summary push');
   const [first, summary] = relayCalls('POST /notify').map(c => c.body);
-  assert.deepEqual({ ...first, preview: undefined }, { user_id: '3', kind: 'mention', community_name: 'Imported Guild', channel_name: 'general', title: 'alice mentioned you', preview: undefined, url: `${IURL}/#/s/${sid}/${general}` });
+  assert.deepEqual({ ...first, preview: undefined, author_avatar: undefined }, { user_id: '3', kind: 'mention', community_name: 'Imported Guild', channel_name: 'general', title: 'alice mentioned you', preview: undefined, url: `${IURL}/#/s/${sid}/${general}`, author_name: 'alice', author_avatar: undefined });
   assert.equal(first.preview, '@bob first');
+  if (first.author_avatar !== undefined) assert.match(first.author_avatar, /^https:\/\//); // (absolute https, or left out)
   assert.equal(summary.title, '2 new mentions in #general');
   assert.match(summary.preview, /third/);
   // connected: no push (the gateway delivers chat_mention instead)
