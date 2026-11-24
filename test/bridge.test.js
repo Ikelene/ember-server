@@ -24,6 +24,7 @@ const calls = [];        // every REST call: { method, path, auth, body }
 const idents = [];       // identify payloads seen by the fake gateway
 const resumes = [];      // resume payloads
 const gw = new Set();    // open gateway sockets
+const voiceOps = [];     // op 4 voice state updates the bot sent
 let fail404 = 0, hookN = 0, msgN = 0, fake, fbase;
 function fakeServer() {
   const server = http.createServer((req, res) => {
@@ -75,6 +76,7 @@ function fakeServer() {
       }
       if (m.op === 6) { resumes.push(m.d); ws.bfToken = m.d.token; ws.send(JSON.stringify({ op: 0, t: 'RESUMED', s: m.d.seq + 1, d: {} })); }
       if (m.op === 1) ws.send(JSON.stringify({ op: 11 }));
+      if (m.op === 4) voiceOps.push(m.d);
     });
   });
   return server;
@@ -130,7 +132,7 @@ test('bot tokens: checked on save, write-only, masked; the gateway identifies wi
   assert.equal(got.body.bridges.discord.bot.username, 'TestBot');
   assert.ok(!fs.readFileSync(`${dir}/config.json`, 'utf8').includes(TOKEN)); // not in config.json either (database only)
   const id = await until(() => idents.find(x => x.token === TOKEN));
-  assert.equal(id.intents, 1 | 512 | 32768); // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT
+  assert.equal(id.intents, 1 | 128 | 512 | 32768); // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | MESSAGE_CONTENT
   await until(async () => (await alice.a.get('/api/v1/bridge/settings')).body.bridges.discord.state === 'ready');
   // an empty token keeps the stored one
   assert.equal((await alice.a.patch('/api/v1/bridge/settings', { discord: { token: '' } })).body.bridges.discord.token, '********WXYZ');
@@ -163,8 +165,8 @@ test('platforms + guilds + linking auto-maps channels by name and makes the webh
   assert.equal(st.status, 200, JSON.stringify(st.body));
   const b = st.body.bridges[0];
   assert.equal(b.guild_name, 'Fake Guild');
-  assert.deepEqual(b.links, [{ cid: general, ext_channel_id: '222', ext_name: 'General', hook: true }]); // "general" == "General"
-  assert.deepEqual(b.ext_channels.map(x => x.id), ['222', '223']); // text channels only
+  assert.deepEqual(b.links, [{ cid: general, ext_channel_id: '222', ext_name: 'General', hook: true, kind: 'text' }]); // "general" == "General"
+  assert.deepEqual(b.ext_channels.map(x => [x.id, x.kind]), [['222', 'text'], ['223', 'text'], ['224', 'voice']]); // text + voice channels (no categories)
   assert.ok(calls.some(c => c.method === 'POST' && c.path === '/channels/222/webhooks' && c.body.name === 'Ember bridge'));
   assert.equal((await alice.a.put(`/api/v1/bridge/servers/${sid}`, { platform: 'discord', guild_id: '111' })).body.error, 'already_bridged');
   const ch = (await alice.a.get(S(''))).body.channels.find(c => c.cid === general);
@@ -257,12 +259,79 @@ test('a webhook deleted over there is made again', async () => {
   assert.ok(id);
 });
 
+test('voice links: Discord people show up in the Ember voice channel as themselves; the bot is never shown', async () => {
+  const voice = require('../src/voice'), VB = require('../src/bridge/voice-bridge');
+  const vc = (await alice.a.post(S('/channels'), { name: 'Hangout', type: 'voice' })).body.channel.cid;
+  const room = `bf_${vc}`;
+  const hooks = () => calls.filter(c => c.method === 'POST' && /^\/channels\/\d+\/webhooks$/.test(c.path)).length;
+  const h0 = hooks();
+  const bad = await alice.a.put(`/api/v1/bridge/servers/${sid}/channels/${vc}`, { platform: 'discord', ext_channel_id: '222' });
+  assert.equal(bad.body.error, 'voice_channels_only'); // a voice channel links to a voice channel
+  const st = (await alice.a.put(`/api/v1/bridge/servers/${sid}/channels/${vc}`, { platform: 'discord', ext_channel_id: '224' })).body;
+  assert.equal(st.bridges[0].links.find(l => l.cid === vc).kind, 'voice');
+  assert.equal(st.bridges[0].ext_channels.find(x => x.id === '224').kind, 'voice');
+  assert.equal(hooks(), h0); // no webhook for a voice link
+  // someone is already in the Discord channel when the bot comes up; our own bot is in there too and is never shown
+  dispatch('GUILD_CREATE', { id: '111', members: [{ nick: 'Dora D', user: { id: '61', username: 'dora', global_name: 'Dora', avatar: 'abc' } }], voice_states: [{ user_id: '61', channel_id: '224', self_mute: true }, { user_id: '900', channel_id: '224' }] });
+  const s1 = await wa.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 1);
+  const dora = s1.users[0];
+  assert.deepEqual([dora.id, dora.username, dora.platform, dora.name, dora.muted], ['d:61', 'discord:61', 'discord', 'Dora D', true]);
+  assert.match(dora.avatar, /\/uploads\/bridge\/avatars\/discord_61_abc\.png$/); // re-hosted here
+  // someone joins, someone leaves
+  dispatch('VOICE_STATE_UPDATE', { guild_id: '111', channel_id: '224', user_id: '62', member: { user: { id: '62', username: 'eli', global_name: null, avatar: null } } });
+  await wa.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.some(u => u.id === 'd:62' && u.name === 'eli' && u.avatar === null));
+  dispatch('VOICE_STATE_UPDATE', { guild_id: '111', channel_id: null, user_id: '61' });
+  await wa.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 1 && f.users[0].id === 'd:62');
+  dispatch('VOICE_STATE_UPDATE', { guild_id: '111', channel_id: '224', user_id: '900' }); // the bot moving: never shown
+  await sleep(100);
+  assert.deepEqual([...voice.voiceIn.get(room).keys()], ['d:62']);
+  assert.deepEqual(voice.realPeopleIn(room), []);
+  assert.deepEqual(VB.status().active, []); // nobody with an account is in there: the bot stays out of the Discord channel
+  // the worker's pseudo sockets: a bridged person joins + publishes + connects like a bot does, with their platform fields
+  voice.setFetch(async url => {
+    let out = {};
+    if (/sessions\/new$/.test(url)) out = { sessionId: `vs${Date.now()}${Math.random()}` };
+    else if (/generate-ice-servers$/.test(url)) out = { iceServers: [{ urls: ['stun:stun.example:3478'] }] };
+    else if (/tracks\/new$/.test(url)) out = { sessionDescription: { type: 'answer', sdp: 'v=0\r\n' + 'a=x\r\n'.repeat(10) }, tracks: [{ trackName: 'audio', mid: '0' }] };
+    else if (/\/sessions\/[^/]+$/.test(url)) out = { tracks: [] };
+    return { ok: true, status: 200, json: async () => out };
+  });
+  try {
+    await alice.a.patch('/api/v1/instance/settings', { voice: { cf_app_id: 'app', cf_app_secret: 'sec', cf_turn_key_id: 'key', cf_turn_token: 'tok' } });
+    const got = [];
+    const s = VB._test.sockFor('t1');
+    s.send = raw => got.push(JSON.parse(raw));
+    const person = { principal: 'd:62', username: 'discord:62', platform: 'discord', name: 'eli', avatar: null };
+    await VB._test.onWorker({ t: 'join', sock: 't1', room, person, nonce: 'n1' });
+    assert.equal(got.at(-1).type, 'chat_rtc_joined', JSON.stringify(got.at(-1)));
+    await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_publish', nonce: 'n2', room, sessionDescription: { type: 'offer', sdp: 'v=0\r\n' + 'a=x\r\n'.repeat(10) }, tracks: [{ mid: '0', trackName: 'audio' }] } });
+    assert.equal(got.at(-1).type, 'chat_rtc_published');
+    await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_connected', room } });
+    const people = [...voice.rtcRooms.get(room).values()];
+    assert.equal(people.length, 1);
+    assert.deepEqual([people[0].principal, people[0].platform, people[0].name, people[0].virtual], ['d:62', 'discord', 'eli', true]);
+    assert.deepEqual([...voice.voiceIn.get(room).keys()], ['d:62']); // presence stays the bridge's (one entry, not two)
+    await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_join', room, nonce: 'n3' } }); // only the listed frames
+    assert.ok(!got.some(f => f.nonce === 'n3'));
+    await VB._test.onWorker({ t: 'leave', sock: 't1' });
+    assert.equal(voice.rtcRooms.get(room), undefined);
+    assert.deepEqual([...voice.voiceIn.get(room).keys()], ['d:62']); // still in the Discord channel
+    // op 4 from the worker goes out on the bridge's Discord gateway
+    await VB._test.onWorker({ t: 'op4', d: { guild_id: '111', channel_id: '224', self_mute: false, self_deaf: false } });
+    await until(() => voiceOps.some(d => d.channel_id === '224'));
+  } finally { voice.setFetch(null); }
+  // unlinking the channel takes the Discord people out
+  await alice.a.put(`/api/v1/bridge/servers/${sid}/channels/${vc}`, { platform: 'discord', ext_channel_id: null });
+  await wa.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 0);
+});
+
 test('channel settings: relink, pause, unlink (Manage server)', async () => {
   const p = `/api/v1/bridge/servers/${sid}`;
   assert.equal((await bob.a.get(p)).status, 403);
   let st = (await alice.a.put(`${p}/channels/${general}`, { platform: 'discord', ext_channel_id: '223' })).body;
   assert.equal(st.bridges[0].links[0].ext_channel_id, '223');
-  assert.equal((await alice.a.put(`${p}/channels/${general}`, { platform: 'discord', ext_channel_id: '224' })).body.error, 'channel_not_found'); // voice over there
+  assert.equal((await alice.a.put(`${p}/channels/${general}`, { platform: 'discord', ext_channel_id: '224' })).body.error, 'text_channels_only'); // voice over there
+  assert.equal((await alice.a.put(`${p}/channels/${general}`, { platform: 'discord', ext_channel_id: '999' })).body.error, 'channel_not_found');
   st = (await alice.a.patch(p, { platform: 'discord', enabled: false })).body;
   assert.equal(st.bridges[0].enabled, false);
   const n = execs().length;

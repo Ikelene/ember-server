@@ -9,9 +9,10 @@ const { err, log } = require('../util');
 
 const UA = 'Bonfire-Bridge/1.0 (+https://github.com/ikelene/velora)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-// what the bot needs in each server: see channels, read history, send, embed links, attach files, manage messages + webhooks
-const BOT_PERMS = String(1024 + 2048 + 8192 + 16384 + 32768 + 65536 + 536870912);
-const INTENTS = 1 | 512 | 32768; // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT
+// what the bot needs in each server: see channels, read history, send, embed links, attach files, manage messages + webhooks,
+// and for voice links connect + speak
+const BOT_PERMS = String(1024 + 2048 + 8192 + 16384 + 32768 + 65536 + 536870912 + 1048576 + 2097152);
+const INTENTS = 1 | 128 | 512 | 32768; // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | MESSAGE_CONTENT
 
 const DEFAULTS = {
   discord: {
@@ -120,6 +121,8 @@ class GatewayClient {
     ws.on('close', code => this.onClose(ws, code));
   }
   send(ws, o) { if (ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch { /* closing */ } } }
+  // a gateway op from outside (the voice bridge's op 4 voice state updates); false while not connected
+  sendOp(op, d) { if (!this.ws || this.ws.readyState !== 1 || this.state !== 'ready') return false; this.send(this.ws, { op, d }); return true; }
   onFrame(ws, m) {
     if (m.s != null) this.seq = m.s;
     if (m.op === 10) {
@@ -152,7 +155,7 @@ class GatewayClient {
         this.state = 'ready'; this.error = null; this.attempts = 0;
         log(`[bridge] ${this.p} gateway ready as ${this.user?.username || '?'}`);
       } else if (m.t === 'RESUMED') { this.state = 'ready'; this.error = null; this.attempts = 0; }
-      else if (/^MESSAGE_(CREATE|UPDATE|DELETE|DELETE_BULK)$/.test(m.t || '')) {
+      else if (/^(MESSAGE_(CREATE|UPDATE|DELETE|DELETE_BULK)|GUILD_(CREATE|DELETE)|VOICE_(STATE|SERVER)_UPDATE)$/.test(m.t || '')) {
         try { const r = this.onDispatch(this.p, m.t, m.d); if (r?.catch) r.catch(e => console.error(`[bridge] ${this.p} ${m.t}`, e.message)); } catch (e) { console.error(`[bridge] ${this.p} ${m.t}`, e.message); }
       }
     }

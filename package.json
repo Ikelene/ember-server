@@ -22,6 +22,9 @@
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
-    "sharp": "^0.33.5"
+    "@discordjs/voice": "^0.19.2",
+    "opusscript": "^0.1.1",
+    "sharp": "^0.33.5",
+    "werift": "^0.25.2"
   }
 }

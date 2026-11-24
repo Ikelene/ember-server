@@ -17,6 +17,7 @@ const { P } = require('../perms');
 const { err, now, clean, normalizeOrigin, log } = require('../util');
 
 const M = () => require('../messages');
+const VB = () => require('./voice-bridge');
 const W = () => require('../webhooks');
 const ZW = '\u200b';
 const RETENTION = 60 * 24 * 3600 * 1000; // id map rows live 60 days
@@ -251,6 +252,7 @@ function rememberOut(id) { recentOut.add(String(id)); setTimeout(() => recentOut
 
 function onEvent(p, t, d) {
   if (!PL.IDS.includes(p) || !d) return;
+  if (/^(GUILD_|VOICE_)/.test(t)) { if (p === 'discord') VB().onDispatch(t, d); return; } // voice links (voice-bridge.js)
   const key = `in:${p}:${d.channel_id}`;
   if (t === 'MESSAGE_CREATE') return enqueue(key, () => inbound(p, d));
   if (t === 'MESSAGE_UPDATE') {
@@ -332,6 +334,7 @@ function onPost(msg, ctx, meta) {
   if (meta.system || meta.webhook) return;
   const links = linksOfChannel(ctx.ch.id);
   if (!links.length) return;
+  if (ctx.ch.type === 'voice') return; // a voice link carries the voice only (voice-bridge.js)
   for (const link of links) {
     if (!link.enabled || link.platform === meta.bridged || !configured(link.platform)) continue;
     enqueue(`out:${ctx.ch.id}:${link.platform}`, () => outbound(link, ctx, msg));
@@ -422,23 +425,25 @@ async function status(me, sid) {
   store.ensure();
   const rows = db.all('SELECT * FROM bridge_guilds WHERE community_id = ? ORDER BY id', c.id);
   const bridges = await Promise.all(rows.map(async b => {
-    const links = db.all('SELECT bc.*, ch.cid FROM bridge_channels bc JOIN channels ch ON ch.id = bc.channel_id WHERE bc.bridge_id = ?', b.id);
+    const links = db.all('SELECT bc.*, ch.cid, ch.type FROM bridge_channels bc JOIN channels ch ON ch.id = bc.channel_id WHERE bc.bridge_id = ?', b.id);
     let ext = [], problem = null;
     if (!configured(b.platform)) problem = 'bridge_not_set_up';
     else {
       try {
         const chans = await guildThing(b.platform, b.guild_id, 'channels', true);
         const cats = new Map(chans.filter(x => x.type === 4).map(x => [String(x.id), x.name]));
-        ext = chans.filter(x => TEXTISH.includes(x.type)).sort((x, y) => x.position - y.position).map(x => ({ id: String(x.id), name: x.name, category: cats.get(String(x.parent_id)) || '' }));
+        const voiceOk = b.platform === 'discord';
+        ext = chans.filter(x => TEXTISH.includes(x.type) || (voiceOk && VB().VOICE_TYPES.includes(x.type))).sort((x, y) => x.position - y.position)
+          .map(x => ({ id: String(x.id), name: x.name, category: cats.get(String(x.parent_id)) || '', kind: TEXTISH.includes(x.type) ? 'text' : 'voice' }));
       } catch (e) { problem = e.status === 404 || e.status === 403 ? 'bot_not_in_server' : 'unreachable'; }
     }
     return {
       platform: b.platform, platform_name: PL.platform(b.platform)?.name, guild_id: b.guild_id, guild_name: b.guild_name, enabled: !!b.enabled, problem,
-      links: links.map(l => ({ cid: l.cid, ext_channel_id: l.ext_channel_id, ext_name: l.ext_name, hook: !!l.hook_id })),
+      links: links.map(l => ({ cid: l.cid, ext_channel_id: l.ext_channel_id, ext_name: l.ext_name, hook: !!l.hook_id, kind: l.type === 'voice' ? 'voice' : 'text' })),
       ext_channels: ext,
     };
   }));
-  return { bridges, bridge: bridges[0] || null, links: bridges[0]?.links || [], ext_channels: bridges[0]?.ext_channels || [] };
+  return { bridges, bridge: bridges[0] || null, links: bridges[0]?.links || [], ext_channels: bridges[0]?.ext_channels || [], voice_links: VB().canRun() };
 }
 const norm = n => String(n).toLowerCase().replace(/[^a-z0-9]/g, '');
 async function link(me, sid, p, gid, automap = true) {
@@ -451,14 +456,16 @@ async function link(me, sid, p, gid, automap = true) {
   try { g = await guildThing(p, gid, '', true); } catch (e) { if (e.status === 404 || e.status === 403) throw err('bot_not_in_server', 404); throw err('platform_unreachable', 502); }
   const id = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)', c.id, p, String(gid), clean(g.name, 100), me.id, now()).lastInsertRowid);
   if (automap) { // same name (lowercase, letters and digits only) = linked
-    const chans = (await guildThing(p, gid, 'channels', true).catch(() => [])).filter(x => TEXTISH.includes(x.type));
-    for (const ch of snap.channels.filter(x => (x.type || 'text') === 'text')) {
-      const m = chans.find(x => norm(x.name) === norm(ch.name));
+    const all = await guildThing(p, gid, 'channels', true).catch(() => []);
+    for (const ch of snap.channels.filter(x => (x.type || 'text') === 'text' || (p === 'discord' && x.type === 'voice'))) {
+      const kinds = ch.type === 'voice' ? VB().VOICE_TYPES : TEXTISH;
+      const m = all.find(x => kinds.includes(x.type) && norm(x.name) === norm(ch.name));
       if (m && !linkByExt(p, m.id)) db.run('INSERT OR IGNORE INTO bridge_channels (channel_id, bridge_id, ext_channel_id, ext_name) VALUES (?, ?, ?, ?)', ch.id, id, String(m.id), clean(m.name, 100));
     }
-    for (const l of db.all(`${LINK_SQL} WHERE bc.bridge_id = ?`, id)) await ensureHook(l).catch(e => console.error('[bridge] hook', e.message));
+    for (const l of db.all(`${LINK_SQL} JOIN channels ch ON ch.id = bc.channel_id WHERE bc.bridge_id = ? AND ch.type != 'voice'`, id)) await ensureHook(l).catch(e => console.error('[bridge] hook', e.message));
   }
   C.channelsChanged(c);
+  VB().linksChanged();
   return status(me, sid);
 }
 function bridgeRow(c, p) {
@@ -473,6 +480,7 @@ async function setEnabled(me, sid, p, on) {
   if (!b) throw err('not_bridged');
   db.run('UPDATE bridge_guilds SET enabled = ? WHERE id = ?', on ? 1 : 0, b.id);
   C.channelsChanged(c);
+  VB().linksChanged();
   return status(me, sid);
 }
 async function unlink(me, sid, p) {
@@ -484,6 +492,7 @@ async function unlink(me, sid, p) {
   }
   db.run('DELETE FROM bridge_guilds WHERE id = ?', b.id);
   C.channelsChanged(c);
+  VB().linksChanged();
   return status(me, sid);
 }
 async function setChannel(me, sid, cid, p, extId) {
@@ -497,17 +506,21 @@ async function setChannel(me, sid, cid, p, extId) {
   if (!extId) db.run('DELETE FROM bridge_channels WHERE channel_id = ? AND bridge_id = ?', ch.id, b.id);
   else {
     needPlatform(b.platform);
-    if ((ch.type || 'text') !== 'text') throw err('text_channels_only');
+    const isVoice = ch.type === 'voice';
+    if (isVoice && b.platform !== 'discord') throw err('text_channels_only');
+    if (!isVoice && (ch.type || 'text') !== 'text') throw err('text_channels_only');
     const chans = await guildThing(b.platform, b.guild_id, 'channels', true).catch(e => { throw err(e.status === 404 || e.status === 403 ? 'bot_not_in_server' : 'platform_unreachable', e.status === 404 ? 404 : 502); });
-    const x = chans.find(y => String(y.id) === String(extId) && TEXTISH.includes(y.type));
-    if (!x) throw err('channel_not_found', 404);
+    const there = chans.find(y => String(y.id) === String(extId));
+    const x = there && (isVoice ? VB().VOICE_TYPES : TEXTISH).includes(there.type) ? there : null;
+    if (!x) throw there ? err(isVoice ? 'voice_channels_only' : 'text_channels_only') : err('channel_not_found', 404);
     const taken = linkByExt(b.platform, x.id);
     if (taken && taken.channel_id !== ch.id) throw err('already_linked');
     if (String(old?.ext_channel_id) !== String(x.id)) db.run('REPLACE INTO bridge_channels (channel_id, bridge_id, ext_channel_id, ext_name) VALUES (?, ?, ?, ?)', ch.id, b.id, String(x.id), clean(x.name, 100));
     const l = db.get(`${LINK_SQL} WHERE bc.channel_id = ? AND bc.bridge_id = ?`, ch.id, b.id);
-    try { await ensureHook(l); } catch (e) { throw err(e.status === 403 ? 'bot_needs_webhooks' : 'bridge_failed'); }
+    if (!isVoice) { try { await ensureHook(l); } catch (e) { throw err(e.status === 403 ? 'bot_needs_webhooks' : 'bridge_failed'); } }
   }
   C.channelsChanged(c);
+  VB().linksChanged();
   return status(me, sid);
 }
 
@@ -518,6 +531,7 @@ function init() {
   const M_ = M();
   unhook.forEach(f => f()); unhook = [M_.onPost(onPost), M_.onEdit(onEdit), M_.onDelete(onDelete)];
   for (const p of PL.IDS) if (configured(p)) startClient(p);
+  VB().init();
   clearInterval(pruneTimer);
   pruneTimer = setInterval(() => { try { db.run('DELETE FROM bridge_msgs WHERE created_at < ?', now() - RETENTION); } catch { /* closed */ } }, 6 * 3600e3);
   pruneTimer.unref();
@@ -526,6 +540,7 @@ function init() {
 function shutdown() {
   clearInterval(pruneTimer);
   for (const p of [...clients.keys()]) stopClient(p);
+  VB().shutdown();
   unhook.forEach(f => f()); unhook = [];
   log('[bridge] stopped');
 }
@@ -533,5 +548,5 @@ const idle = () => Promise.all([...queues.values()]); // tests: wait for queued 
 
 module.exports = {
   init, shutdown, onEvent, onPost, onEdit, onDelete, channelTag, settingsView, saveSettings, platforms, guilds, status, link, setEnabled, unlink, setChannel,
-  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo,
+  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo, hostAvatar,
 };

@@ -60,12 +60,15 @@ const voiceIn = new Map();   // room -> Map(userId -> { id, username, muted, dea
 const rtcRooms = new Map();  // room -> Map(socket -> participant); socket identity keeps one tab from removing another
 const rtcBySocket = new WeakMap();
 const rtcOf = room => { if (!rtcRooms.has(room)) rtcRooms.set(room, new Map()); return rtcRooms.get(room); };
+// people bridged in from another platform (src/bridge/voice-bridge.js): the server itself carries their audio, so they have
+// no account here. They come with platform + a display name + a picture; clients show those instead of a member card.
+const extOf = x => (x?.platform ? { platform: x.platform, name: x.name, avatar: x.avatar || null } : {});
 const rtcPublic = room => {
   const live = [...(rtcRooms.get(room) || new Map()).values()].filter(p => p.connected);
   return live.map(p => {
     const seen = new Map(); // everyone subscribed to this person's screen track (one entry per account)
     for (const q of live) if (q !== p && q.userId !== p.userId && (q.subscriptions || []).some(x => x.sessionId === p.publish && x.trackName === 'screen')) seen.set(q.userId, { userId: q.principal, username: q.username });
-    return { userId: p.principal, username: p.username, tracks: p.tracks, watchers: [...seen.values()] };
+    return { userId: p.principal, username: p.username, ...extOf(p), tracks: p.tracks, watchers: [...seen.values()] };
   });
 };
 const rtcBroadcast = room => { const payload = { type: 'chat_rtc_room', room, people: rtcPublic(room) }; for (const p of rtcOf(room).values()) gw().send(p.sock, payload); };
@@ -76,9 +79,11 @@ function voiceChannelOf(room) {
   const ch = m && db.get("SELECT * FROM channels WHERE cid = ? AND type = 'voice'", m[1]);
   return ch || null;
 }
-const voiceUsers = room => [...(voiceIn.get(room) || new Map()).values()].map(v => ({ id: v.id, username: v.username, muted: v.muted, deafened: v.deafened, since: v.since }));
+const voiceUsers = room => [...(voiceIn.get(room) || new Map()).values()].map(v => ({ id: v.id, username: v.username, ...extOf(v), muted: v.muted, deafened: v.deafened, since: v.since }));
 const stateOf = channels => Object.fromEntries(channels.filter(c => c.type === 'voice').map(c => [c.cid, voiceUsers(`bf_${c.cid}`)]));
+const roomWatchers = new Set(); // fn(room): the bridge follows who is in a room
 function voiceChanged(room) {
+  for (const fn of roomWatchers) { try { fn(room); } catch (e) { console.error('[voice] watcher', e.message); } }
   const ch = voiceChannelOf(room);
   if (!ch) return;
   const c = db.get('SELECT * FROM communities WHERE id = ?', ch.community_id);
@@ -130,7 +135,7 @@ function drop(p) {
   if (!people.size) rtcRooms.delete(p.room); else rtcBroadcast(p.room);
   // only drop the voice-state entry when no other tab of the same account is still connected in the room
   const stillThere = [...(people?.values() || [])].some(q => q.userId === p.userId && q.connected);
-  if (p.connected && !stillThere) voiceLeft(p, p.room);
+  if (p.connected && !stillThere && !p.virtual) voiceLeft(p, p.room);
   const be = backendOf(p);
   Promise.allSettled([be.closeSession(p.publish), p.receive && be.closeSession(p.receive)]).catch(() => {});
 }
@@ -221,7 +226,7 @@ async function handle(sock, me, msg, reply) {
     case 'chat_rtc_connected': {
       const p = rtcBySocket.get(sock);
       if (!p || p.room !== String(msg.room || '')) throw err('not_in_voice', 400);
-      if (!p.connected) { p.connected = true; rtcBroadcast(p.room); voiceJoined(p, p.room); }
+      if (!p.connected) { p.connected = true; rtcBroadcast(p.room); if (!p.virtual) voiceJoined(p, p.room); }
       return true;
     }
     case 'chat_rtc_subscribe': {
@@ -288,8 +293,44 @@ async function handle(sock, me, msg, reply) {
   }
 }
 
+// ---------- bridged participants (src/bridge/voice-bridge.js) ----------
+// The bridge's pseudo sockets join without an account or membership check: the bridge only uses rooms of channels the
+// server's Manage server people linked. person = { principal, username, platform, name, avatar } (no account behind it).
+// After this, the usual chat_rtc_publish / _connected / _subscribe / _answer frames go through handle() like a bot's.
+async function virtualJoin(sock, person, room) {
+  if (!voiceChannelOf(room)) throw err('not_allowed', 403);
+  const backend = backendName();
+  if (!backend) throw err('voice_unavailable', 503);
+  leave(sock);
+  let publish, receive = null, ice;
+  if (backend === 'direct') [publish, receive, ice] = await Promise.all([R.createSession(), R.createSession(), iceServers()]);
+  else { ice = await broker().R.iceServers(); publish = await broker().R.createSession(); }
+  if (sock.readyState !== 1) { const be = backendOf({ backend }); Promise.allSettled([be.closeSession(publish), receive && be.closeSession(receive)]).catch(() => {}); throw err('cancelled', 409); }
+  const p = { sock, userId: person.principal, principal: person.principal, username: person.username, ...extOf(person), virtual: true, room, publish, receive, backend, tracks: [], subscriptions: [], connected: false, resume: null };
+  rtcBySocket.set(sock, p); rtcOf(room).set(sock, p);
+  return { room, iceServers: ice, people: rtcPublic(room) };
+}
+// someone over there is (entry) / isn't (null) in the linked voice channel: shown in the room like anyone here
+function setVirtualPresence(room, entry, key) {
+  if (entry) {
+    if (!voiceIn.has(room)) voiceIn.set(room, new Map());
+    const was = voiceIn.get(room).get(entry.principal);
+    const next = { id: entry.principal, username: entry.username, ...extOf(entry), muted: !!entry.muted, deafened: !!entry.deafened, since: was?.since || Date.now() };
+    if (was && JSON.stringify(was) === JSON.stringify(next)) return;
+    voiceIn.get(room).set(entry.principal, next);
+  } else {
+    const m = voiceIn.get(room);
+    if (!m?.delete(key)) return;
+    if (!m.size) voiceIn.delete(room);
+  }
+  voiceChanged(room);
+}
+// the real people (with an account here) in a room, connected or not yet
+const realPeopleIn = room => [...(voiceIn.get(room)?.values() || [])].filter(v => !v.platform);
+const watchRooms = fn => { roomWatchers.add(fn); return () => roomWatchers.delete(fn); };
+
 // the voice room this socket is in (any state, incl. still connecting) and every socket in a room: used by the soundboard
 const roomOf = sock => rtcBySocket.get(sock)?.room || null;
 const socketsIn = room => [...(rtcRooms.get(room)?.keys() || [])];
 
-module.exports = { handle, leave, park, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf };
+module.exports = { handle, leave, park, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf, virtualJoin, setVirtualPresence, realPeopleIn, watchRooms };
