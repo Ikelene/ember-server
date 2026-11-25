@@ -174,6 +174,20 @@ The principal string is **the** user id in every instance payload: authors, memb
 
 A third principal kind is the **bot** (`b:<n>`, `"kind": "bot"`): its user object carries `"bot": true` (clients show the BOT tag). Bots never hold sessions or log in; they use bot tokens (§14).
 
+### 4.1 Account profiles (local accounts)
+
+A server with its own accounts (`accounts_mode: "local"`) advertises `features.account_profiles`: each local account has a profile kept on that server, made of a display name, picture, banner, name colour, bio and pronouns. (A Velora account's profile comes from Velora, see 5d; these routes answer `local_accounts_only` (400) for one.)
+
+- `GET /api/v1/me/profile` -> `{ profile: { display_name, pfp, banner, color, bio, pronouns }, sync, user }`. Every field is `null` when unset; `user` is the account's user object.
+- `PATCH /api/v1/me/profile` `{ display_name?, bio?, pronouns?, color?, sync? }` -> the same shape. `null` or `''` clears a field (`display_name` goes back to the username). `display_name` is up to 32 characters, bio up to 300, pronouns up to 40, `color` is `#rrggbb`. Errors: `invalid_display_name`, `display_name_too_long`, `bio_too_long`, `pronouns_too_long`, `invalid_color`, `invalid_sync`.
+- `POST /api/v1/me/profile/pfp` or `/banner` (multipart image, up to 4 MB) and `DELETE` the same path. The picture is stored on the server; the one it replaces is deleted.
+
+The display name and picture are the user object's `display_name` and `pfp`, so they show everywhere a user appears; a change emits `chat_identity_update` like a Velora profile change does. The whole look also rides on the member object's `profile` (6.7), with anything the person set for that server only on top, and a change emits `chat_member_update`.
+
+**Following a Nookara profile.** The server never talks to Velora for this. A client that is signed in to both copies the person's Nookara profile over with the routes above (text fields with `PATCH`, the pictures downloaded and uploaded again so the server holds its own copy). `sync` is where it remembers that the profile should keep following: `PATCH { sync: { velora_id, stamp } }` stores `{ velora_id, stamp, at }` (`stamp`: an opaque string of up to 128 characters the client derives from the Nookara profile it copied), `PATCH { sync: null }` switches it off. A client signed in to the Nookara account `sync.velora_id` compares the stamp on connect and when that profile changes, and copies again when it differs. A client signed in to another Nookara account, or to none, leaves the profile alone.
+
+A moderator's profile reset (6.7, Manage users) on a local account clears its account profile too: name back to the username, pictures deleted, `sync` off.
+
 ---
 
 ## 5. Claiming and instance administration
@@ -462,7 +476,7 @@ Servers that advertise `features.server_profiles` let a member look different on
 - `DELETE /api/v1/servers/:sid/members/@me/profile`: everything back to the global profile, nickname included. No permission needed.
 - `POST /api/v1/servers/:sid/members/:uid/profile/reset`: Manage users, and above them (never the owner), resets someone's. It is audit-logged (`member_profile_reset`), and a Velora account is told through Velora's notification inbox (§12.13).
 
-The member object (member lists, `chat_member_update`) carries `profile: { pfp?, banner?, color?, bio?, pronouns? }` with only the fields that are set, and no `profile` at all for someone using their global one. Clients show those instead of the person's account profile on this server (avatars and name colours in the member list and messages, and their profile card).
+The member object (member lists, `chat_member_update`) carries `profile: { pfp?, banner?, color?, bio?, pronouns? }` with only the fields that are set, and no `profile` at all for someone using their global one. On a server with its own accounts a local account's account profile (4.1) is what sits underneath: the member's `profile` is that, with the fields set for this server only on top. Clients show those instead of the person's account profile on this server (avatars and name colours in the member list and messages, and their profile card).
 
 ## 7. Gateway (WebSocket)
 

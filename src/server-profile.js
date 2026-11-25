@@ -102,6 +102,8 @@ function reset(sid, me, targetPrincipal) {
   if (snap.nick(t.id)) db.run('UPDATE members SET nick = NULL WHERE community_id = ? AND user_id = ?', c.id, t.id);
   write(c, t.id, null);
   if (prof) dropFiles(prof.pfp, prof.banner);
+  // a moderator resetting one of this server's own accounts: its account profile goes too (there is no global one behind it)
+  if (!self) require('./account-profile').reset(t);
   if (!self) {
     require('./audit').record(c, me, 'member_profile_reset', { target: { kind: 'user', id: t.principal, name: t.username } });
     if (had) tell(c, t);
@@ -117,4 +119,4 @@ function tell(c, t) {
     .catch(e => { if (e.status !== 429 && e.code !== 'velora_unreachable') console.error('[server profile] notice', e.code || e.message); });
 }
 
-module.exports = { parse, read, get, update, setImage, clearOwn, reset, BIO_MAX, PRONOUNS_MAX };
+module.exports = { parse, read, get, update, setImage, clearOwn, reset, dropFiles, BIO_MAX, PRONOUNS_MAX };

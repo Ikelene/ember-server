@@ -30,7 +30,7 @@ function discovery() {
     velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json`, signing_issuers: require('../signing').issuers() } : null,
     claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
-    features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true },
+    features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
     managed: managed.view(), // Velora-hosted plan + limits (PROTOCOL §19), null on a normal instance
@@ -81,6 +81,18 @@ function register(app, { restart }) {
   });
   app.post('/api/v1/auth/logout', req => { auth.revokeSession(auth.bearer(req)); return { ok: true }; });
   app.get('/api/v1/me', req => ({ user: auth.userView(req.user), instance_admin: auth.isAdmin(req.user), instance_owner: auth.isOwner(req.user), scopes: req.scopes }));
+  // account profiles (§4.1): a local account's name, picture, banner, colour, bio and pronouns, kept on this server
+  const AP = () => require('../account-profile');
+  app.get('/api/v1/me/profile', req => AP().get(req.user));
+  app.patch('/api/v1/me/profile', req => AP().update(req.user, req.body || {}));
+  app.post('/api/v1/me/profile/:kind', async req => {
+    if (!['pfp', 'banner'].includes(req.params.kind)) throw err('not_found', 404);
+    if (req.user.kind !== 'local') throw err('local_accounts_only', 400);
+    const { buffer } = await require('../uploads').readMultipart(req, { maxBytes: 4 * 1024 * 1024 });
+    if (!buffer) throw err('no_file');
+    return AP().setImage(req.user, req.params.kind, buffer);
+  });
+  app.delete('/api/v1/me/profile/:kind', req => AP().setImage(req.user, req.params.kind, null));
 
   // ---- claim + settings + admins ----
   app.post('/api/v1/instance/claim', req => {

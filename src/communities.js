@@ -177,12 +177,14 @@ function memberView(snap, u) {
   const isOwner = snap.isOwner(u.id);
   const ids = snap.roleIds(u.id);
   const nick = snap.nick(u.id);
+  // their look here: this server's own account profile (local accounts, §4.1), with what they set on this server only on top (§6.7)
+  const ap = require('./account-profile').look(u), sp = u.kind !== 'bot' ? snap.profile(u.id) : null;
   return {
     ...userView(u), ...(nick ? { display_name: nick, global_display_name: u.display_name } : {}), nick,
     color: null, role: perms.roleLabel(isOwner, snap.perms(u.id)),
     roles: snap.roles.filter(r => ids.has(r.id)).map(r => r.rid), presence: u.kind === 'bot' ? require('./bot-presence').presence.status(u.id) : require('./gateway').present(u.id) ? 'online' : 'offline', joined_at: u.joined_at ?? undefined,
     timeout_until: require('./moderation').timeoutUntil(snap.c, u.id) || undefined,
-    ...(u.kind !== 'bot' && snap.profile(u.id) ? { profile: snap.profile(u.id) } : {}), // their look on this server only (§6.7)
+    ...(ap || sp ? { profile: { ...ap, ...sp } } : {}),
   };
 }
 

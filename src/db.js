@@ -234,6 +234,8 @@ const MIGRATIONS = [
   `UPDATE roles SET permissions = permissions | 8192 WHERE is_default = 1;`,
   // v19: a member's profile on this server only (server-profile.js): JSON { pfp, banner, color, bio, pronouns }
   `ALTER TABLE members ADD COLUMN profile TEXT;`,
+  // v20: a local account's own profile (account-profile.js): JSON { banner, color, bio, pronouns, sync } (name + picture are display_name / pfp)
+  `ALTER TABLE users ADD COLUMN account_profile TEXT;`,
 ];
 
 function open() {
