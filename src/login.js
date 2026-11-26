@@ -156,7 +156,7 @@ async function callback(req, res) {
   }
 
   let user = link ? auth.userById(link.user_id) : null;
-  if (link) db.run('UPDATE login_links SET email = ?, email_verified = ? WHERE method_id = ? AND subject = ?', idn.email, idn.email_verified ? 1 : 0, id, idn.subject);
+  if (link && idn.email) db.run('UPDATE login_links SET email = ?, email_verified = ? WHERE method_id = ? AND subject = ?', idn.email, idn.email_verified ? 1 : 0, id, idn.subject);
   // the same verified email as another login of exactly one account: only when the admin switched that on, and only when
   // this provider says the address is verified too. An email alone never opens an account.
   if (!user && config.get().accounts.link_verified_emails && idn.email && idn.email_verified) {
