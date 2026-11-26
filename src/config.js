@@ -7,6 +7,7 @@ const { EventEmitter } = require('events');
 const { err, normalizeOrigin } = require('./util');
 const managed = require('./managed');
 const AS = require('./account-settings');
+const FS = require('./federation/settings');
 
 const events = new EventEmitter();
 let DATA_DIR = path.resolve(env('DATA') || './data');
@@ -110,6 +111,7 @@ function sanitize(p, loose = false) {
     const d = typeof p.domain === 'string' ? p.domain.trim().toLowerCase() : null;
     if (p.domain === null || d === '') out.domain = null; else if (d && DOMAIN.test(d)) out.domain = d; else bad('invalid_domain');
   }
+  if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
   if (p.creation !== undefined) {
     if (p.creation && typeof p.creation === 'object' && !Array.isArray(p.creation)) {
       const c = {}, v = p.creation;
@@ -145,6 +147,7 @@ function get() {
   }
   // the accounts settings (PROTOCOL §4a); accounts_mode and registration are what older clients read, derived from them
   v.accounts = AS.complete(data.accounts || {});
+  v.federation = FS.complete(data.federation);
   if (forced && AS.modeOf(v.accounts) !== forced) v.accounts = AS.withMode(v.accounts, forced, v.nookara_url);
   v.accounts_mode = AS.modeOf(v.accounts);
   v.registration = AS.legacyRegistration(v.accounts);
@@ -167,6 +170,7 @@ function update(patch) {
   }
   if (clean.youtube) clean.youtube = { ...(data.youtube || {}), ...clean.youtube };
   if (clean.creation) clean.creation = { ...(data.creation || {}), ...clean.creation };
+  if (clean.federation) clean.federation = FS.merge(data.federation || {}, clean.federation);
   // the old accounts_mode / registration settings edit the accounts block (a value that only repeats what the block already
   // says changes nothing: old admin pages send whole forms back)
   let acc = AS.complete(data.accounts || {});

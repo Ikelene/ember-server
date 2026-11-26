@@ -98,7 +98,7 @@ function sanitize(p, { loose = false, allowHttp = false } = {}) {
       if (r.mode !== undefined) { if (REMOTE_MODES.includes(r.mode)) v.mode = r.mode; else bad('invalid_remote_accounts'); }
       if (r.list !== undefined) {
         const list = Array.isArray(r.list) ? r.list.map(x => (typeof x === 'string' ? x.trim().toLowerCase() : '')) : null;
-        if (list && list.length <= 1000 && list.every(x => HOST.test(x))) v.list = [...new Set(list)]; else bad('invalid_remote_accounts');
+        if (list && list.length <= 1000 && list.every(x => HOST.test(x.replace(/^\*\./, '')))) v.list = [...new Set(list)]; else bad('invalid_remote_accounts');
       }
       out.remote_accounts = v;
     } else bad('invalid_remote_accounts');
