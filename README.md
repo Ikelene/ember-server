@@ -102,6 +102,8 @@ Unless `velora_registration` is `off`, the instance registers itself with Velora
 
 Bring your **own bot** for Discord and/or Fluxer: create a bot (Discord: enable the *Message Content* intent), then save its token as an instance admin with `PATCH /api/v1/bridge/settings {"discord":{"token":"…"}}` (or `fluxer`). The token is checked against `/users/@me`, stored in the database (never in `config.json`), and never shown again (`GET` returns `********` + its last 4 characters; `null` removes it). The instance then keeps a gateway connection for that bot. Add the bot to your server with the invite link from `GET /api/v1/bridge/platforms` (it needs View channels, Send, Read history, Embed links, Attach files, Manage messages and **Manage webhooks**), and link it in Server settings > Bridge (`PUT /api/v1/bridge/servers/:sid`, Manage server): channels with the same name are linked automatically, others per channel. Messages, replies, edits and deletes go both ways; people over there show up with their name and picture, Ember people post over there through a "Ember bridge" webhook. PROTOCOL §16.
 
+**Matrix** works the same way with an ordinary Matrix account as the bot (any homeserver, no application service): save its homeserver address and access token with `PATCH /api/v1/bridge/settings {"matrix":{"homeserver":"https://matrix.org","token":"..."}}` (or `BONFIRE_MATRIX_HOMESERVER` / `BONFIRE_MATRIX_TOKEN`), invite the bot to rooms, then link a room to a text channel. The bot posts Ember messages as `name: text`; encrypted rooms can't be bridged. See PROTOCOL 16.5.
+
 A `logs` channel can also bridge a **CloudLink** chat (`config: {"mode":"cloudlink","url":"wss://…","room":"","username":""}`; at most 3 per community; public `ws`/`wss` servers on ports 80 / 443 only). PROTOCOL §17.
 
 ### Minecraft (Ember Link)
@@ -172,6 +174,7 @@ Online members get the `chat_mention` gateway event themselves; `notifyOffline` 
 
 - **Channel types** `text`, `voice`, `logs`, `welcome` (join / leave notices), `link`, `roles` (self-assign shop; priced roles are paid with Velora credits), `starboard` (⭐ threshold reposting), `game` (Minecraft). PROTOCOL §6.1.
 - **Discord / Fluxer bridge** with your own bot: messages, replies, edits, deletes, pictures both ways, auto-linking channels by name. §16.
+- **Matrix bridge** with your own bot account on any homeserver: messages, replies, edits, deletes and files both ways in unencrypted rooms. §16.5.
 - **CloudLink bridge** in logs channels (gmsg both ways, `!online`, SSRF-guarded). §17.
 - **Ember Link (Minecraft)**: `bonfire server <url>` connects a server; join-info card, live console with audit log, synced chat and join / death / advancement lines. §18.
 - **Webhooks**: Discord-compatible `POST /api/v1/webhooks/:wid/:token` (embeds, files, `?wait=true`, 30/min per hook). §13.

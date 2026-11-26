@@ -1,5 +1,5 @@
 'use strict';
-// External bridges: Discord / Fluxer (bridge.js) and CloudLink (cloudlink.js). index.js calls init() at boot and
+// External bridges: Discord / Fluxer (bridge.js), Matrix (matrix.js, through bridge.js) and CloudLink (cloudlink.js). index.js calls init() at boot and
 // register(app) for the routes (PROTOCOL §16, §17); communities.channelView reads channelTag().
 const bridge = require('./bridge');
 const cloudlink = require('./cloudlink');
@@ -44,6 +44,6 @@ function register(real) {
 }
 
 const channelTag = channelId => bridge.channelTag(channelId);
-const features = () => { if (!managed.allows('bridges')) return false; const PL = require('./platform'); return { discord: !!PL.tokenOf('discord'), fluxer: !!PL.tokenOf('fluxer'), cloudlink: true }; };
+const features = () => { if (!managed.allows('bridges')) return false; const PL = require('./platform'); return { discord: !!PL.tokenOf('discord'), fluxer: !!PL.tokenOf('fluxer'), matrix: require('./matrix').configured(), cloudlink: true }; };
 
 module.exports = { init, shutdown, register, channelTag, features, bridge, cloudlink };
