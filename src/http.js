@@ -14,7 +14,9 @@ const CORS = {
 };
 
 class App {
-  constructor({ trustProxy = false } = {}) { this.routes = []; this.trustProxy = trustProxy; this.fallbacks = []; }
+  constructor({ trustProxy = false } = {}) { this.routes = []; this.trustProxy = trustProxy; this.fallbacks = []; this.corsRules = []; }
+  // paths under `prefix` answer cross-origin only to the origins allowed(origin) accepts (everything else stays open to any origin)
+  cors(prefix, allowed) { this.corsRules.push({ prefix, allowed }); }
   add(method, pattern, opts, fn) {
     if (typeof opts === 'function') { fn = opts; opts = {}; }
     const keys = [];
@@ -37,10 +39,16 @@ class App {
   async handle(req, res) {
     for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { return this.send(res, 400, { error: 'bad_request' }); }
     const pathname = url.pathname;
+    const rule = this.corsRules.find(r => pathname === r.prefix || pathname.startsWith(r.prefix.endsWith('/') ? r.prefix : r.prefix + '/'));
+    if (rule) {
+      const origin = req.headers.origin;
+      res.setHeader('Vary', 'Origin');
+      if (origin && rule.allowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin); else res.removeHeader('Access-Control-Allow-Origin');
+    }
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     try {
       for (const fb of this.fallbacks) if (fb(req, res, pathname)) return;
       let matched = false;
@@ -50,7 +58,7 @@ class App {
         matched = true;
         if (r.method !== req.method && !(r.method === 'GET' && req.method === 'HEAD')) continue;
         // read-only mode (PROTOCOL §19.5): nothing but reading, signing in and the owner's export (a GET) gets through
-        if (managed.readOnly() && req.method !== 'GET' && req.method !== 'HEAD' && !pathname.startsWith('/api/v1/auth/')) throw err('read_only', 403);
+        if (managed.readOnly() && req.method !== 'GET' && req.method !== 'HEAD' && !pathname.startsWith('/api/v1/auth/') && !pathname.startsWith('/api/v2/auth/') && !/^\/login(\/|$)/.test(pathname)) throw err('read_only', 403);
         req.params = {}; r.keys.forEach((k, i) => { try { req.params[k] = decodeURIComponent(m[i + 1]); } catch { req.params[k] = m[i + 1]; } });
         req.query = Object.fromEntries(url.searchParams);
         req.ip = this.ip(req);
@@ -65,7 +73,7 @@ class App {
           if (r.opts.owner && !auth.isOwner(s.user)) throw err('owner_only', 403);
         }
         req.body = {};
-        if (!/^multipart\//i.test(req.headers['content-type'] || '') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) req.body = await readJson(req);
+        if (!/^multipart\//i.test(req.headers['content-type'] || '') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) req.body = await readJson(req, r.opts.form);
         const out = await r.fn(req, res);
         if (!res.headersSent && !res.writableEnded) this.send(res, 200, out === undefined ? { ok: true } : out);
         return;
@@ -84,7 +92,8 @@ class App {
   }
 }
 
-function readJson(req) {
+// form: the route also takes an html form post (application/x-www-form-urlencoded)
+function readJson(req, form = false) {
   return new Promise((resolve, reject) => {
     const type = req.headers['content-type'] || '';
     const chunks = []; let n = 0, dead = false;
@@ -93,6 +102,7 @@ function readJson(req) {
       if (dead) return;
       const text = Buffer.concat(chunks).toString('utf8');
       if (!text.trim()) return resolve({});
+      if (form && /^application\/x-www-form-urlencoded/i.test(type)) return resolve(Object.fromEntries(new URLSearchParams(text)));
       if (!/json/i.test(type)) return resolve({});
       try { const v = JSON.parse(text); resolve(v && typeof v === 'object' ? v : {}); } catch { reject(err('invalid_json', 400)); }
     });
