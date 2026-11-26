@@ -143,6 +143,8 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 - `protocol` stays `1` for old clients; `protocol_version: 2` says the homeserver hosts many servers (§5a).
 - `homeserver` is the homeserver itself: its `domain` (the part after `@` in a server address) and its own `name` / `description` / `icon_url` (the same values as the top-level ones).
 - `communities` are the **listed** servers only; `communities_count` counts all of them.
+- `creation: { mode, per_account }`: who may create a server here (`admins` / `allowlist` / `request` / `anyone`) and how many one account may own (`null` = no cap), so a client can hide homeservers its user cannot create on. `403 creation_limit` carries `{ limit, used }`.
+- `jwks_uri` and `federation`: cross-homeserver sign-in (§4b).
 - `community` is for protocol 1 clients, which know one server per instance: the only server when there is exactly one (listed or not), else the oldest listed one, else the oldest, or `null` when there is none.
 - `name` / `description` / `icon_url` are the homeserver's own; a server has its own (they are no longer mirrored).
 - `instance_key` / `instance_id` are the instance's relay key (§12.1). Nookara reads them here to check that a registering key controls the url.
@@ -218,7 +220,7 @@ A homeserver hosts accounts (`username@domain`) and many servers. Signing in hap
 ```
 - `hosts_accounts`: accounts live here (what `accounts_mode: "local"` meant). `false` is what `accounts_mode: "nookara"` meant: accounts come from elsewhere (`remote_accounts`), and sign-in is still §2.2 / §4 for now.
 - `registration`: only `open` lets anyone make an account (and anyone may while the homeserver is unclaimed, as before). `invite` and `approval` are stored and shown but act like `closed` for now.
-- `remote_accounts`: which other homeservers' accounts are let in. Stored and shown; enforced in a later step.
+- `remote_accounts`: which other homeservers' accounts are let in (§4b). `list` entries: `example.org` is that domain only, `*.example.org` everything under it.
 - `login_methods`: the ways to sign in. `id` is `[a-z0-9][a-z0-9_-]{0,31}`, unique; at most one `password` method; at most 20. `kind: "nookara"` is OpenID Connect with `issuer` = `nookara_url` and scopes `openid profile`. Optional per method: `token_auth` (`"basic"` | `"post"`: how the client secret is sent to the token endpoint; from discovery for OpenID Connect, `post` by default for `oauth2`) and `pkce: false` (leave PKCE out for a provider that refuses it). Field names may be dotted paths (`data.id`).
 - While accounts are hosted, at least one method must be enabled (`400 no_login_method`). With the password method switched off, `/api/v1/auth/login` and `/register` answer `403 password_login_disabled`.
 - `ember_clients` (top level of `config.json`): the web origins an Ember client may be served from. Default `["https://nookara.cc", "https://canopy.ikelene.net", "https://ember.nookara.cc"]`; this server's own `public_url` origin always counts as well.
@@ -288,6 +290,69 @@ Both answer
 
 ---
 
+### 4b. Cross-homeserver sign-in and federation safety
+
+An account lives on one homeserver (`alice@a.example`, an account of the homeserver whose `domain` is `a.example`) and can use servers on another (B). A signs a short token saying "this is my account, for B"; B checks it against the keys A publishes and opens a session for a **remote user**. No passwords cross, and B never talks to A about anything but its discovery document and its keys.
+
+**Discovery** (both sides) adds:
+
+```jsonc
+"jwks_uri": "https://a.example/.well-known/ember/jwks.json",
+"federation": {
+  "remote_token_url": "https://a.example/api/v2/auth/remote-token", // null when this homeserver hosts no accounts
+  "remote_url": "https://a.example/api/v2/auth/remote",             // where another homeserver's token becomes a session here
+  "accepts_remote": "none" | "all" | "allowlist" | "blocklist"       // accounts.remote_accounts.mode
+}
+```
+
+**Signing keys.** `GET /.well-known/ember/jwks.json` -> `{ keys: [ { kty: "OKP", crv: "Ed25519", x, kid, alg: "EdDSA", use: "sig" } ] }`. The first key is the instance key (§12.1, `kid` = `hs_` + the first 16 hex of sha256 of the raw public key). `POST /api/v2/homeserver/federation/rotate-key` (owner) makes a new signing key (`DATA_DIR/keys/signing-<kid>.key`); new tokens are signed with it at once and the retired key stays in the JWKS for 7 days. The instance key itself (what the Nookara relays know) never changes.
+
+**Issuing (on A, the account's homeserver).** `POST /api/v2/auth/remote-token` with `Authorization: Bearer <a session or access token of A>` and `{ "audience": "https://b.example" }` -> `{ "token": "<jwt>", "expires_in": 3600 }`.
+- Header `{ alg: "EdDSA", typ: "ember-remote+jwt", kid }`. Claims `{ iss: <A's public_url origin>, sub: "<account id>@<A's domain>" (e.g. "l:5@a.example"), aud: <the audience's origin>, iat, exp (iat + 3600), jti, preferred_username, name, picture (absolute url or null), domain: <A's domain> }`.
+- Only for accounts hosted here: `403 account_not_hosted_here` otherwise (Nookara accounts, bots, remote users). `400 invalid_audience` (`reason: "https_required"`: the audience must be https, http only for this machine with `EMBER_DEV=1`; `reason: "own_homeserver"`). `429 rate_limited`: 30 a minute per account. One token is for one exchange.
+
+**Accepting (on B).** `POST /api/v2/auth/remote` `{ "token": "<jwt>" }` (or the token as `Authorization: Bearer`), no session needed, from any origin -> the same answer as the token endpoint (§4a):
+
+```jsonc
+{ "access_token": "...", "refresh_token": "...", "expires_in": 3600, "token_type": "Bearer",
+  "account": { "id": "l:5@a.example", "username": "alice", "domain": "a.example", "handle": "alice@a.example", "display_name": "Alice", "avatar_url": null, "remote": true } }
+```
+
+The access token is an ordinary session (every route and the gateway take it); the refresh token is used at `POST /api/v2/auth/token` like any other (that route answers browsers on `ember_clients` origins only; any other client simply asks A for a new token and exchanges it again). B checks, in this order:
+1. Shape: `alg` EdDSA, `typ` `ember-remote+jwt`, `sub` = `<id>@<domain>` (`id`: 1-64 of `A-Za-z0-9._:-`), `domain` (when present) equals the domain in `sub` -> `401 invalid_token`. `403 remote_accounts_off` when `accounts.remote_accounts.mode` is `none`; `400 own_homeserver`.
+2. `aud` is B's `public_url` origin (`401 invalid_audience`); `exp` / `iat` with 60 s of skew, at most an hour apart (`401 token_expired` / `invalid_token`); a `jti`.
+3. Rules that need nothing fetched: the deny lists (`403 homeserver_denied`), then `accounts.remote_accounts` (`403 homeserver_not_allowed { domain }`). A homeserver that is not let in is never contacted.
+4. The homeserver: `GET https://<domain>/.well-known/ember`. If its `homeserver` is a string (`"homeserver": "https://hs.example"`: delegation, one step only) that origin's `/.well-known/ember` is fetched instead. The final document's `homeserver.domain` must be the domain, its `jwks_uri` must be on that same origin, and the token's `iss` must be that origin (`401 invalid_issuer`). Anything else: `502 homeserver_unreachable { domain, reason }` (remembered for a minute; a good answer for an hour).
+5. The key: the JWKS is cached for an hour; an unknown `kid` fetches it again, at most once a minute per homeserver (`401 unknown_kid`), then the signature (`401 invalid_signature`).
+6. `jti` not seen before from that domain, remembered until `exp` (`401 token_replayed`).
+7. The deny lists again, now with the addresses the homeserver answers from; `429 homeserver_rate_limited`; `403 banned`.
+
+All fetches follow the rules of `src/safe-http.js`: https, public addresses only, no redirects. Development (`EMBER_DEV=1`): http is allowed and config `federation.dev_origins` (`{ "a.test": "http://localhost:4101" }`) says where a domain's homeserver really is.
+
+**Remote users.** A user of kind `"remote"`: `id` (principal) is the token's `sub`, `username` is the whole handle (`alice@a.example`), and user objects also carry `remote: true`, `domain`, `handle`. Name and picture come from the token and are refreshed on every sign-in; there is no password and no account profile here (`local_accounts_only`), and a remote user cannot claim the homeserver (`remote_cannot_claim`). Scopes: `chat`, `voice`, `media`. Mentions (`<@l:5@a.example>`), `GET /identities` and join allowlists take the longer id. Nookara accounts (`v:<id>`) are untouched by all of this. A remote user's sessions stop working (`401 invalid_session`) the moment `accounts.remote_accounts` no longer lets their homeserver in, and work again when it does.
+
+`accounts.remote_accounts.list` entries: `example.org` is that domain only; `*.example.org` is everything under it (not the bare name).
+
+**Per server** (server settings, section `join`, §6.4): `remote_accounts` `{ mode: "inherit" | "none" | "allowlist", list: [domain rules] }` (a bare string is taken as the mode) narrows what the homeserver allows. It is part of the membership check itself, so it holds for every request and gateway event that touches the server: a remote member whose homeserver the server stops letting in gets `403 remote_not_allowed`, the server leaves their `/servers` list, and nothing is deleted (switching back restores them). The server's owner is never shut out.
+
+**New-homeserver cooldown.** Table `homeservers_seen (domain, first_seen, last_seen, origin, net, ips)` records every homeserver whose token verified. Server setting `join.remote_min_age_days` (default 3, 0-365; config `federation.min_age_floor_days` is a floor under every server's number, shown as `remote_min_age_floor_days` in the settings view): a remote account whose homeserver was first seen less than that many days ago cannot join or ask to join: `403 homeserver_too_new { days_left }`. An invite made by a moderator (someone who can still manage the server or kick) skips it while `join.remote_invite_bypass` (default true) is on; the server's permanent invite code does not. Three clocks run and the **earliest** counts: the domain itself, its registered domain (eTLD+1) and the network its homeserver answers from (/24 for IPv4, /48 for IPv6), plus any `first_seen` a followed deny list reports. Registered domains come from a compact built-in list of common multi-label suffixes (`co.uk`, `com.au`, `github.io`, `pages.dev`, ...), not the full Public Suffix List: under a suffix that is missing, every customer shares one registered domain and so one age.
+
+**Limits per remote homeserver** (config `federation.rate_limits`), on top of each account's own limits, counted per domain: `exchanges_per_minute` (30), `joins_per_hour` (60, joins and join requests), `messages_per_minute` (300), `reports_per_hour` (30). A homeserver first seen less than `new_days` (30) ago gets each limit divided by `new_divisor` (4). Over the limit: `429 homeserver_rate_limited { retry_after }` (seconds). `hold_after` (5) refusals within ten minutes put the domain on hold for `hold_minutes` (60): everything counted here is refused until then. (Instances have no DMs or friend requests; those live on Nookara.)
+
+**Deny lists.** Local entries (config `federation.deny`): a domain, `*.domain`, a network in CIDR form, or one account (`id@domain`). Shared lists (config `federation.denylists`, default `["https://nookara.cc/.well-known/ember/denylist"]`, `[]` to follow none) are fetched every 5 minutes while remote accounts are accepted (a list on Nookara's address is skipped while `nookara_registration` is `off`):
+
+```jsonc
+{ "updated_at": 1700000000, "domains": ["bad.example", "*.worse.example"], "networks": ["203.0.113.0/24"], "accounts": ["l:9@some.example"],
+  "first_seen": { "old.example": 1690000000 },            // seconds, milliseconds or an ISO date; the earliest known time wins
+  "signature": { "alg": "EdDSA", "kid": "...", "sig": "<base64url>" } }
+```
+
+`sig` is Ed25519 over the document without `signature`, serialized as JSON with the keys sorted at every level and no whitespace. The key is looked up by `kid` in the list origin's `/.well-known/bonfire/jwks.json`, then `/.well-known/ember/jwks.json`. A list that cannot be fetched or does not verify changes nothing: the last good copy stays in force, also across restarts. Effect of any entry: tokens are refused with `403 homeserver_denied`, and on the next refresh (or settings change) the sessions and refresh tokens of matching remote users are deleted and their sockets closed (`4003 homeserver_denied`).
+
+**Admin API.** `GET /api/v2/homeserver/federation` (instance admin) -> `{ federation: { rate_limits, min_age_floor_days, denylists, deny }, accepts_remote, keys: { current, keys: [ { kid, created_at, retired_at } ] }, denylists: [ { url, entries, updated_at, fetched_at, error } ], held: [ { domain, until } ], homeservers: [ { domain, origin, net, first_seen, first_seen_here, last_seen } ], remote_accounts: <count> }`. `PATCH` the same route with any of `rate_limits`, `min_age_floor_days`, `denylists`, `deny`, plus `release: [domain]` (lift holds) and `refresh: true` (fetch the lists now) -> the view again. `400 invalid_rate_limits` / `invalid_min_age_floor_days` / `invalid_denylists` / `invalid_deny`. Which homeservers are let in at all stays in `PATCH /api/v2/homeserver/accounts` (`remote_accounts`).
+
+---
+
 ## 5. Claiming and instance administration
 
 **Claim.** On first boot an unclaimed instance writes a setup code (`XXXX-XXXX`, Crockford base32) to stdout and to `DATA_DIR/setup-code.txt`. An authenticated user claims it with `POST /api/v1/instance/claim { code }`, which returns `{ ok: true }`. That user becomes the instance owner and an admin, and the code file is deleted.
@@ -325,7 +390,7 @@ The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The in
 - A homeserver hosts any number of communities ("servers"). `POST /api/v1/servers { name, slug? }` or an import (`POST /api/v1/import`, the Matrix import, a Nookara import bundle) each make a **new** one, owned by whoever creates it; the instance must be claimed (`409 instance_not_claimed`).
 - **Who may create** is the `creation` setting. Instance admins always may. `mode: "admins"` (default): nobody else (`403 forbidden`). `"allowlist"`: also the usernames / principals on `allowlist`. `"anyone"`: every account. `"request"`: `403 creation_requires_approval` for now (the approval queue comes later). `per_account` caps how many servers one non-admin account may own (`403 creation_limit { limit, used }`). Bots never may.
 - **Slugs and addresses.** Every server has a unique `slug`: 3-32 characters, `^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$`, no `--`, and not one of `admin api www mail help support status nookara ember root system i invite login account settings uploads well-known static assets`. Create takes an optional `slug` (`400 invalid_slug`, `409 slug_taken`); without one it comes from the name (lowercased, everything else becomes `-`, then `-2`, `-3`… when taken; 8 random characters when the name gives nothing usable). `PATCH /api/v1/servers/:sid { slug }` changes it: the server's owner only (`403 owner_only`). Server objects carry `slug` and `address` = `slug@domain`.
-- `GET /api/v1/servers/resolve?address=<slug@domain or slug>` (public) → `{ sid, slug, address }`; `404 server_not_found`, or `404 wrong_homeserver` when the domain is not this homeserver's.
+- `GET /api/v1/servers/resolve?address=<slug@domain or slug>` (public: no session, any origin, 120 a minute per address) → `{ sid, slug, address }`; `404 server_not_found`, or `404 wrong_homeserver` when the domain is not this homeserver's.
 - The homeserver's `name` / `description` / `icon_url` are its own; nothing is mirrored between them and a server's in either direction.
 - `GET /api/v1/discover` returns every listed server plus the ones you are in (a homeserver with a single server returns it whether listed or not, as before).
 - Deleting a server (`DELETE /servers/:sid`, its owner or an instance admin) removes that one only. With none left, discovery shows `community: null`.
@@ -718,7 +783,7 @@ If verification fails, the instance rejects the message with `bad_signature`. Bo
 | path | contents |
 |---|---|
 | `manifest.json` | `{ format: "bonfire-export-v1", source: "<origin>", source_kind: "instance" \| "velora-legacy" \| "velora-import" \| "matrix-import", exported_at: <ms>, community: "<sid>" }` |
-| `community.json` | `{ name, description, icon, banner, settings: {join_policy, allow_uploads, upload_max_mb}, categories: [name…], channels: [ {cid, name, topic, category, position, locked, type, config, perms: [ {role: "<rid>", allow, deny} ]} ], roles: [ {rid, name, color, position, permissions, upload_max_mb, hoist, mentionable, is_default} ], emojis: [ {eid, name, animated, file} ], stickers: [ {tid, name, animated, file} ], invites: [ {code, expires_at, max_uses} ] }` |
+| `community.json` | `{ name, slug (the address it had: taken on import when free on that homeserver, else one is made from the name), description, icon, banner, settings: {join_policy, allow_uploads, upload_max_mb}, categories: [name…], channels: [ {cid, name, topic, category, position, locked, type, config, perms: [ {role: "<rid>", allow, deny} ]} ], roles: [ {rid, name, color, position, permissions, upload_max_mb, hoist, mentionable, is_default} ], emojis: [ {eid, name, animated, file} ], stickers: [ {tid, name, animated, file} ], invites: [ {code, expires_at, max_uses} ] }` |
 | `members.jsonl` | one JSON object per line: `{ user: <user object>, roles: ["<rid>"…], joined_at, owner?: true }` |
 | `messages/<cid>.jsonl` | oldest first, one JSON object per line: `{ id, author: <user object> \| null, author_name?, author_avatar?, body, attachments, embeds?, reply_to, created_at, edited_at, system, sys_kind?, pinned, sticker?: "<tid>", reactions: [ {emoji, users: [uid…]} ], signature?, bridge? }` |
 | `files/<path>` | icon, banner, emojis, and locally hosted attachments, referenced as `files/…` from the JSON |

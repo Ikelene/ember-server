@@ -51,6 +51,7 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `nookara_url` | `https://nookara.cc` | issuer for Nookara mode |
 | `registration` | `open` | local mode: `open` / `closed` (always open while unclaimed) |
 | `accounts` | from `accounts_mode` | The homeserver's account settings: `hosts_accounts`, `registration` (`open` / `closed` / `invite` / `approval`), `remote_accounts`, `link_verified_emails`, `login_methods` (password, OpenID Connect, OAuth 2.0, the Nookara preset). `accounts_mode` and `registration` above are derived from it and still written. See "Accounts and login" below |
+| `federation` | see PROTOCOL §4b | Accounts of other homeservers: `rate_limits` (per remote homeserver), `min_age_floor_days` (the least any server's new-homeserver cooldown can be), `denylists` (signed shared deny lists to follow, by default Nookara's; `[]` follows none) and `deny` (your own entries: domains, `*.domain`, networks, `id@domain` accounts). Which homeservers are let in at all is `accounts.remote_accounts` |
 | `ember_clients` | Nookara's, Canopy's and this server | The web origins an Ember client may be served from: where `/login` may send people back to, and who may call the token endpoint from a browser |
 | `max_upload_mb` | `25` | instance ceiling (1–500); each community also has `upload_max_mb` |
 | `voice` | empty | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` — Cloudflare Realtime SFU app + TURN key. Secrets are write-only over the API |
