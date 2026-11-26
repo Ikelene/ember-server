@@ -101,7 +101,8 @@ function readJson(req, form = false) {
     req.on('data', d => { n += d.length; if (n > MAX_JSON) { dead = true; reject(err('payload_too_large', 413)); req.destroy(); } else chunks.push(d); });
     req.on('end', () => {
       if (dead) return;
-      const text = Buffer.concat(chunks).toString('utf8');
+      req.rawBody = Buffer.concat(chunks); // (server-to-server requests sign these bytes: social/sig.js)
+      const text = req.rawBody.toString('utf8');
       if (!text.trim()) return resolve({});
       if (form && /^application\/x-www-form-urlencoded/i.test(type)) return resolve(Object.fromEntries(new URLSearchParams(text)));
       if (!/json/i.test(type)) return resolve({});

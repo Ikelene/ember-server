@@ -6,7 +6,8 @@ const config = require('../config');
 const { err } = require('../util');
 const seen = require('./seen');
 
-const WINDOWS = { exchanges: ['exchanges_per_minute', 60 * 1000], joins: ['joins_per_hour', 3600 * 1000], messages: ['messages_per_minute', 60 * 1000], reports: ['reports_per_hour', 3600 * 1000] };
+const WINDOWS = { exchanges: ['exchanges_per_minute', 60 * 1000], joins: ['joins_per_hour', 3600 * 1000], messages: ['messages_per_minute', 60 * 1000], reports: ['reports_per_hour', 3600 * 1000],
+  s2s: ['s2s_per_minute', 60 * 1000], friend_requests: ['friend_requests_per_hour', 3600 * 1000], dms: ['dms_per_hour', 3600 * 1000] }; // (server-to-server: PROTOCOL §4c)
 const OVERRUN_WINDOW = 10 * 60 * 1000;
 const hits = new Map();     // "domain|action" -> [timestamps]
 const overruns = new Map(); // domain -> [timestamps of refused actions]

@@ -10,12 +10,15 @@ const RATE_DEFAULTS = {
   joins_per_hour: 60,       // joins and join requests
   messages_per_minute: 300,
   reports_per_hour: 30,
+  s2s_per_minute: 600,      // signed server-to-server requests (§4c), all kinds together
+  friend_requests_per_hour: 60,
+  dms_per_hour: 120,        // DMs its accounts start with accounts here
   new_days: 30,             // a homeserver first seen less than this long ago ...
   new_divisor: 4,           // ... gets the limits above divided by this
   hold_after: 5,            // this many refused actions within ten minutes ...
   hold_minutes: 60,         // ... put the homeserver on hold for this long
 };
-const RATE_RANGE = { exchanges_per_minute: [1, 100000], joins_per_hour: [1, 1000000], messages_per_minute: [1, 1000000], reports_per_hour: [1, 100000], new_days: [0, 3650], new_divisor: [1, 1000], hold_after: [1, 100000], hold_minutes: [1, 10080] };
+const RATE_RANGE = { exchanges_per_minute: [1, 100000], joins_per_hour: [1, 1000000], messages_per_minute: [1, 1000000], reports_per_hour: [1, 100000], s2s_per_minute: [1, 1000000], friend_requests_per_hour: [1, 1000000], dms_per_hour: [1, 1000000], new_days: [0, 3650], new_divisor: [1, 1000], hold_after: [1, 100000], hold_minutes: [1, 10080] };
 const defaults = () => ({ rate_limits: { ...RATE_DEFAULTS }, min_age_floor_days: 0, denylists: [DEFAULT_DENYLIST], deny: [], dev_origins: {} });
 
 function listUrl(raw, allowHttp) {

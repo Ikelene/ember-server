@@ -28,6 +28,15 @@ async function getJson(url) {
 }
 const devOrigin = domain => (safe.local() ? config.get().federation.dev_origins[domain] || null : null);
 
+// discovery `social: { api_url, s2s_url }` (PROTOCOL §4c): where the homeserver's social API lives; its own origin by default
+function socialUrls(social, origin) {
+  const url = (v, fallback) => {
+    if (typeof v !== 'string' || v.length > 500) return fallback;
+    try { const u = new URL(v); if (u.username || u.password || u.search || u.hash || (u.protocol !== 'https:' && !(u.protocol === 'http:' && safe.local()))) return fallback; return u.href.replace(/\/+$/, ''); } catch { return fallback; }
+  };
+  const s = social && typeof social === 'object' ? social : {};
+  return { api_url: url(s.api_url, origin + '/api/v2'), s2s_url: url(s.s2s_url, origin + '/_ember/s2s/v1') };
+}
 async function discover(domain) {
   const start = devOrigin(domain) || `https://${domain}`;
   let origin = start, doc = await getJson(start + WELL_KNOWN);
@@ -40,9 +49,9 @@ async function discover(domain) {
   if (!doc.homeserver || typeof doc.homeserver !== 'object' || String(doc.homeserver.domain || '').toLowerCase() !== domain) throw new Error('domain_mismatch');
   let jwks; try { jwks = new URL(String(doc.jwks_uri)); } catch { throw new Error('no_jwks_uri'); }
   if (jwks.origin !== origin) throw new Error('bad_jwks_uri'); // the keys live on the homeserver itself
-  return { origin, jwks_uri: jwks.href };
+  return { origin, jwks_uri: jwks.href, ...socialUrls(doc.social, origin) };
 }
-// domain -> { origin, jwks_uri } (cached for an hour; a failure for a minute). Throws 502 homeserver_unreachable { reason }
+// domain -> { origin, jwks_uri, api_url, s2s_url } (cached for an hour; a failure for a minute). Throws 502 homeserver_unreachable { reason }
 async function homeserver(domain) {
   const hit = homeservers.get(domain), t = Date.now();
   if (hit && t - hit.at < (hit.error ? FAIL_TTL : HS_TTL)) { if (hit.error) throw unreachable(domain, hit.error); return hit; }

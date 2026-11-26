@@ -120,6 +120,18 @@ async function mockHomeserver(domain, { delegateTo = null } = {}) {
     const head = b64({ alg: 'EdDSA', typ, kid: key.kid }), body = b64(claims);
     return `${head}.${body}.${crypto.sign(null, Buffer.from(head + '.' + body), key.privateKey).toString('base64url')}`;
   };
+  // the headers of a signed server-to-server request (PROTOCOL §4c). body: the exact string sent, or null
+  hs.sign = (method, url, body = null, { key = hs.keys[hs.keys.length - 1], created = Math.floor(Date.now() / 1000), host = new URL(url).host, signAs = domain, target = new URL(url).pathname + new URL(url).search } = {}) => {
+    const digest = crypto.createHash('sha256').update(body || '').digest('base64url');
+    const sig = crypto.sign(null, Buffer.from([method, target, host, created, 'sha-256=' + digest].join('\n')), key.privateKey).toString('base64url');
+    return { 'Ember-Signature': `keyId="${signAs}#${key.kid}", created=${created}, sig="${sig}"`, 'X-Ember-Homeserver': signAs, ...(body ? { 'Content-Type': 'application/json' } : {}) };
+  };
+  // a signed request to another homeserver. -> { status, body }
+  hs.s2s = async (base, method, path, body, opts = {}) => {
+    const url = base + '/_ember/s2s/v1' + path, payload = body === undefined ? null : JSON.stringify(body);
+    const r = await fetch(url, { method, headers: { ...hs.sign(method, url, payload, opts), ...(opts.headers || {}) }, body: opts.sendBody !== undefined ? opts.sendBody : payload ?? undefined });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  };
   hs.close = () => new Promise(r => { server.close(() => r()); server.closeAllConnections?.(); });
   return hs;
 }

@@ -47,6 +47,8 @@ function discovery() {
     ...require('../login').discovery(),
     // cross-homeserver sign-in (PROTOCOL §4b): `jwks_uri` and `federation`
     ...require('../federation').discovery(),
+    // friends, DMs, profiles and keys (PROTOCOL §4c): `social`, where this homeserver's accounts are reached
+    ...require('../social').discovery(),
     // the instance's relay key (PROTOCOL §12.1): Nookara checks it here before binding this url to the key
     ...require('../relay/client').identity(),
   });
