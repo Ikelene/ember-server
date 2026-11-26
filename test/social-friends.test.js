@@ -4,6 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const crypto = require('crypto');
 const { tmpDir, api, wsClient, startHomeserver, mockHomeserver } = require('./helpers');
 
 process.env.EMBER_ACCOUNTS_MODE = 'local';
@@ -203,4 +204,66 @@ test('unfriending and blocking reach the other homeserver', async () => {
   assert.equal(r.body.status, 'pending');
   assert.equal((await bob.a.post(`/api/v2/social/friends/${enc(ALICE)}/accept`)).body.status, 'friends');
   assert.deepEqual(ids((await friends(alice)).friends), [BOB]);
+});
+
+// ---------- keys ----------
+const newKey = (kid, kind = 'device') => { const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519'); return { kid, kind, alg: 'ed25519', public_key: publicKey.export({ format: 'jwk' }).x, privateKey }; };
+const pub = ({ privateKey, ...k }) => k;
+const signedBy = (owner, k, signer) => ({ ...pub(k), signed_by: signer.kid, sig: crypto.sign(null, Buffer.from(['ember-key-v1', owner, k.kid, k.kind, k.alg, k.public_key].join('\n')), signer.privateKey).toString('base64url') });
+
+test('an account publishes its public keys; changes must be signed along the chain', async () => {
+  const acct = newKey('acct-1', 'account'), phone = newKey('phone'), laptop = newKey('laptop');
+  const put = keys => alice.a.put('/api/v2/social/keys', { keys });
+  assert.deepEqual((await alice.a.get('/api/v2/social/keys/l:1')).body, { id: ALICE, keys: [] });
+  assert.equal((await put([pub(phone)])).body.error, 'account_key_required');
+  assert.equal((await put([{ ...pub(acct), public_key: 'short' }])).body.error, 'invalid_keys');
+  assert.equal((await put([pub(acct), pub(acct)])).body.error, 'invalid_keys'); // one kid, twice
+  // a device key has to be signed by the account key, from the first set on
+  let r = await put([pub(acct), pub(phone)]);
+  assert.deepEqual([r.status, r.body.error, r.body.signed_by], [403, 'key_signature_required', 'acct-1']);
+  r = await put([pub(acct), signedBy(ALICE, phone, phone)]);
+  assert.equal(r.body.error, 'key_signature_required'); // signed by something else
+  r = await put([pub(acct), { ...signedBy(ALICE, phone, laptop), signed_by: 'acct-1' }]);
+  assert.deepEqual([r.status, r.body.error], [403, 'bad_key_signature']);
+  r = await put([pub(acct), signedBy('l:2@a.example', phone, acct)]); // signed for another account
+  assert.equal(r.body.error, 'bad_key_signature');
+  r = await put([pub(acct), signedBy(ALICE, phone, acct)]);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.id, ALICE);
+  assert.deepEqual(r.body.keys.map(k => [k.kid, k.kind, k.signed_by || null]), [['acct-1', 'account', null], ['phone', 'device', 'acct-1']]);
+  assert.ok(r.body.keys[0].created_at > 0);
+  assert.equal(r.body.keys[0].public_key, acct.public_key);
+  // another homeserver reads them over s2s, and keeps its copy for ten minutes
+  let seenByBob = (await bob.a.get(`/api/v2/social/keys/${enc(ALICE)}`)).body;
+  assert.deepEqual(seenByBob, r.body);
+  // a new account key without the old one's signature is refused; so is one signed by the wrong key
+  const acct2 = newKey('acct-2', 'account');
+  r = await put([pub(acct2)]);
+  assert.deepEqual([r.status, r.body.error, r.body.signed_by], [403, 'key_signature_required', 'acct-1']);
+  r = await put([signedBy(ALICE, acct2, acct2)]);
+  assert.equal(r.body.error, 'key_signature_required');
+  r = await put([{ ...signedBy(ALICE, acct2, laptop), signed_by: 'acct-1' }]);
+  assert.equal(r.body.error, 'bad_key_signature');
+  // the same kid with other bytes is a new key too
+  r = await put([{ ...pub(acct2), kid: 'acct-1' }]);
+  assert.equal(r.body.error, 'key_signature_required');
+  assert.equal((await alice.a.get('/api/v2/social/keys/l:1')).body.keys[0].public_key, acct.public_key); // nothing changed
+  // signed by the key it replaces: accepted, the signature is published; devices are signed by the new account key
+  r = await put([signedBy(ALICE, acct2, acct), signedBy(ALICE, phone, acct)]);
+  assert.equal(r.body.error, 'key_signature_required'); // the phone is still signed by the old account key
+  r = await put([signedBy(ALICE, acct2, acct), signedBy(ALICE, phone, acct2), signedBy(ALICE, laptop, acct2)]);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.keys.map(k => [k.kid, k.signed_by]), [['acct-2', 'acct-1'], ['phone', 'acct-2'], ['laptop', 'acct-2']]);
+  assert.match(r.body.keys[0].sig, /^[A-Za-z0-9_-]{86}$/);
+  // sending the unchanged account key again (no signature needed) keeps its place in the chain; a device can go
+  r = await put([pub(acct2), signedBy(ALICE, laptop, acct2)]);
+  assert.deepEqual(r.body.keys.map(k => [k.kid, k.signed_by]), [['acct-2', 'acct-1'], ['laptop', 'acct-2']]);
+  assert.equal((await bob.a.get(`/api/v2/social/keys/${enc(ALICE)}`)).body.keys[0].kid, 'acct-1'); // B still has its copy
+  db.run("UPDATE social_cache SET fetched_at = fetched_at - ? WHERE kind = 'keys'", 11 * 60 * 1000);
+  seenByBob = (await bob.a.get(`/api/v2/social/keys/${enc(ALICE)}`)).body;
+  assert.deepEqual(seenByBob, r.body);
+  assert.equal((await bob.a.get(`/api/v2/social/keys/${enc('l:77@a.example')}`)).body.error, 'user_not_found');
+  const raw = await mockHs.s2s(baseB, 'GET', '/keys/' + enc(BOB));
+  assert.deepEqual(raw.body, { id: BOB, keys: [] });
+  assert.equal((await mockHs.s2s(baseB, 'GET', '/keys/' + enc('l:99@b.example'))).status, 404);
 });
