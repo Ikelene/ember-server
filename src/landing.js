@@ -1,6 +1,6 @@
 'use strict';
-// The page a browser gets at "/" (Accept: text/html): the server's card, live numbers and how to join it in Ember.
-// Everything on it is already public (the discovery document, the invite card): name, description, icon, banner, member count,
+// The page a browser gets at "/" (Accept: text/html): the homeserver's card, the servers it lists, live numbers and how to join in Ember.
+// Everything on it is already public (the discovery document, the invite card): names, descriptions, icons, member counts,
 // plus counts only (people online, sockets, channels, uptime), never who. Anything else asking for "/" still gets the JSON it always did.
 const config = require('./config');
 const db = require('./db');
@@ -12,7 +12,8 @@ const STATS_TTL = 5000;
 let cache = { at: 0, v: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const community = () => db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
+// the servers the page shows: the listed ones; a homeserver with a single server shows it either way (as it always did)
+const shown = () => { const all = db.all('SELECT * FROM communities ORDER BY id LIMIT 2'); return all.length === 1 ? all : db.all('SELECT * FROM communities WHERE listed = 1 ORDER BY id LIMIT 200'); };
 
 // a stored picture address -> absolute https/http url on this server (or null): relative ones join the public url, nothing but http(s)
 function absUrl(u) {
@@ -31,18 +32,26 @@ function emberLink(origin) {
 
 function stats() {
   if (cache.v && Date.now() - cache.at < STATS_TTL) return cache.v;
-  const cfg = config.get(), c = community();
+  const cfg = config.get(), list = shown(), one = list.length === 1 ? list[0] : null;
   const n = (sql, ...a) => db.get(sql, ...a)?.n || 0;
+  const { emberBase } = require('./util');
+  const servers = list.map(c => ({
+    name: c.name, slug: c.slug, address: `${c.slug}@${cfg.domain}`, description: c.description || '', icon_url: absUrl(c.icon_url),
+    members: n('SELECT COUNT(*) n FROM members WHERE community_id = ?', c.id), join_policy: c.join_policy,
+    join_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(cfg.public_url)}/invite/${c.invite_code}`,
+  }));
   const { online, connections } = require('./gateway').counts();
   const { uptime_s, started_at } = require('./version').runtime();
   const v = {
-    name: c?.name || cfg.name, description: (c ? c.description : cfg.description) || '',
-    icon_url: absUrl(c ? c.icon_url : cfg.icon_url), banner_url: absUrl(c?.banner_url),
-    members: c ? n('SELECT COUNT(*) n FROM members WHERE community_id = ?', c.id) : 0,
+    // the homeserver's own name, description and icon; the numbers are the whole homeserver's
+    name: cfg.name, description: cfg.description || '', domain: cfg.domain,
+    icon_url: absUrl(cfg.icon_url), banner_url: absUrl(one?.banner_url),
+    members: n('SELECT COUNT(DISTINCT user_id) n FROM members'),
     online, connections,
-    channels: c ? n('SELECT COUNT(*) n FROM channels WHERE community_id = ?', c.id) : 0,
+    channels: n('SELECT COUNT(*) n FROM channels'),
     uptime_s, started_at, version: pkg.version,
-    join_policy: c?.join_policy || null, ready: !!c,
+    join_policy: one?.join_policy || null, ready: n('SELECT COUNT(*) n FROM communities') > 0,
+    servers,
     url: cfg.public_url, ember_url: emberLink(cfg.public_url),
   };
   cache = { at: Date.now(), v };
@@ -119,6 +128,16 @@ h1{margin:0;font-size:30px;line-height:1.15;letter-spacing:-.01em;overflow-wrap:
 .btn.primary:hover{filter:brightness(1.08)}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:36px 0 12px}
+.list{display:grid;gap:12px}
+.srv{display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--surface);border:1px solid var(--border)}
+.srv .si{width:48px;height:48px;background:var(--surface-2);display:grid;place-items:center;overflow:hidden;font-size:20px;font-weight:700;color:var(--accent);flex:none}
+.srv .si img{width:100%;height:100%;object-fit:cover;display:block}
+.srv .sw{min-width:0;flex:1}
+.srv h3{margin:0;font-size:16px;overflow-wrap:anywhere}
+.srv .sa{color:var(--faint);font:12px/1.4 Consolas,"Cascadia Code",ui-monospace,monospace;overflow-wrap:anywhere}
+.srv p{margin:4px 0 0;color:var(--muted);font-size:14px;overflow-wrap:anywhere}
+.srv .meta{margin-top:4px;font-size:13px}
+.none{padding:16px 18px;background:var(--surface);border:1px solid var(--border);color:var(--muted)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
 .stat{padding:16px 18px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent)}
 .stat .k{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
@@ -149,6 +168,8 @@ footer span{display:inline-flex;align-items:center;gap:6px}
   .desc{padding:0 16px 16px}
   .acts{padding:14px 16px}
   .acts .btn{flex:1 1 100%;justify-content:center}
+  .srv{flex-wrap:wrap}
+  .srv .btn{flex:1 1 100%;justify-content:center}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .stat .v{font-size:24px}
 }
@@ -181,10 +202,17 @@ const JS = `
 function page() {
   const s = stats();
   const name = s.name || 'Ember server';
+  const first = t => esc((Array.from(String(t || '').trim())[0] || 'E').toUpperCase());
+  const server = v => `<div class="srv">
+      <div class="si">${v.icon_url ? `<img src="${esc(v.icon_url)}" alt="">` : first(v.name)}</div>
+      <div class="sw"><h3>${esc(v.name)}</h3><div class="sa">${esc(v.address)}</div>${v.description ? `<p>${esc(v.description)}</p>` : ''}
+        <div class="meta"><span>${icon('users', 14)}<b>${fmt(v.members)}</b> member${v.members === 1 ? '' : 's'}</span><span>${icon('lock', 14)}${esc(JOIN[v.join_policy] || v.join_policy)}</span></div></div>
+      <a class="btn primary" href="${esc(v.join_url)}" rel="noopener">${icon('flame')}Join</a>
+    </div>`;
   const title = `${name} on Ember`;
   const summary = `${fmt(s.members)} member${s.members === 1 ? '' : 's'}${s.description ? ' · ' + s.description.replace(/\s+/g, ' ').slice(0, 160) : ''}`;
   const ogImage = s.banner_url || s.icon_url;
-  const initial = esc((Array.from(name.trim())[0] || 'E').toUpperCase());
+  const initial = first(name);
   const host = (() => { try { return new URL(s.url).host; } catch { return s.url; } })();
   const stat = (k, ic, label, v) => `<div class="stat"><div class="k">${icon(ic, 16)}${label}</div><div class="v" data-s="${k}">${v}</div></div>`;
   return `<!doctype html>
@@ -226,7 +254,7 @@ ${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
         <div class="meta">
           <span>${icon('users', 16)}<b data-s="members">${fmt(s.members)}</b> members</span>
           <span>${icon('activity', 16)}<b data-s="online">${fmt(s.online)}</b> online</span>
-          ${s.join_policy ? `<span>${icon('lock', 16)}${esc(JOIN[s.join_policy] || s.join_policy)}</span>` : ''}
+          <span>${icon('hash', 16)}<b>${fmt(s.servers.length)}</b> server${s.servers.length === 1 ? '' : 's'} listed</span>
         </div>
       </div>
     </div>
@@ -236,6 +264,11 @@ ${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
       <a class="btn" href="${NOOKARA}/ember/download" rel="noopener">${icon('monitor')}Get the app</a>
     </div>
   </section>
+
+  <h2>Servers</h2>
+  <div class="list">
+    ${s.servers.length ? s.servers.map(server).join('\n    ') : '<div class="none">No servers are listed here yet.</div>'}
+  </div>
 
   <h2>Live</h2>
   <div class="stats">
@@ -248,7 +281,7 @@ ${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
 
   <h2>How to join</h2>
   <div class="steps">
-    <div class="step"><span class="n">1</span><h3>Open it in Ember</h3><p>The button above opens Ember on the web with this server ready to join. Sign in with your Nookara account if you are asked.</p></div>
+    <div class="step"><span class="n">1</span><h3>Open it in Ember</h3><p>The buttons above open Ember on the web with a server ready to join. Sign in with your Nookara account if you are asked.</p></div>
     <div class="step"><span class="n">2</span><h3>Or add it by address</h3><p>In Ember, open Create a server, pick By address and paste:</p>
       <div class="url"><code id="srv">${esc(s.url)}</code><button id="cp" type="button" aria-label="Copy server address" data-ic="${esc(icon('copy', 16))}" data-ok="${esc(icon('check', 16))}">${icon('copy', 16)}</button></div></div>
     <div class="step"><span class="n">3</span><h3>Use the apps</h3><p>Ember also runs as an app with notifications and more.</p>
@@ -285,7 +318,7 @@ function sendPage(req, res) {
 function publicStats() {
   const s = stats();
   return {
-    name: s.name, description: s.description, icon_url: s.icon_url, banner_url: s.banner_url,
+    name: s.name, description: s.description, domain: s.domain, icon_url: s.icon_url, banner_url: s.banner_url, servers: s.servers,
     members: s.members, online: s.online, connections: s.connections, channels: s.channels,
     uptime_s: s.uptime_s, started_at: s.started_at, version: s.version, join_policy: s.join_policy, url: s.url, ember_url: s.ember_url,
   };

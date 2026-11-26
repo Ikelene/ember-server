@@ -56,8 +56,9 @@ test('a browser gets the landing page: escaped name/description, stats, join lin
   assert.ok(html.includes('Camp &lt;Fire&gt; &amp; &quot;Friends&quot;'));
   assert.ok(!html.includes('<script>alert(1)</script>'), 'description is escaped');
   assert.ok(html.includes('cosy &lt;script&gt;'));
-  assert.match(html, /<meta property="og:title" content="Camp &lt;Fire&gt;/);
-  assert.match(html, /<meta property="og:description" content="2 members · cosy/);
+  assert.match(html, /<meta property="og:title" content="Ember Instance">/); // the homeserver's own name on top
+  assert.match(html, /<meta property="og:description" content="2 members">/);
+  assert.match(html, /<div class="sa">camp-fire-friends@localhost<\/div>/);
   assert.match(html, /<meta name="twitter:card" content="summary">/);
   // http dev server: the long #/i/ form
   assert.ok(html.includes(`https://ember.nookara.cc/#/i/${encodeURIComponent(base.replace('127.0.0.1', 'localhost'))}`) || html.includes('https://ember.nookara.cc/#/i/http'));
@@ -78,7 +79,7 @@ test('stats endpoint: counts follow live sockets, nothing private', async () => 
   assert.equal(before.body.connections, 0);
   assert.ok(before.body.channels >= 1);
   assert.equal(typeof before.body.uptime_s, 'number');
-  assert.deepEqual(Object.keys(before.body).sort(), ['banner_url', 'channels', 'connections', 'description', 'ember_url', 'icon_url', 'join_policy', 'members', 'name', 'online', 'started_at', 'uptime_s', 'url', 'version']);
+  assert.deepEqual(Object.keys(before.body).sort(), ['banner_url', 'channels', 'connections', 'description', 'domain', 'ember_url', 'icon_url', 'join_policy', 'members', 'name', 'online', 'servers', 'started_at', 'uptime_s', 'url', 'version']);
 
   const w1 = wsClient(base), w2 = wsClient(base), w3 = wsClient(base);
   await Promise.all([w1.login(alice.session), w2.login(alice.session), w3.login(bob.session)]);
