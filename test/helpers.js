@@ -89,7 +89,8 @@ module.exports.fakeIdp = fakeIdp;
 async function startHomeserver({ dataDir, config } = {}) {
   const { Worker } = require('worker_threads');
   const worker = new Worker(path.join(__dirname, 'homeserver-worker.js'), { workerData: { dataDir, config }, stdout: true, stderr: true });
-  worker.stdout.resume(); worker.stderr.resume(); // its log stays out of the test output
+  if (process.env.EMBER_TEST_WORKER_LOG) { worker.stdout.pipe(process.stderr); worker.stderr.pipe(process.stderr); } // (to see what the other homeserver says)
+  else { worker.stdout.resume(); worker.stderr.resume(); } // its log stays out of the test output
   const waiting = new Map(); let seq = 0;
   worker.on('message', m => { const w = waiting.get(m.id); waiting.delete(m.id); if (w) (m.error ? w.reject(new Error(m.error)) : w.resolve(m.result)); });
   const call = (cmd, args) => new Promise((resolve, reject) => { const id = ++seq; waiting.set(id, { resolve, reject }); worker.postMessage({ id, cmd, args }); });

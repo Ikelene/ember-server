@@ -176,7 +176,7 @@ function serverPatch(c, me, body) {
 // tell the people in a server (or in every server) that its limits changed
 function changed(c = null) {
   const gateway = require('./gateway');
-  for (const x of c ? [c] : db().all('SELECT * FROM communities')) {
+  for (const x of c ? [c] : db().all("SELECT * FROM communities WHERE kind = 'server'")) {
     const t = activeTier(x.id);
     gateway.emit(x.id, { type: 'chat_server_limits', server: x.sid, limits: effective(x.id), tier: t ? t.tier : null, until: t ? t.until : null });
   }
@@ -187,7 +187,7 @@ function serverList(q = {}) {
   const auth = require('./auth'), d = db();
   const n = Math.min(Math.max(Number.parseInt(q.limit, 10) || 50, 1), 200);
   const before = q.before ? d.get('SELECT id FROM communities WHERE sid = ?', String(q.before))?.id ?? 0 : null;
-  const rows = before === null ? d.all('SELECT * FROM communities ORDER BY id DESC LIMIT ?', n + 1) : d.all('SELECT * FROM communities WHERE id < ? ORDER BY id DESC LIMIT ?', before, n + 1);
+  const rows = before === null ? d.all("SELECT * FROM communities WHERE kind = 'server' ORDER BY id DESC LIMIT ?", n + 1) : d.all("SELECT * FROM communities WHERE kind = 'server' AND id < ? ORDER BY id DESC LIMIT ?", before, n + 1);
   const servers = rows.slice(0, n).map(c => {
     const o = auth.userById(c.owner_id), ov = overrideRow(c.id);
     return {

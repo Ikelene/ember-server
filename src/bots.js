@@ -26,7 +26,7 @@ const M = () => require('./messages');
 const ROLE_BASE = 1000000000, MAX_BOTS = 25, NAME = /^[A-Za-z0-9_.-]{2,32}$/, HEARTBEAT = 41250;
 const L = require('./limits');
 // the server a bots limit is counted in: the one named, else the only one there is, else none (the homeserver's defaults)
-const limitCid = sid => (sid ? db.get('SELECT id FROM communities WHERE sid = ?', String(sid))?.id : C.communityCount() === 1 ? db.get('SELECT id FROM communities').id : null) ?? null;
+const limitCid = sid => (sid ? db.get("SELECT id FROM communities WHERE sid = ? AND kind = 'server'", String(sid))?.id : C.communityCount() === 1 ? db.get("SELECT id FROM communities WHERE kind = 'server'").id : null) ?? null;
 const maxBots = cid => Math.min(MAX_BOTS, L.limit('bots', cid) ?? MAX_BOTS);
 const origin = () => normalizeOrigin(config.publicUrl());
 const apiUrl = () => `${origin()}/bot/v1`;
@@ -45,11 +45,11 @@ const view = r => ({
 });
 const managedByGallery = r => { if (r.gallery_id) throw err('gallery_bot_managed', 403); };
 // the servers where `me` has Manage server
-const managedBy = me => db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id).filter(c => C.snapOf(c).can(me.id, P.MANAGE_SERVER));
+const managedBy = me => db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", me.id).filter(c => C.snapOf(c).can(me.id, P.MANAGE_SERVER));
 // who may make bots: instance admins, or anyone with Manage server in `sid` (no sid: in any server here)
 function canManage(me, sid) {
   if (auth.isAdmin(me)) return true;
-  if (sid) { const c = db.get('SELECT * FROM communities WHERE sid = ?', String(sid)); return !!c && C.snapOf(c).can(me.id, P.MANAGE_SERVER); }
+  if (sid) { const c = db.get("SELECT * FROM communities WHERE sid = ? AND kind = 'server'", String(sid)); return !!c && C.snapOf(c).can(me.id, P.MANAGE_SERVER); }
   return managedBy(me).length > 0;
 }
 function guard(me, sid) { if (!canManage(me, sid)) throw err('not_allowed', 403); }
@@ -272,7 +272,7 @@ function memberRemoved(botId, communityId, reason) {
   if (!db.get('SELECT 1 FROM members WHERE user_id = ?', Number(botId))) closeGateways(botId, 4003, 'community membership removed: ' + reason);
 }
 function guildsOf(userId) {
-  return db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', userId);
+  return db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", userId);
 }
 // a bot's live connections (clients.js: the Clients row of its profile, for Manage users holders)
 const gatewaysOf = botId => [...gateways].filter(g => g.botId === Number(botId) && g.ws.readyState === 1);

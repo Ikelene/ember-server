@@ -269,7 +269,7 @@ function setOwner(userId) {
   db.tx(() => {
     db.metaSet('owner_user_id', String(userId));
     db.run('INSERT OR IGNORE INTO instance_admins (user_id) VALUES (?)', userId);
-    if (moved) db.run('UPDATE communities SET owner_id = ? WHERE owner_id = ?', userId, moved);
+    if (moved) db.run("UPDATE communities SET owner_id = ? WHERE owner_id = ? AND kind = 'server'", userId, moved);
   });
   return moved;
 }

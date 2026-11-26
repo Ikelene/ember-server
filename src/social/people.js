@@ -172,4 +172,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, fullId, handleOf, snippetOf, snippet, parseId, mustParse, mine, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };
+module.exports = { register, fullId, handleOf, snippetOf, snippet, cleanSnippet, parseId, mustParse, mine, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };

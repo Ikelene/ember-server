@@ -58,7 +58,8 @@ class Snap {
       const r = db.get('SELECT u.kind, u.domain FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND m.user_id = ?', this.c.id, uid);
       // an account of another homeserver counts as a member only while this server lets its homeserver in (PROTOCOL §4b):
       // every permission check starts here, so a server that stops accepting a homeserver shuts its accounts out at once
-      this._mem.set(uid, !!r && (r.kind !== 'remote' || this.isOwner(uid) || FED().serverAllows(this.c, r.domain)));
+      // (a DM has no such rule: whoever is in it is in it, PROTOCOL §4c)
+      this._mem.set(uid, !!r && (r.kind !== 'remote' || this.c.kind === 'dm' || this.isOwner(uid) || FED().serverAllows(this.c, r.domain)));
     }
     return this._mem.get(uid);
   }
@@ -67,7 +68,8 @@ class Snap {
     if (!this._mr.has(uid)) this._mr.set(uid, new Set(db.all('SELECT role_id FROM member_roles WHERE community_id = ? AND user_id = ?', this.c.id, uid).map(r => r.role_id)));
     return this._mr.get(uid);
   }
-  isOwner(uid) { return Number(this.c.owner_id) === Number(uid); }
+  // nobody owns a DM the way a server is owned: its members only have what its @everyone role gives (social/dms.js decides the rest)
+  isOwner(uid) { return this.c.kind !== 'dm' && Number(this.c.owner_id) === Number(uid); }
   perms(uid) { return perms.basePerms({ isMember: this.isMember(uid), isOwner: this.isOwner(uid), roles: this.roles, roleIds: this.roleIds(uid) }); }
   chPerms(ch, uid) { return perms.channelPerms(this.perms(uid), { overwrites: this.ow.get(ch.id), everyoneId: this.everyone?.id, roleIds: this.roleIds(uid) }); }
   canView(ch, uid) {
@@ -85,13 +87,16 @@ const snapOf = c => new Snap(c);
 const snapById = id => { const c = db.get('SELECT * FROM communities WHERE id = ?', id); return c ? new Snap(c) : null; };
 
 // ---------- lookups that throw API errors ----------
-function findCommunity(sid) {
+function findCommunity(sid, { dm = false } = {}) {
   const c = db.get('SELECT * FROM communities WHERE sid = ?', String(sid || '').trim());
-  if (!c) throw err('server_not_found', 404);
+  // a DM is a community of kind 'dm' (PROTOCOL §4c) and not a server: every route that names a server by its sid ends here,
+  // so none of them (settings, roles, channels, invites, bots, bridges, backups, exports, joining, moderation) reaches one
+  // (dm: true is for the few things a DM shares with a server: uploads)
+  if (!c || (c.kind === 'dm' && !dm)) throw err('server_not_found', 404);
   return c;
 }
-function memberCommunity(sid, me) {
-  const c = findCommunity(sid);
+function memberCommunity(sid, me, opts) {
+  const c = findCommunity(sid, opts);
   const snap = snapOf(c);
   if (!snap.isMember(me.id)) throw notMember(c, me);
   return { c, snap };
@@ -233,7 +238,7 @@ function unreadCounts(me, channelIds) {
 // ---------- servers ----------
 const joinedCount = uid => db.get('SELECT COUNT(*) AS n FROM members WHERE user_id = ?', uid).n;
 function myServers(me) {
-  const mine = db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id);
+  const mine = db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", me.id);
   const snaps = mine.map(snapOf).filter(s => s.isMember(me.id)); // (not the servers that stopped letting a remote account's homeserver in)
   const vis = new Map(snaps.map(s => [s.c.id, s.visible(me.id)]));
   const ids = [...vis.values()].flat().map(ch => ch.id);
@@ -283,7 +288,7 @@ const JOIN_POLICIES = ['open', 'request', 'password', 'allowlist', 'invite'];
 
 // ---------- many servers per homeserver (PROTOCOL §5a) ----------
 const SLUG = require('./slug');
-const communityCount = () => db.get('SELECT COUNT(*) AS n FROM communities').n;
+const communityCount = () => db.get("SELECT COUNT(*) AS n FROM communities WHERE kind = 'server'").n;
 const addressOf = c => `${c.slug}@${config.domain()}`;
 const slugTaken = (s, exceptId = 0) => !!db.get('SELECT 1 FROM communities WHERE slug = ? AND id <> ?', s, exceptId);
 // a slug someone typed: 400 invalid_slug / 409 slug_taken
@@ -303,7 +308,7 @@ function assertMayCreate(me) {
   if (rule.mode !== 'anyone' && !listed) throw err('forbidden', 403);
   if (!auth.claimed()) throw err('instance_not_claimed', 409);
   if (rule.per_account !== null) {
-    const used = db.get('SELECT COUNT(*) AS n FROM communities WHERE owner_id = ?', me.id).n;
+    const used = db.get("SELECT COUNT(*) AS n FROM communities WHERE kind = 'server' AND owner_id = ?", me.id).n;
     if (used >= rule.per_account) throw err('creation_limit', 403, { limit: rule.per_account, used });
   }
 }
@@ -311,7 +316,7 @@ function assertMayCreate(me) {
 // No community at all: null. Several and no sid: 400 sid_required.
 function pickCommunity(sid) {
   if (sid !== undefined && sid !== null && String(sid).trim() !== '') return findCommunity(sid);
-  const two = db.all('SELECT * FROM communities ORDER BY id LIMIT 2');
+  const two = db.all("SELECT * FROM communities WHERE kind = 'server' ORDER BY id LIMIT 2");
   if (two.length > 1) throw err('sid_required');
   return two[0] || null;
 }
@@ -326,10 +331,10 @@ function resolveAddress(address) {
 }
 // the discovery document's view of a server
 const discoveryView = c => ({ sid: c.sid, slug: c.slug, address: addressOf(c), name: c.name, icon_url: c.icon_url || null, description: c.description, member_count: memberCount(c.id), join_policy: c.join_policy });
-const listedCommunities = () => db.all('SELECT * FROM communities WHERE listed = 1 ORDER BY id');
+const listedCommunities = () => db.all("SELECT * FROM communities WHERE listed = 1 AND kind = 'server' ORDER BY id");
 // discovery `community` (protocol 1 clients know one per instance): the only one, else the oldest listed one, else the oldest
 function discoveryCommunity() {
-  const c = communityCount() === 1 ? db.get('SELECT * FROM communities') : listedCommunities()[0] || db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
+  const c = communityCount() === 1 ? db.get("SELECT * FROM communities WHERE kind = 'server'") : listedCommunities()[0] || db.get("SELECT * FROM communities WHERE kind = 'server' ORDER BY id LIMIT 1");
   return c ? discoveryView(c) : null;
 }
 const directoryPoke = () => { try { require('./relay/directory').poke(); } catch { /* relays off */ } };
@@ -555,8 +560,8 @@ function banList(sid, me) {
 // every listed server here, plus the ones you are in. A homeserver with a single server shows it whether listed or not,
 // as protocol 1 did (the discovery document names it anyway).
 function discover(me) {
-  const rows = communityCount() === 1 ? db.all('SELECT * FROM communities')
-    : db.all('SELECT c.* FROM communities c WHERE c.listed = 1 OR EXISTS (SELECT 1 FROM members m WHERE m.community_id = c.id AND m.user_id = ?) ORDER BY c.id', me.id);
+  const rows = communityCount() === 1 ? db.all("SELECT * FROM communities WHERE kind = 'server'")
+    : db.all("SELECT c.* FROM communities c WHERE c.kind = 'server' AND (c.listed = 1 OR EXISTS (SELECT 1 FROM members m WHERE m.community_id = c.id AND m.user_id = ?)) ORDER BY c.id", me.id);
   return rows
     .map(c => { const snap = snapOf(c); return { ...serverView(c, snap, null), joined: snap.isMember(me.id) }; });
 }
@@ -570,7 +575,7 @@ function findInvite(code) {
     if ((inv.expires_at && inv.expires_at <= now()) || (inv.max_uses && inv.uses >= inv.max_uses)) throw err('invalid_invite', 404);
     return { c, inv };
   }
-  const c = db.get('SELECT * FROM communities WHERE invite_code = ?', code); // legacy permanent code
+  const c = db.get("SELECT * FROM communities WHERE invite_code = ? AND kind = 'server'", code); // legacy permanent code
   if (!c || !code) throw err('invalid_invite', 404);
   return { c, inv: null };
 }
@@ -938,7 +943,7 @@ function listEmojis(sid, me) {
 }
 function allEmojis(me) {
   const out = [];
-  for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)) {
+  for (const c of db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", me.id)) {
     const emojis = db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(emojiView);
     if (emojis.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, emojis, allow_cloning: clonelock().allowsCloning(c) });
   }
@@ -990,7 +995,7 @@ function listStickers(sid, me) {
 }
 function allStickers(me) {
   const out = [];
-  for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)) {
+  for (const c of db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", me.id)) {
     const stickers = stickersOf(c);
     if (stickers.length) out.push({ sid: c.sid, name: c.name, icon: c.icon_url || null, stickers, allow_cloning: clonelock().allowsCloning(c) });
   }

@@ -78,7 +78,7 @@ const own = (c, id) => { const r = db.get('SELECT * FROM sounds WHERE sid = ? AN
 
 // every sound from the communities you're in
 function mine(me) {
-  return { servers: db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id)
+  return { servers: db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'server' AND m.user_id = ? ORDER BY c.id", me.id)
     .map(c => ({ sid: c.sid, name: c.name, icon: c.icon_url || null, sounds: db.all('SELECT * FROM sounds WHERE community_id = ? ORDER BY id', c.id).map(view) })).filter(x => x.sounds.length) };
 }
 function list(sid, me) {

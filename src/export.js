@@ -307,7 +307,7 @@ function importOnBoot() {
   const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[import]', ...a);
   try {
     if (!fs.existsSync(file)) return null;
-    if (db.get('SELECT 1 AS x FROM communities LIMIT 1')) { log('the instance already has a community, ignoring', file); return null; }
+    if (db.get("SELECT 1 AS x FROM communities WHERE kind = 'server' LIMIT 1")) { log('the instance already has a community, ignoring', file); return null; }
     const owner = auth.ownerRow();
     if (!owner) { log('no owner yet, cannot import'); return null; }
     const c = importCommunity(owner, fs.readFileSync(file));
@@ -318,7 +318,7 @@ function importOnBoot() {
 }
 // every server as an export zip, for the host's backups (src/cli.js): [{ sid, slug, name, zip }]. Empty = nothing to back up
 function exportForBackup() {
-  return db.all('SELECT * FROM communities ORDER BY id').map(c => ({ sid: c.sid, slug: c.slug, name: c.name, zip: exportCommunity(c.sid, auth.userById(c.owner_id)) }));
+  return db.all("SELECT * FROM communities WHERE kind = 'server' ORDER BY id").map(c => ({ sid: c.sid, slug: c.slug, name: c.name, zip: exportCommunity(c.sid, auth.userById(c.owner_id)) }));
 }
 
 module.exports = { readExport, exportCommunity, importCommunity, importOnBoot, exportForBackup, FORMAT };

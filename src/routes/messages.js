@@ -39,7 +39,7 @@ function register(app) {
     if (!req.scopes.includes('media')) throw err('insufficient_scope', 403);
     const sid = String(req.query.sid || '');
     if (!sid) throw err('sid_required');
-    const { c, snap } = C.memberCommunity(sid, req.user);
+    const { c, snap } = C.memberCommunity(sid, req.user, { dm: true }); // (a DM takes uploads like a server does)
     if (!c.allow_uploads) throw err('uploads_disabled', 403);
     const { P } = require('../perms');
     if (req.query.cid) {

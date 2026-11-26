@@ -55,8 +55,10 @@ function remove(me, pushkey) {
 // ---------- sending ----------
 // channels with something unread, for the badge
 const unread = userId => db.get(`SELECT COUNT(*) AS n FROM channels ch JOIN members m ON m.community_id = ch.community_id AND m.user_id = ?
-  LEFT JOIN read_state r ON r.user_id = m.user_id AND r.channel_id = ch.id WHERE ch.last_message_id > COALESCE(r.last_read_id, 0)`, userId).n;
+  LEFT JOIN read_state r ON r.user_id = m.user_id AND r.channel_id = ch.id WHERE ch.last_message_id > COALESCE(r.last_read_id, 0)`, userId).n
+  + db.get('SELECT COUNT(*) AS n FROM dm_pointers WHERE user_id = ? AND unread > 0', userId).n; // and DMs hosted elsewhere (§4c)
 function notification(u, payload, count) {
+  if (payload.dm) return dmNotification(u, payload, count);
   const m = db.get('SELECT r.user_id AS ru FROM messages m LEFT JOIN messages r ON r.id = m.reply_to WHERE m.id = ?', Number(payload.id));
   const kind = m?.ru === u.id ? 'reply' : 'mention', from = payload.from || 'Someone';
   const title = count > 1 ? `${count} new mentions in #${payload.channel}` : kind === 'reply' ? `${from} replied to you` : `${from} mentioned you`;
@@ -67,6 +69,19 @@ function notification(u, payload, count) {
     homeserver: config.domain(), counts: { unread: unread(u.id) },
   };
 }
+
+// a message in a DM (hosted here: notify.js; hosted elsewhere: dm_activity, social/dms.js)
+function dmNotification(u, payload, count) {
+  const from = payload.from || 'Someone', where = payload.group ? payload.server || 'a group' : null, base = config.publicUrl();
+  const title = count > 1 ? `${count} new messages ${where ? 'in ' + where : 'from ' + from}` : where ? `${from} in ${where}` : from;
+  return {
+    kind: 'dm', title: trim(title, 100), preview: trim(count > 1 && where ? `${from}: ${payload.body}` : payload.body, 300),
+    ...(base.startsWith('https://') ? { url: `${base}/#/dm/${encodeURIComponent(payload.dm)}` } : {}),
+    homeserver: config.domain(), counts: { unread: unread(u.id) },
+  };
+}
+// dm_activity: new messages in a DM hosted on another homeserver. { id, from, name, group, body }
+const dm = (userId, d) => onOffline([userId], { dm: d.id, cid: 'dm:' + d.id, from: d.from, server: d.name, group: !!d.group, body: d.body });
 
 const queues = new Map(); // gateway url -> { chain, waiting }
 function post(url, body) {
@@ -127,4 +142,4 @@ function register(app) {
 // discovery: `push: { pushers_url }`
 const discovery = () => ({ push: { pushers_url: `${config.publicUrl()}/api/v2/pushers` } });
 
-module.exports = { start, stop, register, discovery, add, remove, list, onOffline, idle, DEFAULT_GATEWAY, _setWindow: ms => { WINDOW = ms; } };
+module.exports = { start, stop, register, discovery, add, remove, list, onOffline, dm, idle, DEFAULT_GATEWAY, _setWindow: ms => { WINDOW = ms; } };

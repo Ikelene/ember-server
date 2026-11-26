@@ -62,6 +62,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   require('./interactions').start(); // clears "thinking" messages a restart left behind
   require('./audit').start(); // drops audit log entries past their retention, hourly
   require('./federation').start(); // follows the shared deny lists
+  require('./social').start(); // DMs: tells the other homeservers about new messages (PROTOCOL §4c)
   uploads.startExpiry(); // deletes uploads past their expiry, every few minutes
   log(`ember-server ${pkg.version} listening on ${host}:${actual}`);
   log(`  public url: ${config.get().public_url}   accounts: ${config.mode()}${config.mode() === 'nookara' ? ` (${config.get().nookara_url})` : ''}   data: ${config.dir()}`);
@@ -75,6 +76,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
     require('./push').stop();
     require('./audit').stop();
     require('./federation').stop();
+    require('./social').stop();
     require('./interactions').stop();
     uploads.stopExpiry();
     require('./bridge').shutdown();

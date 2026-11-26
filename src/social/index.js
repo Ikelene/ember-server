@@ -4,6 +4,7 @@
 //   people.js   ids and handles, lookup, profiles, what is cached about accounts of other homeservers
 //   friends.js  friends and blocks
 //   keys.js     the public keys accounts publish
+//   dms.js      DMs hosted here, pointers to DMs hosted elsewhere, activity
 const s2s = require('./s2s');
 
 function register(app) {
@@ -11,7 +12,10 @@ function register(app) {
   require('./people').register(app);
   require('./friends').register(app);
   require('./keys').register(app);
+  require('./dms').register(app);
 }
+const start = () => require('./dms').start();
+const stop = () => require('./dms').stop();
 const discovery = () => s2s.discovery();
 
-module.exports = { register, discovery };
+module.exports = { register, discovery, start, stop };

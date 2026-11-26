@@ -13,7 +13,7 @@ let cache = { at: 0, v: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // the servers the page shows: the listed ones; a homeserver with a single server shows it either way (as it always did)
-const shown = () => { const all = db.all('SELECT * FROM communities ORDER BY id LIMIT 2'); return all.length === 1 ? all : db.all('SELECT * FROM communities WHERE listed = 1 ORDER BY id LIMIT 200'); };
+const shown = () => { const all = db.all("SELECT * FROM communities WHERE kind = 'server' ORDER BY id LIMIT 2"); return all.length === 1 ? all : db.all("SELECT * FROM communities WHERE listed = 1 AND kind = 'server' ORDER BY id LIMIT 200"); };
 
 // a stored picture address -> absolute https/http url on this server (or null): relative ones join the public url, nothing but http(s)
 function absUrl(u) {
@@ -46,11 +46,11 @@ function stats() {
     // the homeserver's own name, description and icon; the numbers are the whole homeserver's
     name: cfg.name, description: cfg.description || '', domain: cfg.domain,
     icon_url: absUrl(cfg.icon_url), banner_url: absUrl(one?.banner_url),
-    members: n('SELECT COUNT(DISTINCT user_id) n FROM members'),
+    members: n("SELECT COUNT(DISTINCT m.user_id) n FROM members m JOIN communities c ON c.id = m.community_id WHERE c.kind = 'server'"),
     online, connections,
-    channels: n('SELECT COUNT(*) n FROM channels'),
+    channels: n("SELECT COUNT(*) n FROM channels ch JOIN communities c ON c.id = ch.community_id WHERE c.kind = 'server'"),
     uptime_s, started_at, version: pkg.version,
-    join_policy: one?.join_policy || null, ready: n('SELECT COUNT(*) n FROM communities') > 0,
+    join_policy: one?.join_policy || null, ready: n("SELECT COUNT(*) n FROM communities WHERE kind = 'server'") > 0,
     servers,
     url: cfg.public_url, ember_url: emberLink(cfg.public_url),
   };

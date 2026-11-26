@@ -62,7 +62,7 @@ const check = given => !!code && safeEqual(normCode(given), normCode(code));
 function takeOver(user) {
   if (!auth.setOwner(user.id)) return;
   const C = require('./communities');
-  for (const c of db.all('SELECT * FROM communities WHERE owner_id = ?', user.id)) C.addMember(c, user.id, { quiet: false });
+  for (const c of db.all("SELECT * FROM communities WHERE owner_id = ? AND kind = 'server'", user.id)) C.addMember(c, user.id, { quiet: false });
 }
 function claim(user) {
   takeOver(user);

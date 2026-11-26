@@ -80,7 +80,7 @@ async function run(args, { out = s => process.stdout.write(s + '\n'), log = s =>
       const bot = db.get('SELECT u.* FROM users u JOIN bots b ON b.user_id = u.id WHERE u.id = ?', id);
       if (!bot) throw new Error('Bot not found');
       if (command === 'token') return { id: bot.principal, ...bots.resetToken(owner, bot.principal) };
-      const c = db.get('SELECT * FROM communities WHERE sid = ?', p[1]);
+      const c = db.get("SELECT * FROM communities WHERE sid = ? AND kind = 'server'", p[1]);
       if (!c) throw new Error('Community not found');
       if (!C.snapOf(c).can(owner.id, require('./perms').P.MANAGE_SERVER)) throw new Error('Owner cannot manage this community');
       if (db.get('SELECT 1 FROM bans WHERE community_id = ? AND user_id = ?', c.id, bot.id)) throw new Error('Bot is banned from this community');

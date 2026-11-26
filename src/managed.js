@@ -95,7 +95,7 @@ function botCount(communityId = null) {
 function usage(communityId = null) {
   if (!active()) return null;
   const db = require('./db');
-  const only = communityId === null ? db.all('SELECT id FROM communities ORDER BY id LIMIT 2') : [];
+  const only = communityId === null ? db.all("SELECT id FROM communities WHERE kind = 'server' ORDER BY id LIMIT 2") : [];
   const c = communityId !== null ? db.get('SELECT id FROM communities WHERE id = ?', communityId) : only.length === 1 ? only[0] : null;
   const count = table => c ? db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE community_id = ?`, c.id).n : 0;
   const used = { bots: botCount(c?.id ?? null), emojis: count('emojis'), sounds: count('sounds'), member_cap: c ? db.get("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND u.kind <> 'bot'", c.id).n : 0, max_upload_mb: null,
