@@ -268,6 +268,14 @@ const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS login_links_user ON login_links(user_id);`);
   },
+  // v24: cross-homeserver sign-in (PROTOCOL §4b): accounts of other homeservers are users of kind 'remote' (principal
+  // "id@domain", `domain` their homeserver); when each remote homeserver, registered domain and network was first seen
+  d => {
+    if (!d.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'domain')) d.exec('ALTER TABLE users ADD COLUMN domain TEXT');
+    d.exec(`CREATE INDEX IF NOT EXISTS users_domain ON users(domain) WHERE domain IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS homeservers_seen (domain TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, origin TEXT, net TEXT, ips TEXT);
+      CREATE TABLE IF NOT EXISTS homeserver_groups_seen (key TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
