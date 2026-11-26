@@ -19,7 +19,7 @@ const RATE_DEFAULTS = {
   hold_minutes: 60,         // ... put the homeserver on hold for this long
 };
 const RATE_RANGE = { exchanges_per_minute: [1, 100000], joins_per_hour: [1, 1000000], messages_per_minute: [1, 1000000], reports_per_hour: [1, 100000], s2s_per_minute: [1, 1000000], friend_requests_per_hour: [1, 1000000], dms_per_hour: [1, 1000000], new_days: [0, 3650], new_divisor: [1, 1000], hold_after: [1, 100000], hold_minutes: [1, 10080] };
-const defaults = () => ({ rate_limits: { ...RATE_DEFAULTS }, min_age_floor_days: 0, denylists: [DEFAULT_DENYLIST], deny: [], dev_origins: {} });
+const defaults = () => ({ rate_limits: { ...RATE_DEFAULTS }, min_age_floor_days: 0, denylists: [DEFAULT_DENYLIST], deny: [], dev_origins: {}, extra_jwks: [] });
 
 function listUrl(raw, allowHttp) {
   if (typeof raw !== 'string' || raw.length > 500) return null;
@@ -48,6 +48,10 @@ function sanitize(p, { loose = false, allowHttp = false } = {}) {
   if (p.denylists !== undefined) {
     const list = Array.isArray(p.denylists) && p.denylists.length <= 20 ? p.denylists.map(x => listUrl(x, allowHttp || loose)) : null;
     if (list && list.every(Boolean)) out.denylists = [...new Set(list)]; else bad('invalid_denylists');
+  }
+  if (p.extra_jwks !== undefined) { // JWKS whose keys may sign for this homeserver's domain: they are published in its own
+    const list = Array.isArray(p.extra_jwks) && p.extra_jwks.length <= 10 ? p.extra_jwks.map(x => listUrl(x, allowHttp)) : null;
+    if (list && list.every(Boolean)) out.extra_jwks = [...new Set(list)]; else bad('invalid_extra_jwks');
   }
   if (p.deny !== undefined) {
     const list = Array.isArray(p.deny) && p.deny.length <= 5000 ? p.deny.map(R.cleanDeny) : null;

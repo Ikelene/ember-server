@@ -30,7 +30,7 @@ function discovery() {
 function adminView() {
   const f = config.get().federation;
   return {
-    federation: { rate_limits: f.rate_limits, min_age_floor_days: f.min_age_floor_days, denylists: f.denylists, deny: f.deny },
+    federation: { rate_limits: f.rate_limits, min_age_floor_days: f.min_age_floor_days, denylists: f.denylists, deny: f.deny, extra_jwks: f.extra_jwks },
     accepts_remote: remote.acceptMode(),
     keys: keys.view(),
     denylists: denylist.status(),
@@ -43,7 +43,7 @@ function adminView() {
 async function adminPatch(body) {
   const b = body && typeof body === 'object' ? body : {};
   const part = {};
-  for (const k of ['rate_limits', 'min_age_floor_days', 'denylists', 'deny']) if (b[k] !== undefined) part[k] = b[k];
+  for (const k of ['rate_limits', 'min_age_floor_days', 'denylists', 'deny', 'extra_jwks']) if (b[k] !== undefined) part[k] = b[k];
   if (Object.keys(part).length) config.update({ federation: part });
   if (Array.isArray(b.release)) for (const d of b.release.slice(0, 1000)) limits.release(String(d).toLowerCase());
   denylist.invalidate();
@@ -57,7 +57,8 @@ function register(app) {
   app.cors('/api/v2/auth/remote', () => true);
   app.cors('/api/v2/auth/remote-token', () => true);
 
-  app.get(JWKS_PATH, { auth: false }, () => keys.jwks());
+  // this homeserver's keys and the ones config federation.extra_jwks vouches for (?kid=: one a verifier did not find)
+  app.get(JWKS_PATH, { auth: false }, req => require('./extra-jwks').jwks(keys.jwks().keys, typeof req.query.kid === 'string' ? req.query.kid.slice(0, 100) : null));
   app.post('/api/v2/auth/remote-token', req => remote.issue(req.user, req.body));
   app.post('/api/v2/auth/remote', { auth: false }, async req => {
     if (!exchangeLimit.hit(req.ip)) throw err('rate_limited', 429);
