@@ -42,7 +42,7 @@ function exportCommunity(sid, me) {
   const emojis = db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(e => ({ eid: e.eid, name: e.name, animated: !!e.animated, file: localFile(`${origin()}/uploads/${e.file}`) }));
   const stickers = db.all('SELECT * FROM stickers WHERE community_id = ? ORDER BY id', c.id).map(s => ({ tid: s.tid, name: s.name, animated: !!s.animated, file: localFile(`${origin()}/uploads/${s.file}`) }));
   const community = {
-    name: c.name, description: c.description, icon: localFile(c.icon_url), banner: localFile(c.banner_url),
+    name: c.name, slug: c.slug, description: c.description, icon: localFile(c.icon_url), banner: localFile(c.banner_url),
     settings: { join_policy: c.join_policy, allow_uploads: !!c.allow_uploads, upload_max_mb: c.upload_max_mb, rules: require('./settings').exportable(c) },
     categories: C.categoriesOf(c),
     channels: snap.channels.map(ch => ({
@@ -141,7 +141,9 @@ function importCommunity(me, buffer, parsed, opts = {}) {
   const result = db.tx(() => {
     const st = cj.settings || {};
     // (a password isn't exported: a password server comes back asking to join)
-    const slug = opts.slug && !db.get('SELECT 1 FROM communities WHERE slug = ?', opts.slug) ? opts.slug : undefined;
+    // the address it had (a backup's server, else the export's own slug) when nobody here has it; otherwise one from the name
+    const want = [opts.slug, cj.slug].find(s => typeof s === 'string' && require('./slug').valid(s) && !db.get('SELECT 1 FROM communities WHERE slug = ?', s));
+    const slug = want || undefined;
     const c = C.createCommunity(me, { name: cj.name, description: cj.description, slug, join_policy: ['open', 'request', 'allowlist', 'invite'].includes(st.join_policy) ? st.join_policy : 'request' }, { empty: true, trusted: opts.trusted });
     const set = { allow_uploads: st.allow_uploads === false ? 0 : 1, upload_max_mb: Number.isInteger(st.upload_max_mb) && st.upload_max_mb >= 1 && st.upload_max_mb <= 500 ? st.upload_max_mb : 25 };
     // (allow_signing / require_signing in older exports are ignored: signing is always optional)

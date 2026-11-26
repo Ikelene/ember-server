@@ -37,6 +37,7 @@ function discovery() {
     managed: managed.view(), // Nookara-hosted plan + limits (PROTOCOL §19), null on a normal instance
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
     homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
+    creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account }, // who may make a server here (admins / allowlist / request / anyone)
     communities_count: C.communityCount(),
     communities: C.listedCommunities().map(C.discoveryView),
     community: C.discoveryCommunity(),

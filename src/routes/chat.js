@@ -3,9 +3,10 @@
 const { NOOKARA_ID_FIELD } = require('../compat');
 const C = require('../communities');
 const uploads = require('../uploads');
-const { err } = require('../util');
+const { err, limiter } = require('../util');
 
 const IMG_MAX = 4 * 1024 * 1024;
+const resolveLimit = limiter(120, 60 * 1000); // address lookups per ip (no session needed)
 
 function register(app) {
   const v1 = p => '/api/v1' + p;
@@ -28,7 +29,7 @@ function register(app) {
   app.get(v1('/discover'), req => ({ servers: C.discover(req.user) }));
   app.post(v1('/servers'), req => { const c = C.createCommunity(req.user, req.body || {}); return C.serverDetail(c.sid, req.user); });
   // a server's address (slug@domain, or just the slug) -> its sid; public, like the discovery document
-  app.get(v1('/servers/resolve'), A, req => C.resolveAddress(req.query.address));
+  app.get(v1('/servers/resolve'), A, req => { if (!resolveLimit.hit(req.ip)) throw err('rate_limited', 429); return C.resolveAddress(req.query.address); });
   app.get(v1('/servers/:sid'), req => C.serverDetail(req.params.sid, req.user));
   app.patch(v1('/servers/:sid'), req => ({ server: C.updateServer(req.params.sid, req.user, { ...(req.body || {}), new_invite: !!req.body?.new_invite }) }));
   app.put(v1('/servers/:sid/layout'), req => C.setLayout(req.params.sid, req.user, {
