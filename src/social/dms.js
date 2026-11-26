@@ -287,6 +287,7 @@ function register(app) {
       const from = R.parseSub(b.from);
       if (!from) throw err('invalid_request', 400);
       if (from.domain !== hs.domain) throw err('from_mismatch', 403);
+      if (require('../federation/denylist').check({ domain: hs.domain, ips: hs.ips, sub: `${from.id}@${from.domain}` })) throw err('homeserver_denied', 403);
       limits.hit(hs.domain, 'dms');
       // the account's own rule for who may start a DM with it (dm_from), and never someone it blocked
       if (!friends.dmAllowed(to, `${from.id}@${from.domain}`)) throw err('dm_not_allowed', 403);

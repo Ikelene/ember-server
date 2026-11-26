@@ -128,6 +128,7 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "limits": { "defaults": { "member_cap": null, "voice_minutes": null, "max_upload_mb": 25, "storage_mb": null, "files_per_member": null, "upload_expiry_days": null, "emojis": null, "sounds": null, "bots": null, "bridges": ["discord", "fluxer", "matrix", "cloudlink"], "custom_voice_keys": true },
               "tiers": [ { "id": "plus", "name": "Plus", "price_credits": 50, "period_weeks": 1 } ] },
   "push": { "pushers_url": "…/api/v2/pushers" },
+  "social": { "api_url": "…/api/v2", "s2s_url": "…/_ember/s2s/v1" },
   "read_only": false,
   "homeserver": { "domain": "chat.example", "name": "My Instance", "description": "", "icon_url": null },
   "communities_count": 2,
@@ -240,9 +241,9 @@ A homeserver hosts accounts (`username@domain`) and many servers. Signing in hap
 ```json
 "accounts": { "hosts_accounts": true, "registration": "open" | "closed" | "invite" | "approval", "remote_accounts": { "mode": "none" } },
 "login": { "authorize_url": "https://chat.example/login", "token_url": "https://chat.example/api/v2/auth/token", "revoke_url": "https://chat.example/api/v2/auth/revoke",
-           "methods": [ { "id": "password", "kind": "password", "name": "Password" } ] }
+           "account_url": "https://chat.example/account", "methods": [ { "id": "password", "kind": "password", "name": "Password" } ] }
 ```
-`login` is only there when the homeserver hosts accounts; `methods` are the enabled ones. `accounts.registration` is `open` while the homeserver is unclaimed. `accounts_mode` and `registration` stay for old clients.
+`login` is only there when the homeserver hosts accounts; `methods` are the enabled ones, `account_url` is the account page (below). `accounts.registration` is `open` while the homeserver is unclaimed. `accounts_mode` and `registration` stay for old clients.
 
 **Authorize: `GET /login`.** Query: `response_type=code`, `client_id=ember`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method=S256`, optional `login_hint` (fills in the username). Ember is a public client: no secret, PKCE with S256 is required (`code_challenge` is 43 base64url characters).
 
@@ -291,6 +292,11 @@ Both answer
 - `GET /api/v2/account/logins` -> `{ logins: [ { id, kind, name, enabled, linked, email?, created_at? } ] }`: every configured method, and whether this account can use it (`linked`; for the password method: has a password).
 - `POST /login/link/<method id>` `{ return_to? }` -> `{ url }`: open `url` in a browser (once, within 10 minutes) to go through the provider and link the login to this account. Afterwards the browser goes to `return_to` (an `ember_clients` origin) with `linked=<method id>` or `link_error=<code>` added to its query, or shows a short page without one. A login that belongs to another account is refused (`login_already_linked`). Errors: `unknown_method` (404), `invalid_return_to`. `/login/link/*` answers cross-origin (preflight included) to the `ember_clients` origins; the rest of `/login` answers no other origin.
 - `DELETE /api/v2/account/logins/<method id>` -> the list again. `409 last_login_method` when nothing else would let the account in (a password while password sign-in is on, or a login whose method is enabled); `404 not_linked`; `400 cannot_remove_password`.
+
+**The account page: `GET /account`.** A page for people, on the homeserver itself, in the style of the sign-in page (plain HTML, no scripts, nothing loaded from elsewhere, refuses to be framed, answers no other origin). It shows the handle and lets the person edit the display name, pronouns, bio and picture (§4.1), choose who may start a DM with them (`dm_from`, §4c.3), link and unlink sign-in methods (the routes above), see the account's sessions and sign one out, sign out of the page, and sign out everywhere (every session and refresh token of the account ends and its gateway connections close).
+- Signing in: without a session the page sends the browser to `/login` as an ordinary authorization request (`client_id=ember`, PKCE, `redirect_uri=<public_url>/account/auth/callback.html`, the state and verifier kept in the cookie `ember_account_login` for 10 minutes). The callback swaps the code at the token endpoint and keeps the access token in the cookie `ember_account` (`HttpOnly`, `SameSite=Lax`, `Path=/account`, `Secure` on https, one hour): it is never sent to any other path. Like every `redirect_uri`, this needs a `public_url` that is https (or this machine).
+- Changes are form posts (`POST /account/profile`, `/account/avatar` (multipart, `file`), `/account/avatar/remove`, `/account/dm-privacy`, `/account/logins/link`, `/account/logins/unlink`, `/account/sessions/end`, `/account/signout`, `/account/signout-all`). Each carries `csrf`, a token derived from the session (base64url SHA-256 of `ember-account-csrf\n<session token>`); a post without it gets the page again with 403 and changes nothing. A post answers with a redirect to `/account?ok=<what>` or `/account?error=<code>`.
+- A session in the list is one sign-in: a refresh-token family (an Ember client, this page), or a session of the older sign-in routes.
 
 ---
 
@@ -341,7 +347,7 @@ All fetches follow the rules of `src/safe-http.js`: https, public addresses only
 
 **New-homeserver cooldown.** Table `homeservers_seen (domain, first_seen, last_seen, origin, net, ips)` records every homeserver whose token verified. Server setting `join.remote_min_age_days` (default 3, 0-365; config `federation.min_age_floor_days` is a floor under every server's number, shown as `remote_min_age_floor_days` in the settings view): a remote account whose homeserver was first seen less than that many days ago cannot join or ask to join: `403 homeserver_too_new { days_left }`. An invite made by a moderator (someone who can still manage the server or kick) skips it while `join.remote_invite_bypass` (default true) is on; the server's permanent invite code does not. Three clocks run and the **earliest** counts: the domain itself, its registered domain (eTLD+1) and the network its homeserver answers from (/24 for IPv4, /48 for IPv6), plus any `first_seen` a followed deny list reports. Registered domains come from a compact built-in list of common multi-label suffixes (`co.uk`, `com.au`, `github.io`, `pages.dev`, ...), not the full Public Suffix List: under a suffix that is missing, every customer shares one registered domain and so one age.
 
-**Limits per remote homeserver** (config `federation.rate_limits`), on top of each account's own limits, counted per domain: `exchanges_per_minute` (30), `joins_per_hour` (60, joins and join requests), `messages_per_minute` (300), `reports_per_hour` (30). A homeserver first seen less than `new_days` (30) ago gets each limit divided by `new_divisor` (4). Over the limit: `429 homeserver_rate_limited { retry_after }` (seconds). `hold_after` (5) refusals within ten minutes put the domain on hold for `hold_minutes` (60): everything counted here is refused until then. (Instances have no DMs or friend requests; those live on Nookara.)
+**Limits per remote homeserver** (config `federation.rate_limits`), on top of each account's own limits, counted per domain: `exchanges_per_minute` (30), `joins_per_hour` (60, joins and join requests), `messages_per_minute` (300), `reports_per_hour` (30). A homeserver first seen less than `new_days` (30) ago gets each limit divided by `new_divisor` (4). Over the limit: `429 homeserver_rate_limited { retry_after }` (seconds). `hold_after` (5) refusals within ten minutes put the domain on hold for `hold_minutes` (60): everything counted here is refused until then. Server-to-server requests (§4c) are counted the same way: `s2s_per_minute` (600, every signed request), `friend_requests_per_hour` (60), `dms_per_hour` (120, DMs started with accounts here).
 
 **Deny lists.** Local entries (config `federation.deny`): a domain, `*.domain`, a network in CIDR form, or one account (`id@domain`). Shared lists (config `federation.denylists`, default `["https://nookara.cc/.well-known/ember/denylist"]`, `[]` to follow none) are fetched every 5 minutes while remote accounts are accepted (a list on Nookara's address is skipped while `nookara_registration` is `off`):
 
@@ -354,6 +360,188 @@ All fetches follow the rules of `src/safe-http.js`: https, public addresses only
 `sig` is Ed25519 over the document without `signature`, serialized as JSON with the keys sorted at every level and no whitespace. The key is looked up by `kid` in the list origin's `/.well-known/bonfire/jwks.json`, then `/.well-known/ember/jwks.json`. A list that cannot be fetched or does not verify changes nothing: the last good copy stays in force, also across restarts. Effect of any entry: tokens are refused with `403 homeserver_denied`, and on the next refresh (or settings change) the sessions and refresh tokens of matching remote users are deleted and their sockets closed (`4003 homeserver_denied`).
 
 **Admin API.** `GET /api/v2/homeserver/federation` (instance admin) -> `{ federation: { rate_limits, min_age_floor_days, denylists, deny }, accepts_remote, keys: { current, keys: [ { kid, created_at, retired_at } ] }, denylists: [ { url, entries, updated_at, fetched_at, error } ], held: [ { domain, until } ], homeservers: [ { domain, origin, net, first_seen, first_seen_here, last_seen } ], remote_accounts: <count> }`. `PATCH` the same route with any of `rate_limits`, `min_age_floor_days`, `denylists`, `deny`, plus `release: [domain]` (lift holds) and `refresh: true` (fetch the lists now) -> the view again. `400 invalid_rate_limits` / `invalid_min_age_floor_days` / `invalid_denylists` / `invalid_deny`. Which homeservers are let in at all stays in `PATCH /api/v2/homeserver/accounts` (`remote_accounts`).
+
+---
+
+### 4c. Friends, DMs, profiles and keys (s2s)
+
+Accounts of different homeservers can be friends, talk in DMs, read each other's profiles and find each other's public keys. Nothing here is special to this server: any implementation that serves the routes below with these shapes interoperates (Nookara serves `nookara.cc` accounts this way).
+
+The rules everything follows:
+- **Ids and handles.** An account's stable id is `<id>@<domain>` (`l:5@a.example`; `id` is 1-64 of `A-Za-z0-9._:-`, opaque to everyone but its homeserver). Its handle is `<name>@<domain>` (`alice@a.example`) and may change; ids never do. `from` and `to` in every call are stable ids.
+- **Each side keeps its own.** An account's friend list, blocks, DM privacy and DM list live on its own homeserver, which is the source of truth for that account. The other homeserver is told with a signed request and keeps its own account's side.
+- **A DM lives in one place.** A DM (two people, or a group) is hosted by the homeserver of the account that starts it. Messages are never copied: the other members sign in to the host (§4b) and use it there, like a server. Their own homeserver only keeps a **pointer** (so the DM shows in their list) and is told about activity (so they get unread counts and push).
+- **Where an account's social API is.** Discovery (§3) says:
+  ```jsonc
+  "social": { "api_url": "https://a.example/api/v2", "s2s_url": "https://a.example/_ember/s2s/v1" }
+  ```
+  `api_url` is the base of the client routes below (`<api_url>/social/...`, `<api_url>/users/lookup`), `s2s_url` the base of the server-to-server routes (`<s2s_url>/friend_request`, ...). Both default to those paths on the homeserver's own origin when `social` is missing; each must be `https` (http with `EMBER_DEV=1`) without credentials, query or fragment.
+
+#### 4c.1 Signed requests
+
+Every server-to-server request is signed by the sending homeserver with a key from its JWKS (§4b: the keys cross-homeserver tokens are signed with).
+
+```
+POST /_ember/s2s/v1/friend_request HTTP/1.1
+Host: b.example
+Content-Type: application/json
+X-Ember-Homeserver: a.example
+Ember-Signature: keyId="a.example#hs_0123456789abcdef", created=1764200000, sig="<base64url>"
+
+{"from":"l:5@a.example","to":"l:2@b.example"}
+```
+
+- `keyId` is `<the sending homeserver's domain>#<kid>`; `created` is the time of signing in unix seconds; `sig` is the base64url (no padding) Ed25519 signature over the **signing string**. The three parameters are separated by `, ` and may come in any order; `keyId` and `sig` are quoted, `created` is not.
+- The signing string is five lines joined by a single `\n` (no trailing newline):
+  1. the method in upper case (`POST`);
+  2. the request target exactly as sent: path, and `?query` when there is one (`/_ember/s2s/v1/profile/l%3A5%40a.example`);
+  3. the receiver's host, lower case: the host (with `:port` unless it is the default one) of the receiver's `s2s_url`, which is the host of its public origin;
+  4. `created`, in decimal;
+  5. `sha-256=` followed by the base64url (no padding) SHA-256 of the request body bytes; for a request without a body, the digest of zero bytes (`sha-256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU`).
+- `X-Ember-Homeserver` repeats the sender's domain; when present it must equal the domain in `keyId`.
+- Bodies and answers are JSON. Errors are `{ "error": "<code>", ... }` with the status given below.
+
+The receiver checks, in this order:
+1. the header parses (`401 invalid_signature_header`); `X-Ember-Homeserver` matches (`401 homeserver_mismatch`);
+2. `created` is at most 300 s old and at most 60 s in the future (`401 signature_expired`);
+3. the rules of §4b that need nothing fetched: `403 remote_accounts_off` (it accepts no other homeserver), `400 own_homeserver`, the deny lists (`403 homeserver_denied`), `accounts.remote_accounts` (`403 homeserver_not_allowed { domain }`). A homeserver that is not let in is never contacted;
+4. the sender's homeserver and keys, found exactly as in §4b steps 4-5 (`502 homeserver_unreachable`; an unknown `kid` fetches the JWKS again at most once a minute: `401 unknown_kid`), then the signature, with **its own** public host on line 3 (`401 invalid_signature`): a request signed for another homeserver does not verify;
+5. the sender is recorded as seen (`homeservers_seen`, the cooldown clocks of §4b), the deny lists are checked again with its addresses, and the request is counted: `federation.rate_limits.s2s_per_minute` (600; `429 homeserver_rate_limited { retry_after }`, with the hold of §4b);
+6. per call: a `from` must be an account of the signing homeserver (`403 from_mismatch`) and not on a deny list (`403 homeserver_denied`); a `to` must be an account hosted by the receiver (`404 user_not_found`); malformed bodies are `400 invalid_request`.
+
+There is no nonce: every call is idempotent (sending one twice leaves the same state), so a replay within the five minutes changes nothing. `POST /_ember/s2s/v1/ping` (any body) -> `{ ok: true, homeserver: <receiver's domain>, you: <sender's domain> }` checks a setup.
+
+A sender applies its own rules before it calls: it never contacts a homeserver its `accounts.remote_accounts` or deny lists refuse (`remote_accounts_off`, `homeserver_denied`, `homeserver_not_allowed` come back to the client that asked). Calls a person waits for (`friend_request`, `friend_accept`, `dm_pointer` `added`, `profile`, `keys`) are made once, and the other homeserver's error code and status are passed to the client (a 5xx as 502). The rest (`friend_remove`, `block`, `unblock`, `presence`, `dm_pointer` `removed` / `renamed`, `dm_activity`) are queued per homeserver, sent in order off the request path, and tried up to three times.
+
+#### 4c.2 Server-to-server calls
+
+All under `<s2s_url>`; all `POST` unless marked.
+
+| call | body | answer |
+|---|---|---|
+| `friend_request` | `{ from, to, message? }` (`message`: up to 200 characters) | `{ status: "pending" }`, or `{ status: "friends" }` when `to` had already asked `from` (or they are friends). `403 blocked` when `to` blocked `from`; `409 too_many_friends`; counted in `friend_requests_per_hour` (60) |
+| `friend_accept` | `{ from, to }`: `from` accepts the request `to` sent | `{ status: "friends" }`. `409 no_request` when `to` has no request out to `from` |
+| `friend_remove` | `{ from, to }`: `from` unfriended `to`, took a request back, or turned one down | `{ ok: true }`: whatever `to` had with `from` (friendship or request, either direction) is deleted |
+| `block` | `{ from, to }` | `{ ok: true }`: the same as `friend_remove`, and `to`'s homeserver may refuse `to`'s later requests to `from` itself (`403 blocked`) |
+| `unblock` | `{ from, to }` | `{ ok: true }` |
+| `dm_pointer` | `{ dm, to, kind, from? }`, see 4c.4 | `{ ok: true }`. `403 dm_not_allowed`, `403 dm_host_mismatch`, `410 pointer_gone`, `409 too_many_dms` |
+| `dm_activity` | `{ dm, to, last_message_id, count?, mention?, preview?, sender?, name? }`, see 4c.4 | `{ ok: true }`. `410 pointer_gone`, `403 dm_host_mismatch` |
+| `GET profile/<id>` | - | the profile, see 4c.5. `404 user_not_found` |
+| `GET keys/<id>` | - | `{ id, keys: [...] }`, see 4c.6. `404 user_not_found` |
+| `presence` | `{ from, status }` (`online`, `idle`, `dnd`, `offline`) | `{ ok: true }`. Optional: sent when an account connects or leaves, to the homeservers its friends are on; the receiver tells `from`'s friends' connected clients and stores nothing |
+
+`<id>` in a path is the URL-encoded stable id.
+
+#### 4c.3 Friends (client API on the account's own homeserver)
+
+`Authorization: Bearer <a session of an account hosted here>`; other accounts get `400 local_accounts_only`. An account in these lists is always `{ id, handle, display_name, avatar_url }` (for an account of another homeserver: what was last fetched from it; `handle` is `null` until then).
+
+| route | result |
+|---|---|
+| `GET /api/v2/users/lookup?handle=<name>` (public, on **every** homeserver; 60 a minute per address) | `{ id, handle, display_name, avatar_url }` of an account hosted there. `<name>@<domain>` is accepted when the domain is its own (`404 wrong_homeserver` otherwise); `404 user_not_found` |
+| `GET /api/v2/social/friends` | `{ friends: [...], incoming: [...], outgoing: [...], blocked: [...] }`, each entry the short form plus `since` (ms) and, for requests, `message` |
+| `POST /api/v2/social/friends { handle }` or `{ id }`, optional `message` | `{ status: "pending" \| "friends", friend }`. `handle` is `alice` (here) or `alice@b.example`: the homeserver finds `b.example` (§4b), asks its `lookup`, then sends `friend_request`. Asking someone who already asked you accepts. `400 cannot_friend_yourself`, `404 user_not_found`, `403 blocked` (they blocked you), `409 user_blocked` (you blocked them), `409 too_many_friends { limit: 1000 }`, `429 rate_limited` (30 an hour), plus the other homeserver's and the sender-side errors of 4c.1 |
+| `POST /api/v2/social/friends/<id>/accept` | `{ status: "friends", friend }`. `404 no_request` |
+| `DELETE /api/v2/social/friends/<id>` | the lists again: unfriends, takes a request back or turns one down. `404 not_friends` |
+| `POST /api/v2/social/blocks/<id>` | the lists again. Ends any friendship or request; nothing from that account is accepted until it is lifted (friend requests, DMs). The blocked account is not shown that it is blocked |
+| `DELETE /api/v2/social/blocks/<id>` | the lists again. `404 not_blocked` |
+
+`<id>` is a stable id; for an account of this homeserver the bare id (`l:7`) works too. Two accounts of one homeserver never use s2s: both sides are written at once. Table `friends (user_id, peer, state, message, created_at, updated_at)`, `state` one of `friend`, `incoming`, `outgoing`, `blocked`, `blocked_by` (the other side blocked this account: never listed).
+
+Gateway (§7), to the account's own connections: `{ type: "social_friends_update" }` whenever its lists changed (fetch them again) and `{ type: "social_presence", id, status }` when a friend connects or leaves.
+
+**DM privacy.** The account setting `dm_from` (`PATCH /api/v1/settings { dm_from }`, also on the account page) is `"friends"` (default), `"anyone"` or `"nobody"`: who may start a DM with this account. It is enforced by the account's own homeserver (4c.4).
+
+#### 4c.4 DMs
+
+**The DM object.** As clients get it (`dm`):
+```jsonc
+{ "id": "d0a1b2c3d4e@b.example",        // <dm id>@<host domain>
+  "host": "b.example", "host_origin": "https://b.example", "hosted_here": true,
+  "group": false, "name": null, "owner": null,       // a group has a name (or null) and an owner (stable id)
+  "sid": "d0a1b2c3d4e", "channel": "c5f6a7b8c9d",   // on the host: the DM's community and its one text channel
+  "members": [ { "id": "l:2@b.example", "handle": "bob@b.example", "display_name": "bob", "avatar_url": null }, ... ],
+  "created_at": 1764200000000, "updated_at": 1764200100000, "last_message_id": "41", "unread": 0, "mention": false }
+```
+
+**Client API** (`<api_url>/social`):
+
+| route | result |
+|---|---|
+| `GET /api/v2/social/dms` | `{ dms: [...] }`, newest activity first: the DMs hosted here that the caller is in (`hosted_here: true`; any account, also one signed in from another homeserver) and, for accounts of this homeserver, the pointers to DMs hosted elsewhere (`hosted_here: false`, `unread` / `mention` / `last_message_id` as last reported by the host) |
+| `GET /api/v2/social/dms/<id>` | `{ dm }`. `404 dm_not_found` |
+| `POST /api/v2/social/dms { members: [handle], member_ids?: [id], name?, group? }` | `{ dm, created }`: starts a DM **here** (accounts of this homeserver only). One other member makes a two-person DM unless `group: true`; more make a group (10 members at most, `name` up to 60 characters). A two-person DM that already exists between the two, here or on the other homeserver, is returned instead (`created: false`). `400 invalid_members`, `404 user_not_found`, `403 dm_not_allowed { member }` (that member's `dm_from` or block says no: nothing is created), `409 user_blocked { member }`, `429 rate_limited` (30 an hour) |
+| `PATCH /api/v2/social/dms/<id> { name }` | `{ dm }`: any member of a group renames it. `400 not_a_group` |
+| `DELETE /api/v2/social/dms/<id>/members/<member id>` | `{ dm }`: the group's owner removes someone. `403 owner_only`, `404 not_a_member`, `400 cannot_remove_yourself` |
+| `POST /api/v2/social/dms/<id>/leave` | `{ ok: true, hosted_here }`: leaves a group. The owner leaving hands it to the longest-standing member; the last member leaving deletes it. `400 not_a_group` (a two-person DM cannot be left) |
+| `POST /api/v2/social/dms/<id>/read` | `{ dm }`: marks it read (on the host: the read state; on the member's homeserver: the pointer's `unread` and `mention`) |
+
+`PATCH`, `DELETE .../members` and `leave` act on the host: asked of a homeserver that only has the pointer they answer `400 not_hosted_here { host_origin }`, except `leave`, which drops the pointer there (`{ ok: true, hosted_here: false, host_origin }`); the host then learns it from its next `dm_activity` (`410 pointer_gone`) and removes the member.
+
+**Using a DM.** On the host a DM is a hidden community of kind `dm` with one text channel (`channel`): messages, history, edits, reactions, typing, read state, uploads (`/api/v1/media/upload?sid=<sid>&cid=<channel>`) and the gateway events are those of §6-§7 on that channel id, and members get every message as a notification (`chat_mention`, and push with `kind: "dm"`, §20). A member from another homeserver gets a session on the host with a cross-homeserver token (§4b: `remote-token` with `audience` = `host_origin`, then `POST <host_origin>/api/v2/auth/remote`) and uses the same routes there. A DM is **not** a server: it is in no server list (`/servers`, `/discover`, discovery, the landing page, the directory, the admin's list of servers, backups and exports), it has no slug, address, invites, join policy, roles, extra channels, bots, bridges, webhooks, settings, audit log or reports, and every route that names a server by `sid` answers `404 server_not_found` for it. Its members can post, attach, react, edit and delete their own messages; the only moderation is leave, remove (the group's owner) and rename.
+
+**What the host sends** to the homeserver of each member that lives elsewhere:
+
+`dm_pointer` `{ dm, to, kind, from? }`:
+```jsonc
+{ "dm": { "id": "d0a1b2c3d4e@b.example", "host": "b.example", "name": null, "group": false, "owner": null, "sid": "d0a1b2c3d4e", "channel": "c5f6a7b8c9d",
+          "members": [ { "id", "handle", "display_name", "avatar_url" }, ... ], "created_at": 1764200000000 },
+  "to": "l:5@a.example", "kind": "added", "from": "l:2@b.example" }
+```
+- `dm.host` must be the signing homeserver and `dm.id` must end in `@<that domain>` (`403 dm_host_mismatch`): only the host speaks for a DM. `host_origin` is never taken from the body: it is the signer's origin as found by discovery.
+- `kind: "added"`: `to` is in the DM (or, when the pointer exists already, it changed). For a new pointer `from` is required: the account of the host that added `to`. The receiver applies `to`'s rule: `403 dm_not_allowed` when `to` blocked `from`, when `dm_from` is `nobody`, or when it is `friends` and `from` is not a friend of `to`. The host then **must not** add `to`: the member's homeserver has the last word. `to` must be among `dm.members` (`400 invalid_request`). Counted in `dms_per_hour` (120).
+- `kind: "renamed"`: the name or the members changed; the pointer is updated. `410 pointer_gone` when `to` has none.
+- `kind: "removed"`: `to` is no longer in it (left on the host, removed, or the DM is gone); the pointer is deleted. Only `dm.id` and `dm.host` are needed.
+
+`dm_activity` `{ dm: "<dm id>", to, last_message_id, count?, mention?, preview?, sender?: { id, display_name }, name? }`: new messages. The host coalesces what is said within a second into one call per member; `count` is how many messages it stands for (default 1), `mention` whether one of them pinged or replied to `to`, `preview` the plain text of the last one (up to 300 characters; a host leaves it out for content it cannot read). The receiver sets the pointer's `last_message_id`, adds `count` to `unread`, ORs `mention`, tells `to`'s connected clients and pushes to `to`'s pushers when none is connected (`kind: "dm"`, §20). `410 pointer_gone` when `to` has no pointer: for a group the host takes that as "left" and removes the member.
+
+Table (member's side) `dm_pointers (user_id, dm_id, host_domain, host_origin, name, members_json, last_message_id, unread, mention, extra_json, updated_at)`, at most 500 per account. Host side: `communities.kind = 'dm'` (`join_policy` `'dm'` for two people, `'group'` for a group).
+
+Gateway, to the account's own connections on whichever homeserver sent it: `{ type: "social_dm_update", dm }` (new or changed), `{ type: "social_dm_remove", id }`, and on the member's homeserver `{ type: "social_dm_activity", dm, mention, sender?, preview? }`.
+
+#### 4c.5 Profiles
+
+`GET <s2s_url>/profile/<id>` ->
+```jsonc
+{ "id": "l:5@a.example", "handle": "alice@a.example", "display_name": "Alice", "avatar_url": "https://a.example/uploads/..." | null,
+  "bio": "..." | null, "pronouns": "..." | null, "banner_url": null, "color": "#aabbcc" | null,
+  "presence": { "status": "online" | "idle" | "dnd" | "offline", "activity": "..." },   // activity is optional
+  "updated_at": 1764200000000 }
+```
+`presence` is for friends: a homeserver gets the real status only when one of its accounts is a friend of that account, `offline` otherwise.
+
+Client: `GET /api/v2/social/profile/<id>` -> `{ profile }` in the same shape. An account of this homeserver is answered from its own data (§4.1); another homeserver's is fetched with the call above and kept for 10 minutes (table `social_cache (kind, id, body, fetched_at)`); when the other homeserver cannot be reached an older copy is returned with `stale: true`. `404 user_not_found`.
+
+#### 4c.6 Keys
+
+A homeserver stores and publishes **public** keys only; encryption and signing happen in clients. An account has one **account key** (`kind: "account"`, `alg: "ed25519"`) and up to 20 **device keys** (`kind: "device"`, `alg: "ed25519"` or `"x25519"`).
+
+```jsonc
+{ "id": "l:5@a.example",
+  "keys": [ { "kid": "acct-2", "kind": "account", "alg": "ed25519", "public_key": "<base64url, 32 bytes>", "created_at": 1764200000000, "signed_by": "acct-1", "sig": "<base64url>" },
+            { "kid": "phone",  "kind": "device",  "alg": "x25519",  "public_key": "...", "created_at": ..., "signed_by": "acct-2", "sig": "..." } ] }
+```
+- `kid`: 1-64 of `A-Za-z0-9._:-`, unique within the account. `public_key`: the raw 32-byte key, base64url without padding.
+- `sig` is Ed25519 by the key `signed_by`, over six lines joined by `\n`: `ember-key-v1`, the account's stable id, `kid`, `kind`, `alg`, `public_key`.
+- The chain: the **first** account key an account publishes has no signature. From then on a different account key is only accepted with `signed_by` = the kid of the account key it replaces and a valid `sig` by that key; every device key must have `signed_by` = the account key of the same set and a valid `sig` by it. The signatures are stored and published, so a client that remembers an account key can check every later change itself.
+
+Client:
+- `PUT /api/v2/social/keys { keys: [ { kid, kind, alg, public_key, signed_by?, sig? } ] }` -> `{ id, keys }`: the whole set, replacing the last one (keys left out are removed; an unchanged account key may be sent without its signature and keeps its place in the chain). Exactly one account key (`400 account_key_required`); `400 invalid_keys`; `403 key_signature_required { kid?, signed_by }` (a changed account key or a device key without the signature it needs); `403 bad_key_signature { kid }`.
+- `GET /api/v2/social/keys/<id>` -> `{ id, keys }`: an account here, or another homeserver's through `GET <s2s_url>/keys/<id>`, kept for 10 minutes (`stale: true` as for profiles). An account that has published nothing has `keys: []`.
+
+Table `account_keys (user_id, kid, kind, alg, public_key, created_at, signed_by, sig)`.
+
+#### 4c.7 What another implementation needs
+
+To take part, a homeserver (for a domain `d`) serves:
+1. `https://d/.well-known/ember` with `homeserver: { domain: d }` (or one delegation), `jwks_uri` on its own origin, `federation` (§4b) and, when its social API is not at the default paths, `social: { api_url, s2s_url }`;
+2. its JWKS (Ed25519 keys with `kid`), and signs every s2s request as in 4c.1;
+3. `GET <api_url>/users/lookup?handle=`;
+4. under `<s2s_url>`: `friend_request`, `friend_accept`, `friend_remove`, `block`, `unblock`, `dm_pointer`, `dm_activity`, `GET profile/<id>`, `GET keys/<id>` (and `presence` if it wants it), verifying each request as in 4c.1 and answering unknown calls with 404;
+5. to host DMs for members elsewhere: cross-homeserver sign-in (§4b, `POST <origin>/api/v2/auth/remote`) and, for those sessions, the message routes and gateway of §6-§7 on the DM's `channel`, plus `GET <api_url>/social/dms` (so a member's client finds `sid` and `channel`) and the `leave` / `rename` / `remove` routes; and it sends `dm_pointer` / `dm_activity` as in 4c.4;
+6. to let its accounts join DMs hosted elsewhere: `remote-token` (§4b) and pointers kept from `dm_pointer` / `dm_activity`.
+
+A homeserver that only wants friends, profiles and keys can answer `dm_pointer` with `403 dm_not_allowed` and never host a DM.
 
 ---
 
@@ -1517,7 +1705,7 @@ X-Ember-Homeserver: <this homeserver's domain>
 -> { "rejected": ["<pushkey>", …] }
 ```
 - `title` is at most 100 characters, `preview` at most 300 and only sent to a pusher with `show_preview: true`. `url` is only sent when `public_url` is `https`. `counts.unread` is the number of channels the person has something unread in.
-- `kind` is `mention` or `reply` today; `dm`, `call` and `other` are the gateway's other kinds and are not sent yet.
+- `kind` is `mention`, `reply` or `dm`; `call` and `other` are the gateway's other kinds and are not sent yet. `dm` (§4c.4) is every message in a DM, to each member who is not connected: by the host to its own accounts, and by a member's own homeserver when the host reports activity (`dm_activity`). Its `title` is the sender's name (`"nat"`, `"nat in <group>"`, or `"3 new messages from nat"` / `"... in <group>"` for the summary), its `url` is `<public_url>/#/dm/<dm id>`, and `counts.unread` also counts DMs hosted elsewhere that have something unread.
 - Quiet the way §12.3 is: nobody who is connected is pushed, and per person and channel the first ping goes out at once while the ones in the next 30 seconds become one summary (`"3 new mentions in #general"`).
 - A pushkey the gateway lists in `rejected` is deleted. Any other 2xx sets `last_ok_at`.
 - One request per pusher, in order per gateway, 5 seconds each at most, off the message path: a slow or dead gateway never delays a message (more than 500 waiting for one gateway are dropped). Requests only go to public addresses and follow no redirects (the rule of §4a's outside logins; `EMBER_DEV=1` lifts it).
