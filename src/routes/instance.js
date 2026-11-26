@@ -12,8 +12,7 @@ const { err, limiter, log } = require('../util');
 const pkg = require('../../package.json');
 const V = require('../version');
 
-const registerLimit = limiter(10, 3600 * 1000);
-const loginLimit = limiter(20, 600 * 1000);
+const registerLimit = auth.limits.register, loginLimit = auth.limits.login;
 const nookaraLimit = limiter(60, 60 * 1000);
 const claimLimit = limiter(10, 600 * 1000);
 
@@ -41,6 +40,8 @@ function discovery() {
     communities_count: C.communityCount(),
     communities: C.listedCommunities().map(C.discoveryView),
     community: C.discoveryCommunity(),
+    // homeserver accounts (PROTOCOL §4a): `accounts`, and `login` (where to sign in) when accounts are hosted here
+    ...require('../login').discovery(),
     // the instance's relay key (PROTOCOL §12.1): Nookara checks it here before binding this url to the key
     ...require('../relay/client').identity(),
   });

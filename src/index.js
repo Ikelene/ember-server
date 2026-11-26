@@ -28,6 +28,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
     setTimeout(() => process.exit(75), 300);
   });
   require('./routes/instance').register(app, { restart: doRestart });
+  require('./login').register(app); // homeserver accounts and login (PROTOCOL §4a)
   require('./routes/chat').register(app);
   require('./routes/messages').register(app);
   require('./routes/extras').register(app);
