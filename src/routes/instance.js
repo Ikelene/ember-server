@@ -43,6 +43,8 @@ function discovery() {
     community: C.discoveryCommunity(),
     // homeserver accounts (PROTOCOL §4a): `accounts`, and `login` (where to sign in) when accounts are hosted here
     ...require('../login').discovery(),
+    // cross-homeserver sign-in (PROTOCOL §4b): `jwks_uri` and `federation`
+    ...require('../federation').discovery(),
     // the instance's relay key (PROTOCOL §12.1): Nookara checks it here before binding this url to the key
     ...require('../relay/client').identity(),
   });
@@ -107,6 +109,7 @@ function register(app, { restart }) {
     if (!claimLimit.hit(req.ip)) throw err('rate_limited', 429);
     if (auth.claimed() && !auth.ownerStranded()) throw err('already_claimed', 409);
     if (req.user.kind === 'bot') throw err('bots_cannot_claim', 403);
+    if (req.user.kind === 'remote') throw err('remote_cannot_claim', 403); // the owner is an account this homeserver can vouch for
     if (!setup.check(req.body?.code)) throw err('invalid_code', 403);
     require('../operator-terms').requireForSetup(req.body, req.user); // setup cannot finish without accepting the Ember Server Operator Terms
     setup.claim(req.user);

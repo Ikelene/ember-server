@@ -45,7 +45,7 @@ function identityView(subjectId, subjectParts, subjectName, subjectPrincipal, fa
   if (subjectId != null && parts) return { body: parts.map(p => (p === null ? (subjectName ? '@' + subjectName : 'Deleted account') : p)).join(''), subject: { id: subjectPrincipal, username: subjectName || null }, body_parts: parts };
   return { body: fallback };
 }
-const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, [NOOKARA_ID_FIELD]: vid || null, ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
+const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, [NOOKARA_ID_FIELD]: vid || null, ...(kind === 'remote' ? { remote: true, domain: String(principal).slice(String(principal).lastIndexOf('@') + 1), handle: username } : {}), ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
 // the same person with their nickname on snap's server (display_name = the nick, global_display_name = their own name)
 const nicked = (p, snap, userId) => { const n = p && userId != null && snap?.nick ? snap.nick(userId) : null; return n ? { ...p, display_name: n, global_display_name: p.display_name, nick: n } : p; };
 // webhook / bridged posts: a name and picture, no account
@@ -371,6 +371,7 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   assertLength(c, text);
   mod().beforePost(ctx, me, body); // timeouts, AutoMod's blocked words and spam limits
   if (!sendLimit.hit(me.id)) throw err('rate_limited', 429);
+  if (me.kind === 'remote') require('./federation/limits').hit(me.domain, 'messages'); // and per homeserver (PROTOCOL §4b)
   let reply = null;
   if (replyTo != null && /^\d{1,15}$/.test(String(replyTo))) reply = db.get('SELECT id FROM messages WHERE id = ? AND channel_id = ?', Number(replyTo), ch.id)?.id ?? null;
   const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: reply, editOf: null, sticker: stickerId });

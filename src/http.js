@@ -42,7 +42,8 @@ class App {
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { return this.send(res, 400, { error: 'bad_request' }); }
     const pathname = url.pathname;
-    const rule = this.corsRules.find(r => pathname === r.prefix || pathname.startsWith(r.prefix.endsWith('/') ? r.prefix : r.prefix + '/'));
+    // (the longest matching prefix decides)
+    const rule = this.corsRules.filter(r => pathname === r.prefix || pathname.startsWith(r.prefix.endsWith('/') ? r.prefix : r.prefix + '/')).sort((x, y) => y.prefix.length - x.prefix.length)[0];
     if (rule) {
       const origin = req.headers.origin;
       res.setHeader('Vary', 'Origin');

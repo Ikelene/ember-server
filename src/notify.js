@@ -20,7 +20,7 @@ function effective(prefs, sid, cid) {
 // message text -> what a notification shows: <@v:42> -> @name, <#cid> -> #channel, <:name:eid> -> :name:, <@&rid> -> @role
 function plainBody(body, snap) {
   return String(body || '')
-    .replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'unknown-user'}`)
+    .replace(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'unknown-user'}`)
     .replace(/<#(c[0-9a-f]{10})>/g, (_, cid) => `#${snap?.channels.find(x => x.cid === cid)?.name || 'unknown'}`)
     .replace(/<a?:(\w{1,32}):e[0-9a-f]{10}>/g, ':$1:')
     .replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${snap?.roles.find(r => r.rid === rid)?.name || 'role'}`);
@@ -31,7 +31,7 @@ function plainBody(body, snap) {
 function deliver(ctx, msg, authorId) {
   const { ch, c, snap } = ctx;
   const body = plainBody(msg.body, snap);
-  const pinged = new Set([...String(msg.body || '').matchAll(/<@!?((?:[vlb]:)?\d{1,20})>/g)].map(x => x[1]));
+  const pinged = new Set([...String(msg.body || '').matchAll(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g)].map(x => x[1]));
   const prefs = new Map();
   for (const r of db.all('SELECT user_id, target, level, muted_until, push FROM notify WHERE target IN (?, ?)', c.sid, ch.cid)) {
     if (!prefs.has(r.user_id)) prefs.set(r.user_id, new Map());

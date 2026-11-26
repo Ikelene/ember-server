@@ -194,7 +194,7 @@ function messageObj(m, c, snap) {
   const addMention = (id, name, kind) => { if (!mentions.some(x => x.id === String(id))) mentions.push({ id: String(id), username: name, global_name: name, bot: kind === 'bot' }); };
   let content = String(m.body || '')
     // Ember's <@principal> -> the bot API's numeric <@id>
-    .replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (all, p) => {
+    .replace(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g, (all, p) => {
       const u = db.get('SELECT id, username, kind FROM users WHERE principal = ?', p);
       if (!u) return all;
       addMention(u.id, u.username, u.kind);

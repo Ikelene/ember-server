@@ -29,6 +29,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   });
   require('./routes/instance').register(app, { restart: doRestart });
   require('./login').register(app); // homeserver accounts and login (PROTOCOL §4a)
+  require('./federation').register(app); // cross-homeserver sign-in and federation safety (PROTOCOL §4b)
   require('./routes/chat').register(app);
   require('./routes/messages').register(app);
   require('./routes/extras').register(app);
@@ -58,6 +59,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   require('./relay').start(); // Nookara relays (PROTOCOL §12): registers in the background once we are reachable
   require('./interactions').start(); // clears "thinking" messages a restart left behind
   require('./audit').start(); // drops audit log entries past their retention, hourly
+  require('./federation').start(); // follows the shared deny lists
   uploads.startExpiry(); // deletes uploads past their expiry, every few minutes
   log(`ember-server ${pkg.version} listening on ${host}:${actual}`);
   log(`  public url: ${config.get().public_url}   accounts: ${config.mode()}${config.mode() === 'nookara' ? ` (${config.get().nookara_url})` : ''}   data: ${config.dir()}`);
@@ -69,6 +71,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
     require('./profiles').stop();
     require('./relay').stop();
     require('./audit').stop();
+    require('./federation').stop();
     require('./interactions').stop();
     uploads.stopExpiry();
     require('./bridge').shutdown();

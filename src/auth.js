@@ -13,7 +13,8 @@ const SKEW_S = 60;
 // bots (principal b:<n>) carry bot: true so clients show the BOT tag
 // gallery-approved bots (added from Nookara's bot gallery) also carry verified: true (checkmark on the BOT tag)
 const botVerified = principal => { try { return !!db.get('SELECT b.gallery_verified AS v FROM bots b JOIN users u ON u.id = b.user_id WHERE u.principal = ?', String(principal))?.v; } catch { return false; } };
-const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, [NOOKARA_ID_FIELD]: u.nookara_id || null, ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
+// accounts of another homeserver (kind 'remote', PROTOCOL §4b) carry remote: true and their homeserver's domain; their username is the whole handle (name@domain)
+const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, [NOOKARA_ID_FIELD]: u.nookara_id || null, ...(u.kind === 'remote' ? { remote: true, domain: u.domain, handle: u.username } : {}), ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
 const userById = id => db.get('SELECT * FROM users WHERE id = ?', id);
 const userByPrincipal = p => db.get('SELECT * FROM users WHERE principal = ?', String(p));
 
@@ -80,7 +81,8 @@ function resolveSession(token) {
   const user = userById(s.user_id);
   if (!user) return null;
   // principals of the other account mode can no longer use the instance
-  if (user.kind !== (config.mode() === 'nookara' ? KIND_NOOKARA : 'local')) return null;
+  // (an account of another homeserver: while its homeserver is still let in, in either mode)
+  if (user.kind === 'remote' ? !require('./federation/remote').sessionAllowed(user) : user.kind !== (config.mode() === 'nookara' ? KIND_NOOKARA : 'local')) return null;
   if (t - s.last_used > 3600 * 1000) db.run('UPDATE sessions SET last_used = ? WHERE hash = ?', t, hash);
   let scopes = []; try { scopes = JSON.parse(s.scopes); } catch { /* none */ }
   let app = null; try { app = s.app ? JSON.parse(s.app) : null; } catch { /* none */ }

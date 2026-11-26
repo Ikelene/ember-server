@@ -23,6 +23,7 @@ const instanceOrigin = () => config.publicUrl();
 const userView = auth.userView;
 const lc = s => String(s).replace(/[\\%_]/g, x => '\\' + x);
 const S = () => require('./settings');
+const FED = () => require('./federation/servers');
 const audit = (...a) => require('./audit').record(...a);
 const who = u => (u ? { kind: 'user', id: u.principal, name: u.username } : null);
 
@@ -52,7 +53,12 @@ class Snap {
   }
   isMember(uid) {
     uid = Number(uid);
-    if (!this._mem.has(uid)) this._mem.set(uid, !!db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', this.c.id, uid));
+    if (!this._mem.has(uid)) {
+      const r = db.get('SELECT u.kind, u.domain FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND m.user_id = ?', this.c.id, uid);
+      // an account of another homeserver counts as a member only while this server lets its homeserver in (PROTOCOL §4b):
+      // every permission check starts here, so a server that stops accepting a homeserver shuts its accounts out at once
+      this._mem.set(uid, !!r && (r.kind !== 'remote' || this.isOwner(uid) || FED().serverAllows(this.c, r.domain)));
+    }
     return this._mem.get(uid);
   }
   roleIds(uid) {
@@ -86,15 +92,17 @@ function findCommunity(sid) {
 function memberCommunity(sid, me) {
   const c = findCommunity(sid);
   const snap = snapOf(c);
-  if (!snap.isMember(me.id)) throw err('not_a_member', 403);
+  if (!snap.isMember(me.id)) throw notMember(c, me);
   return { c, snap };
 }
+// 403 not_a_member, or remote_not_allowed for a member whose homeserver this server no longer lets in
+const notMember = (c, me) => err(me.kind === 'remote' && db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, me.id) ? 'remote_not_allowed' : 'not_a_member', 403);
 function findChannel(cid, me) {
   const ch = db.get('SELECT * FROM channels WHERE cid = ?', String(cid || '').trim().replace(/^#/, ''));
   if (!ch) throw err('channel_not_found', 404);
   const c = db.get('SELECT * FROM communities WHERE id = ?', ch.community_id);
   const snap = snapOf(c);
-  if (!snap.isMember(me.id)) throw err('not_a_member', 403);
+  if (!snap.isMember(me.id)) throw notMember(c, me);
   if (!snap.canView(ch, me.id)) throw err('channel_not_found', 404);
   return { ch, c, snap };
 }
@@ -224,7 +232,7 @@ function unreadCounts(me, channelIds) {
 const joinedCount = uid => db.get('SELECT COUNT(*) AS n FROM members WHERE user_id = ?', uid).n;
 function myServers(me) {
   const mine = db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id);
-  const snaps = mine.map(snapOf);
+  const snaps = mine.map(snapOf).filter(s => s.isMember(me.id)); // (not the servers that stopped letting a remote account's homeserver in)
   const vis = new Map(snaps.map(s => [s.c.id, s.visible(me.id)]));
   const ids = [...vis.values()].flat().map(ch => ch.id);
   const read = readState(me.id, ids);
@@ -609,6 +617,7 @@ async function joinServer(sid, me, code, body = {}) {
   const snap = snapOf(c);
   if (db.get('SELECT 1 FROM bans WHERE community_id = ? AND user_id = ?', c.id, me.id)) throw err('banned_from_server', 403);
   if (snap.isMember(me.id)) return { server: serverView(c, snap, me) };
+  FED().assertMayJoin(c, snap, me, inv); // accounts of other homeservers: this server's rule, the new-homeserver cooldown, the homeserver's join limit
   const policy = !code && !auth.isAdmin(me) ? c.join_policy : 'open'; // an invite (and an instance admin) always gets in
   if (policy === 'invite') throw err('invite_only', 403);
   if (policy === 'allowlist' && !onAllowlist(c, me)) throw err('not_on_allowlist', 403);
@@ -1088,7 +1097,7 @@ function shopRole(cid, me, rid, on) {
 // ---------- identities, per-user settings, notification prefs ----------
 function identities(idsParam) {
   const ids = [...new Set(String(idsParam || '').split(',').map(s => s.trim()).filter(Boolean))];
-  if (!ids.length || ids.length > 200 || ids.some(x => !/^[vlb]:[0-9]{1,20}$/.test(x))) throw err('invalid_user_ids');
+  if (!ids.length || ids.length > 200 || ids.some(x => !/^[vlb]:[0-9]{1,20}$/.test(x) && !(x.length <= 320 && require('./federation/rules').parseSub(x)))) throw err('invalid_user_ids');
   return { users: ids.map(id => userView(auth.userByPrincipal(id)) || { id, username: null }) };
 }
 const SETTING_DEFAULTS = {

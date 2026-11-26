@@ -71,12 +71,15 @@ function accountView(u) {
   const domain = config.domain();
   let avatar = null;
   if (u.pfp) { try { const x = new URL(u.pfp, config.publicUrl() + '/'); if (/^https?:$/.test(x.protocol)) avatar = x.href; } catch { /* none */ } }
+  if (u.kind === 'remote') return { id: u.principal, username: u.username.split('@')[0], domain: u.domain, handle: u.username, display_name: u.display_name, avatar_url: avatar, remote: true };
   return { id: u.principal, username: u.username, domain, handle: `${u.username}@${domain}`, display_name: u.display_name, avatar_url: avatar };
 }
 // an account that may hold tokens right now
 function usable(userId) {
   const u = auth.userById(userId);
-  if (!u || u.kind !== 'local' || config.mode() !== 'local') throw oauthErr('invalid_grant', 'This account cannot sign in here.');
+  // an account hosted here, or one of another homeserver that is still let in (PROTOCOL §4b: its refresh tokens work the same)
+  const ok = u && (u.kind === 'remote' ? require('./federation/remote').sessionAllowed(u) : u.kind === 'local' && config.mode() === 'local');
+  if (!ok) throw oauthErr('invalid_grant', 'This account cannot sign in here.');
   if (u.banned) throw oauthErr('access_denied', 'This account is banned.', 403);
   return u;
 }
@@ -143,4 +146,4 @@ function revoke(tok) {
 }
 
 const _test = { codes, recent, expireCodes() { for (const c of codes.values()) c.exp = 0; }, ageRefresh(ms) { db.run('UPDATE refresh_tokens SET used_at = used_at - ? WHERE used_at IS NOT NULL', ms); } };
-module.exports = { CLIENT_ID, checkRedirect, redirectWith, parseAuthz, issueCode, token, revoke, accountView, _test };
+module.exports = { CLIENT_ID, checkRedirect, redirectWith, parseAuthz, issueCode, issueTokens, token, revoke, accountView, _test };

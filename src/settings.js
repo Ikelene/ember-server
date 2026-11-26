@@ -12,7 +12,10 @@ const managed = require('./managed');
 const { err } = require('./util');
 
 const DEFAULTS = {
-  join: { allowlist: [], max_members: null, default_roles: [] }, // (+ password_hash, never shown)
+  // remote_*: accounts of other homeservers (PROTOCOL §4b). remote_accounts narrows who the homeserver lets in: inherit (all of
+  // them) / none / allowlist (domains, "*.domain" for everything under one). remote_min_age_days: their homeserver must have
+  // been seen for this long before they can join; a moderator's invite skips that while remote_invite_bypass is on.
+  join: { allowlist: [], max_members: null, default_roles: [], remote_accounts: { mode: 'inherit', list: [] }, remote_min_age_days: 3, remote_invite_bypass: true }, // (+ password_hash, never shown)
   messages: { max_length: 4000, search_results: 25, max_reactions: 20, link_previews: true, preview_proxy: '' },
   automod: {
     words_enabled: false, words: [], word_file: '', whole_word: true, match_case: false, timeout_seconds: 60, exempt_roles: [],
@@ -68,6 +71,7 @@ function view(c, me) {
   const { password_hash, ...join } = s.join;
   return {
     join_policy: c.join_policy, has_password: !!password_hash, ...s, join,
+    remote_min_age_floor_days: config.get().federation.min_age_floor_days, // the homeserver's floor under join.remote_min_age_days
     spam_defaults: SPAM_DEFAULTS, plan: managed.active() ? planCaps() : null,
     image_compression_available: require('./images').available(),
     instance_admin: !!me && require('./auth').isAdmin(me), audit_categories: AUDIT_CATEGORIES, file_types: FILE_TYPES,
@@ -128,7 +132,16 @@ function roleList(v, snap, me, { grantable }) {
 
 const SECTION_RULES = {
   join: {
-    allowlist: v => strList(v, { max: 1000, len: 64, code: 'invalid_allowlist', re: /^[\w.:-]+$/ }),
+    allowlist: v => strList(v, { max: 1000, len: 320, code: 'invalid_allowlist', re: /^[\w.:@-]+$/ }), // usernames or ids (a remote account's is id@domain)
+    remote_accounts: v => {
+      const o = typeof v === 'string' ? { mode: v } : v;
+      if (!o || typeof o !== 'object' || Array.isArray(o) || !['inherit', 'none', 'allowlist'].includes(o.mode)) throw bad('invalid_remote_accounts');
+      const list = o.list === undefined ? [] : strList(o.list, { max: 1000, len: 255, code: 'invalid_remote_accounts' });
+      if (list.some(x => !require('./federation/rules').isDomainRule(x))) throw bad('invalid_remote_accounts');
+      return { mode: o.mode, list };
+    },
+    remote_min_age_days: v => int(v, 0, 365, 'invalid_remote_min_age_days'),
+    remote_invite_bypass: v => bool(v, 'invalid_remote_invite_bypass'),
     max_members: v => int(v, 1, 1e7, 'invalid_max_members', true),
     default_roles: (v, ctx) => roleList(v, ctx.snap, ctx.me, { grantable: true }),
   },

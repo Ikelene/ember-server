@@ -213,7 +213,7 @@ async function textOut(link, body, communityId) {
   const roles = db.all('SELECT rid, name FROM roles WHERE community_id = ?', communityId);
   t = t.replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${roles.find(r => r.rid === rid)?.name || 'role'}`);
   // <@principal> -> @name (webhooks post with allowed_mentions off, so it never pings over there)
-  t = t.replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'someone'}`);
+  t = t.replace(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'someone'}`);
   // <#cid> -> their channel when it's linked there too, else #name
   t = t.replace(/<#(c[0-9a-f]{10})>/g, (_, cid) => {
     const ch = db.get('SELECT id, name FROM channels WHERE cid = ?', cid);

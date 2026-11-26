@@ -267,7 +267,7 @@ function textOut(body, communityId) {
   let t = String(body || '');
   const roles = db.all('SELECT rid, name FROM roles WHERE community_id = ?', communityId);
   t = t.replace(/<@&(r[0-9a-f]{10})>/g, (_, rid) => `@${roles.find(r => r.rid === rid)?.name || 'role'}`);
-  t = t.replace(/<@!?((?:[vlb]:)?\d{1,20})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'someone'}`);
+  t = t.replace(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g, (_, p) => `@${db.get('SELECT username FROM users WHERE principal = ?', p)?.username || 'someone'}`);
   t = t.replace(/<#(c[0-9a-f]{10})>/g, (_, cid) => `#${db.get('SELECT name FROM channels WHERE cid = ?', cid)?.name || 'channel'}`);
   return t.replace(/<a?:(\w+):e[0-9a-f]{10}>/g, ':$1:');
 }

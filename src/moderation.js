@@ -143,6 +143,7 @@ function createReport(sid, me, body = {}) {
   const C = require('./communities');
   const { c, snap } = C.memberCommunity(sid, me);
   if (!reportLimit.hit(me.id)) throw err('rate_limited', 429);
+  if (me.kind === 'remote') require('./federation/limits').hit(me.domain, 'reports'); // and per homeserver (PROTOCOL §4b)
   const reason = clean(body.reason, 500);
   let row;
   if (body.message_id != null) {
