@@ -5,10 +5,10 @@
 This is the contract between three parties:
 
 - **Nookara** (`NOOKARA` = Nookara base URL, e.g. `https://nookara.cc`, dev `http://localhost:3000`) — identity provider, the account signing key, DMs.
-- **Instance** (`INSTANCE` = origin of an ember-server, e.g. `https://chat.ikelene.net`, dev `http://localhost:4100`) - hosts exactly **one community** (what the UI calls a "server"). Adding an instance's URL in Ember *is* joining that server.
+- **Instance** (`INSTANCE` = origin of an ember-server, e.g. `https://chat.ikelene.net`, dev `http://localhost:4100`) - a **homeserver**: it has a `domain` and hosts any number of communities (what the UI calls "servers"), each with an address `slug@domain` (§5a).
 - **Client** - Ember (web `/chat`, desktop, android).
 
-Terminology in code and docs: **instance** (the running server process at a URL) and **community** (its one Discord-like server). One instance = one community (§5a). On the wire, paths keep the old `servers` / `sid` naming so the existing client and response shapes carry over (see §6).
+Terminology in code and docs: **instance** (the running server process at a URL) and **community** (a Discord-like server on it). One instance hosts many communities (§5a). On the wire, paths keep the old `servers` / `sid` naming so the existing client and response shapes carry over (see §6).
 
 All JSON. All errors are `{ "error": "<snake_code>", ...extra }` with a fitting HTTP status. All instance HTTP routes send `Access-Control-Allow-Origin: *` and allow the `Authorization, Content-Type, X-Device-Fingerprint` headers. No cookies anywhere. The client is always served from Nookara, so every instance call is cross-origin. Ember works **without a Nookara sign-in** (local-account instances); a Nookara sign-in is only needed for DMs, group chats and Nookara-login instances.
 
@@ -112,7 +112,7 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 `GET INSTANCE/.well-known/ember` is public and returns (`GET INSTANCE/.well-known/bonfire` still serves the same document):
 ```json
 {
-  "software": "bonfire-server", "version": "0.1.0", "protocol": 1,
+  "software": "bonfire-server", "version": "0.1.0", "protocol": 1, "protocol_version": 2,
   "open_protocol": true, "protocol_name": "Ember Instance Protocol", "protocol_docs": "https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md", "about": "<one sentence: Ember is open, anyone can write a client or server>",
   "name": "My Instance", "description": "", "icon_url": null,
   "public_url": "http://localhost:4100", "previous_urls": [],
@@ -126,7 +126,10 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "max_upload_mb": 25,
   "managed": { "plan": "starter", "limits": { "member_cap": 30, "max_upload_mb": 10, "emojis": 50, "sounds": 10, "bots": 2, "bridges": false, "custom_voice_keys": false }, "host": "velora" } | null,
   "read_only": false,
-  "community": { "sid": "s…", "name": "…", "icon_url": null, "description": "", "member_count": 3, "join_policy": "open" | "request" } | null,
+  "homeserver": { "domain": "chat.example", "name": "My Instance", "description": "", "icon_url": null },
+  "communities_count": 2,
+  "communities": [ { "sid": "s…", "slug": "camp-fire", "address": "camp-fire@chat.example", "name": "…", "icon_url": null, "description": "", "member_count": 3, "join_policy": "open" | "request" | … } ],
+  "community": <one entry of the same shape> | null,
   "instance_key": "<b64url raw 32-byte Ed25519 public key>", "instance_id": "ik_…"
 }
 ```
@@ -134,8 +137,11 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 - `registration` applies only to local mode.
 - `features.signing` is false in local mode. `features.youtube` is true only when the optional yt-dlp player works (§15).
 - `features.minecraft` is always true (the Ember Link game gateway, §18); `features.bridges` says which bridge bots the owner has configured (§16; CloudLink needs none, §17).
-- `community` is the instance's one community (always shown, it's what the URL is for), or `null` while the instance is unclaimed / not set up yet.
-- `name` / `description` / `icon_url` mirror the community once it exists.
+- `protocol` stays `1` for old clients; `protocol_version: 2` says the homeserver hosts many servers (§5a).
+- `homeserver` is the homeserver itself: its `domain` (the part after `@` in a server address) and its own `name` / `description` / `icon_url` (the same values as the top-level ones).
+- `communities` are the **listed** servers only; `communities_count` counts all of them.
+- `community` is for protocol 1 clients, which know one server per instance: the only server when there is exactly one (listed or not), else the oldest listed one, else the oldest, or `null` when there is none.
+- `name` / `description` / `icon_url` are the homeserver's own; a server has its own (they are no longer mirrored).
 - `instance_key` / `instance_id` are the instance's relay key (§12.1). Nookara reads them here to check that a registering key controls the url.
 - `features.voice` is true when voice works: the instance's own Cloudflare keys, or Nookara's voice broker while registered and under its cap (§10).
 - `managed` is non-null on a Nookara-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
@@ -216,7 +222,9 @@ If the env var `EMBER_OWNER=v:<nookara id>` is set (Nookara mode only), the inst
 | `voice` | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` | secrets are **write-only**; GET returns `{ cf_app_id, has_app_secret, cf_turn_key_id, has_turn_token }` |
 | `youtube` | `{ enabled, ytdlp_path, cache_dir, cache_max_gb }` | optional player, §15. Defaults `true`, `"yt-dlp"` (on PATH), `""` (= `DATA_DIR/cache/yt`), `5` |
 | `nookara_registration` | `"auto"` / `"off"` | default `auto`: register with `nookara_url` and use the relays (§12.11). `off`: never contact Nookara (no push, payments, daily credits, voice broker, directory). Env `EMBER_NOOKARA_REGISTRATION` overrides |
-| `listed` | bool | show the instance in Nookara's public directory (§12.9). The **same value** as the community's `listed` (patching either side updates both) |
+| `domain` | string \| null | the homeserver's name in server addresses (`slug@domain`); `null` / unset = the hostname of `public_url`. `400 invalid_domain` |
+| `creation` | object | who may create servers (§5a): `{ mode: "admins" \| "allowlist" \| "request" \| "anyone", allowlist: [username or principal…], per_account: N \| null }`, default `{ "mode": "admins", "allowlist": [], "per_account": null }`. A PATCH may send any subset of the three. `400 invalid_creation` |
+| `listed` | bool | read-only: true while any server is listed. Listing is a server's own setting now (`PATCH /servers/:sid { listed }`); the key is accepted and ignored in a PATCH |
 | `tags` | string[] | ≤ 8 directory tags, ≤ 24 chars each, lower-cased, no commas |
 
 `GET` (and `PATCH`) also return read-only relay status: `velora: { registration, nookara_url, registered, instance_id, trusted, voice: { cap_minutes, used_minutes } | null, registered_at, last_error, voice_backend: "direct" | "broker" | null, directory: { listed, hidden_by_staff, pushed_at, last_error } }`. `POST /api/v1/instance/velora/register` (admins) registers right away and returns the same object; it takes no body (a `token` field is ignored: Nookara tokens never go to an instance). `GET /api/v1/instance/owner-attestation` (instance owner only) returns `{ attestation, instance_id }` for the payee flow (§12.1).
@@ -225,38 +233,43 @@ On a Nookara-hosted (managed) instance `GET`/`PATCH` also return `managed` (same
 
 The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The instance watches it and reloads it, and API writes rewrite it. `DATA_DIR/config.json` is the source of truth for these keys.
 
-### 5a. One community per instance
-- An instance has **at most one** community. The instance owner (or an admin) creates it once, during setup: `POST /api/v1/servers { name }` or `POST /api/v1/import` (zip). A second create/import → `409 community_exists`; anyone who isn't an instance admin → `403 forbidden`.
-- The instance's `name` / `description` / `icon_url` and the community's are the **same values**: patching either side updates both.
-- The instance owner is the community owner. Deleting the community (`DELETE /servers/:sid`, owner) returns the instance to the "not set up" state (`community: null`), so it can be created or imported again.
+### 5a. Many servers per homeserver
+- A homeserver hosts any number of communities ("servers"). `POST /api/v1/servers { name, slug? }` or an import (`POST /api/v1/import`, the Matrix import, a Nookara import bundle) each make a **new** one, owned by whoever creates it; the instance must be claimed (`409 instance_not_claimed`).
+- **Who may create** is the `creation` setting. Instance admins always may. `mode: "admins"` (default): nobody else (`403 forbidden`). `"allowlist"`: also the usernames / principals on `allowlist`. `"anyone"`: every account. `"request"`: `403 creation_requires_approval` for now (the approval queue comes later). `per_account` caps how many servers one non-admin account may own (`403 creation_limit { limit, used }`). Bots never may.
+- **Slugs and addresses.** Every server has a unique `slug`: 3-32 characters, `^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$`, no `--`, and not one of `admin api www mail help support status nookara ember root system i invite login account settings uploads well-known static assets`. Create takes an optional `slug` (`400 invalid_slug`, `409 slug_taken`); without one it comes from the name (lowercased, everything else becomes `-`, then `-2`, `-3`… when taken; 8 random characters when the name gives nothing usable). `PATCH /api/v1/servers/:sid { slug }` changes it: the server's owner only (`403 owner_only`). Server objects carry `slug` and `address` = `slug@domain`.
+- `GET /api/v1/servers/resolve?address=<slug@domain or slug>` (public) → `{ sid, slug, address }`; `404 server_not_found`, or `404 wrong_homeserver` when the domain is not this homeserver's.
+- The homeserver's `name` / `description` / `icon_url` are its own; nothing is mirrored between them and a server's in either direction.
+- `GET /api/v1/discover` returns every listed server plus the ones you are in (a homeserver with a single server returns it whether listed or not, as before).
+- Deleting a server (`DELETE /servers/:sid`, its owner or an instance admin) removes that one only. With none left, discovery shows `community: null`.
+- **Routes that never had a sid** (`GET /bridge/:platform/guilds`, the game routes' optional `sid`, backups below) take `?sid=` (or `sid` in the body). Without it they use the only server when there is exactly one, and answer `400 sid_required` when there are several.
 - Joining = `POST /servers/:sid/join` (follows `join_policy`) or an invite code. There is no auto-join setting any more.
 
 **Other admin routes:**
 - `POST /api/v1/instance/restart` (admins) returns `202 { ok: true }`. The instance broadcasts `{type:"instance_restarting"}`, closes its sockets, and calls `process.exit(75)`. The supervisor (docker `--restart unless-stopped`, systemd `Restart=always`, or the dev script) starts it again.
 - `GET /api/v1/instance/update` (admins) returns `{ supported, reason?, current: build, latest?, running?, outdated?, update?, reachable?, error? }`. `supported` is false (`reason`: `not_configured` / `managed`) unless the instance was started with `EMBER_UPDATE_URL` + `EMBER_UPDATE_SECRET` (its host agent's API and bearer) and is not in managed mode. `latest` / `running` are build objects (`version`, `commit`, `commit_short`, `commit_date`, `built_at`, `build_id`, `message`), `outdated` whether a newer build is available, `update` the host's run state (`state`: `idle` / `running` / `done` / `failed`, `step`, `started_at`, `finished_at`, `output` tail). `POST /api/v1/instance/update` (admins) asks the host agent to rebuild and recreate this container: `200 { ok: true, update }` is sent before the container stops. Errors: `501 update_not_supported` / `update_managed`, `409 update_in_progress`, `502 update_service_unreachable` / `update_service_rejected` / `update_service_error`. The server then goes away for a short while; clients poll `GET` until it answers again with a different `current.build_id`.
 - `GET /api/v1/instance/admins` returns `{ admins: [user…], owner: user }`. `PUT /api/v1/instance/admins/:uid` and `DELETE /api/v1/instance/admins/:uid` are owner-only.
-- Switching `accounts_mode` from `velora` to `local` (`PATCH /api/v1/instance/settings`) needs an instance admin with a local account (`409 local_admin_required` otherwise; the settings list them as `local_admins`). `POST /api/v1/instance/local-admin { username, password }` (owner-only, works in Nookara mode) makes one: a local account that is an instance admin and has an Administrator role in the community.
+- Switching `accounts_mode` from `velora` to `local` (`PATCH /api/v1/instance/settings`) needs an instance admin with a local account (`409 local_admin_required` otherwise; the settings list them as `local_admins`). `POST /api/v1/instance/local-admin { username, password }` (owner-only, works in Nookara mode) makes one: a local account that is an instance admin and has an Administrator role in the server `sid` (body, optional: the only server when there is one; with several and no `sid` the account is an instance admin only).
 
 ---
 
 ### 5b. Backups
 
-Available on every instance (self-hosted, Starter and Plus). Authentication uses an **instance session**, never a Nookara token. Backups are portable `bonfire-export-v1` ZIPs (section 9), saved in `DATA_DIR/backups/<id>.zip` with a SQLite index. Keep at most `max_backups` (default 10, configurable 1-50 through instance settings); the oldest are removed first. Lowering the setting through PATCH prunes immediately.
+Available on every instance (self-hosted, Starter and Plus). Authentication uses an **instance session**, never a Nookara token. Backups are portable `bonfire-export-v1` ZIPs (section 9), saved in `DATA_DIR/backups/<id>.zip` with a SQLite index. A backup belongs to **one server**; `max_backups` (default 10, configurable 1-50 through instance settings) is kept per server, the oldest removed first. The routes take the server as `?sid=` or body `sid` (§5a: optional while there is one server, `400 sid_required` with several). Lowering the setting through PATCH prunes immediately.
 
-A backup is `{ id: <32 hex chars>, created_at: <ms>, size: <bytes>, by: <principal>, note: <string> }`. Notes are optional strings up to 300 characters.
+A backup is `{ id: <32 hex chars>, sid: <its server, null once deleted>, created_at: <ms>, size: <bytes>, by: <principal>, note: <string> }`. Notes are optional strings up to 300 characters.
 
 | route | authorization | body / result |
 |---|---|---|
-| `POST /api/v1/instance/backups` | instance admin (owner always) | `{ note? }` -> `{ backup }`; `409 no_community` if not set up |
-| `GET /api/v1/instance/backups` | instance admin | `{ backups: [backup...] }`, newest first |
+| `POST /api/v1/instance/backups` | instance admin (owner always) | `{ sid?, note? }` -> `{ backup }`; `409 no_community` if there is no server |
+| `GET /api/v1/instance/backups?sid=` | instance admin | `{ backups: [backup...] }` of that server, newest first |
 | `GET /api/v1/instance/backups/:id/download` | instance admin | `application/zip`, attachment `<id>.zip` |
 | `DELETE /api/v1/instance/backups/:id` | instance admin | `{ ok: true }` |
-| `POST /api/v1/instance/backups/:id/restore` | instance owner only | no body -> `{ ok: true, sid }` |
-| `POST /api/v1/instance/restore` | instance owner only | multipart `file` (export ZIP, max 500 MB) -> `{ ok: true, sid }` |
+| `POST /api/v1/instance/backups/:id/restore` | instance owner only | `{ sid? }` -> `{ ok: true, sid }`; goes back over the server it was taken from (or `sid`); a server deleted since comes back as a new one |
+| `POST /api/v1/instance/restore?sid=` | instance owner only | multipart `file` (export ZIP, max 500 MB) -> `{ ok: true, sid }` |
 
 Unknown IDs return `404 backup_not_found`. Read-only mode permits list/download and rejects all four write operations with `403 read_only`. Non-admins receive 403; restore by a non-owner admin receives `403 owner_only`.
 
-Restore validates the archive, takes an automatic safety backup with note `before restore` when a community exists, then replaces the community through the normal delete/import paths in a transaction. A failed import rolls back the database; the safety ZIP remains subject to normal retention. Imported community ownership is the instance owner. IDs are remapped, so clients must discard cached community/channel IDs. Success broadcasts `instance_restarting`, closes gateway sockets with code 4010, and returns the new `sid`; reconnect and reload discovery/server detail. The process stays running. Instance settings for relays, registration, admin accounts, and identity keys remain in place. An empty instance can also restore an uploaded ZIP (there is nothing to safety-back up).
+Restore validates the archive, takes an automatic safety backup with note `before restore` when a community exists, then replaces that one server through the normal delete/import paths in a transaction; every other server on the homeserver is left alone. A failed import rolls back the database; the safety ZIP remains subject to normal retention. The restored server keeps its owner, its slug and its backups (a server that no longer exists comes back owned by whoever restores it). IDs are remapped, so clients must discard cached community/channel IDs. Success sends `instance_restarting` to that server's members, closes their gateway sockets with code 4010 (nobody else is disconnected), and returns the new `sid`; reconnect and reload discovery/server detail. The process stays running. Instance settings for relays, registration, admin accounts, and identity keys remain in place. An empty instance can also restore an uploaded ZIP (there is nothing to safety-back up).
 
 ### 5c. Build, stats and updates (`GET /api/v1/instance/info`)
 
@@ -405,7 +418,7 @@ New in v1:
 | `POST /servers/:sid/invites` `{ expires_in?: seconds, max_uses?: int }` | `MANAGE_SERVER` | invite object |
 | `DELETE /invites/:code` | `MANAGE_SERVER` | `{ ok: true }` |
 | `GET /servers/:sid/export` | owner | `application/zip` (§9) |
-| `POST /import` multipart `file` | instance admins, only while the instance has no community (§5a) | `{ sid }` |
+| `POST /import` multipart `file` | whoever may create a server (§5a); makes a new one, owned by the importer | `{ sid }` |
 | `POST /import/nookara { ticket }` | same rules as `/import` | `{ sid }`: downloads a Discord / Fluxer import prepared on Nookara (§12.6, §12.11) |
 | `GET /import/matrix`, `PUT` / `DELETE /import/matrix/bot`, `GET /import/matrix/guilds[/:gid]`, `POST /import/matrix` | same rules as `/import` | a Matrix space as the community, read by the instance with a bot the admin brings (§16.7) |
 
@@ -780,7 +793,7 @@ Nookara staff can ban an instance by key (`ik_…`) or by url host (`chat.exampl
 ```json
 { "listed": true, "name": "…", "description": "…", "icon_url": "https://…", "banner_url": "https://…", "member_count": 12, "invite_url": "https://…", "tags": ["gaming"] }
 ```
-- `listed: false` removes the listing (nothing else is needed). One listing per instance (one instance = one community).
+- `listed: false` removes the listing (nothing else is needed). With one listed server the body is that single entry, as always. With several, the oldest listed one fills those fields and all of them ride along in `communities: [ { sid, slug, address, name, description, icon_url, banner_url, member_count, invite_url, tags } ]` (Nookara reads only the single entry for now).
 - Validation: `name` required, max 80. `description` max 500. `icon_url`, `banner_url` and `invite_url` are optional `https` urls without credentials, max 512 (`banner_url` is newer: an older Nookara ignores it). `member_count` is an integer 0-100000000. `tags` is at most 8, each max 24 characters, lower-cased, no commas. Control characters and `<>` are stripped from text. Errors: `invalid_listed`, `invalid_name`, `invalid_icon_url`, `invalid_banner_url`, `invalid_invite_url`, `invalid_member_count`, `invalid_tags`. The response is `{ listed, hidden_by_staff? }`. Staff can hide a listing, and then the instance can't bring it back.
 - `GET NOOKARA/bonfire/directory?q=<text>&page=<n>` is public (CORS `*`) and returns `{ page, page_size: 24, has_more, results: [ { id: <instance_id>, url, name, description, icon_url, banner_url, member_count, invite_url, tags, trusted, updated_at } ] }`, sorted by `member_count`. `q` matches name, description and tags. Unlisted, staff-hidden and banned instances never appear. Clients must treat every field as untrusted text and open `invite_url` / `url` only as links.
 
@@ -817,7 +830,7 @@ No login: the token is the key. The body is Discord's: JSON `{ content, username
 
 ## 14. Bots
 
-A bot is an instance-local account (principal `b:<n>`, BOT tag, no login, no DMs). People with **Manage server** (and instance admins) manage them: `GET /bots` → `{ bots: [ { id, username, pfp, description, public, servers, owner, created_at } ], max }`; `POST /bots { name, description }` (name `[A-Za-z0-9_.-]{2,32}`, unique) → `{ bot, token }`; `PATCH /bots/:id { name?, description?, public? }`; `POST /bots/:id/avatar`; `POST /bots/:id/token` (new token, closes its gateway sessions); `DELETE /bots/:id`; `GET /bots/by-name/:username` → `{ bot, can_add_to }`; `POST /bots/by-name/:username/add { sid }` puts it in the community (it is a normal member afterwards, so roles, kicks and channel permissions apply). `:id` may be `b:3` or `3`.
+A bot is an instance-local account (principal `b:<n>`, BOT tag, no login, no DMs). People with **Manage server** in any server here (and instance admins) make them; instance admins manage every bot, a server's managers the ones they made (with a single server its managers manage all of them, as before). `GET /bots` and `POST /bots` take an optional `sid` (the server whose Manage server is checked). `GET /bots/by-name/:username` → `can_add_to`: every server where you have Manage server and the bot is not in yet. `GET /bots` → `{ bots: [ { id, username, pfp, description, public, servers, owner, created_at } ], max }`; `POST /bots { name, description }` (name `[A-Za-z0-9_.-]{2,32}`, unique) → `{ bot, token }`; `PATCH /bots/:id { name?, description?, public? }`; `POST /bots/:id/avatar`; `POST /bots/:id/token` (new token, closes its gateway sessions); `DELETE /bots/:id`; `GET /bots/by-name/:username` → `{ bot, can_add_to }`; `POST /bots/by-name/:username/add { sid }` puts it in the community (it is a normal member afterwards, so roles, kicks and channel permissions apply). `:id` may be `b:3` or `3`.
 
 **Token:** `base64url(<n>) + "." + 40 random base64url chars`, shown once, stored as sha256. Used as `Authorization: Bot <token>`.
 
@@ -1059,7 +1072,7 @@ The connected list only shows sessions that are identified, unlinked, not banned
 - **Posting**: only `chat` channels take messages (Send, like a text channel). Their messages go to the game (`chat` frame); the game's `chat` / `event` frames are posted with `postBridged` as `{ bridge: "minecraft", username: display name, pfp: https://mc-heads.net/avatar/<uuid or name>/64, bridge_from: the Velocity backend (when show_server_tag) }`; events carry `sys_kind` `mc_join`, `mc_leave`, `mc_death`, `mc_adv`, `mc_switch`, `mc_start`, `mc_stop` and respect the channel's `events` switches. Nothing from the game pings (`@` gets a zero-width space). Unlinking posts a system line (`mc_unlink`).
 - A community links at most 10 servers (`too_many_instances`).
 
-### 18.4 REST (`/api/v1/game/*`, same shapes as Nookara's `/chat/game/*`; `sid` may be omitted where it is a query / body field, the instance has one community)
+### 18.4 REST (`/api/v1/game/*`, same shapes as Nookara's `/chat/game/*`; `sid` may be omitted where it is a query / body field while the homeserver has one server; `400 sid_required` with several)
 
 | route | who | result |
 |---|---|---|
@@ -1211,7 +1224,7 @@ Every plan can call `POST /hosting/servers/:slug/backup` (Starter included). Acc
 
 To restore a saved account backup into an existing instance: download `GET NOOKARA/bonfire/hosting/backups/:id/download` with the Nookara bearer, then send that ZIP as multipart `file` to `POST INSTANCE/api/v1/instance/restore` with the owner's instance session (section 5b). To create a new hosted server from either an uploaded or hosted backup, use the existing `restore_backup` field below.
 
-A backup is a normal `bonfire-export-v1` zip (§9: settings, channels, roles, emojis, members, messages, files). Nookara keeps them under `BONFIRE_BACKUP_DIR` (default `/opt/velora-data/bonfire-backups`) in table `bonfire_hosted_backups`: 180 days, at most 10 per account (oldest removed first). The container produces one with `node src/cli.js export <out.zip>` (exit 3 = no community yet, nothing to save); hostd runs it with `docker exec` and streams the file to Nookara.
+A backup is a normal `bonfire-export-v1` zip (§9: settings, channels, roles, emojis, members, messages, files). Nookara keeps them under `BONFIRE_BACKUP_DIR` (default `/opt/velora-data/bonfire-backups`) in table `bonfire_hosted_backups`: 180 days, at most 10 per account (oldest removed first). The container produces one with `node src/cli.js export <out.zip>` (exit 3 = no community yet, nothing to save; with several servers it writes one file each, `<out>-<slug>.zip`, and prints them as `files`); hostd runs it with `docker exec` and streams the file to Nookara.
 
 **Restore** = `POST /hosting/servers { …, restore_backup: <id> }`: hostd receives the zip, copies it to `/data/import.zip` of the new container and starts it with `EMBER_IMPORT_ON_BOOT=/data/import.zip`. On a boot where the instance has **no community yet**, it imports the zip as the owner (`EMBER_OWNER`) and deletes the file. Members who sign in again get their roles back.
 

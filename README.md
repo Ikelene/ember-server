@@ -24,7 +24,7 @@ On first boot an unclaimed instance prints a **setup code** (`XXXX-XXXX`) to the
 
 1. Sign in (local mode: create an account; Nookara mode: sign in with Nookara).
 2. Claim the instance: `POST /api/v1/instance/claim {"code":"7Q3K-M9XD","accept_operator_terms":true}` (the Ember client has a button for it). Setting up a server means accepting the [Ember Server Operator Terms](https://nookara.cc/operator-terms) (v1.0): the client shows a required checkbox, and the claim is refused with `400 operator_terms_required` without it. The acceptance (version, time, who) is stored in the instance database. An instance set up before the terms existed keeps working; its admins see a one-time notice and can accept from the dashboard (`POST /api/v1/instance/operator-terms/accept {"accept_operator_terms":true}`). You become the owner and an admin, and the code file is deleted.
-3. Set up the instance's community: `POST /api/v1/servers {"name":"…"}` or `POST /api/v1/import` (an export zip). **An instance hosts exactly one community** — only instance admins can create/import it, and only while none exists (`409 community_exists` otherwise). You, the instance owner, own it. Deleting it returns the instance to "not set up" (discovery shows `community: null`) so it can be created or imported again. Everyone else joins it through its `join_policy` or an invite code (there is no auto-join).
+3. Create a server: `POST /api/v1/servers {"name":"…","slug":"…"}` or `POST /api/v1/import` (an export zip). **A homeserver hosts many servers**, each with an address `slug@domain`. Whoever creates a server owns it. By default only instance admins may create them; the `creation` setting opens that up (`"mode": "admins" | "allowlist" | "request" | "anyone"`, an `allowlist`, and `per_account`, a cap on how many one account may own). Everyone else joins a server through its `join_policy` or an invite code (there is no auto-join).
 
 Or skip the code: set `EMBER_OWNER=v:<nookara user id>` and the instance boots already claimed by that Nookara user (Nookara accounts only; on local accounts it is ignored). A headless setup like this must also accept the operator terms explicitly: start with `--accept-operator-terms` or set `EMBER_ACCEPT_OPERATOR_TERMS=1` (without it `EMBER_OWNER` is ignored and the setup code flow is used).
 
@@ -45,7 +45,7 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 
 | key | default | notes |
 |---|---|---|
-| `name`, `description`, `icon_url` | | shown in discovery. They are the **same values as the community's** name / description / icon: editing either side (this file, `PATCH /instance/settings`, or `PATCH /servers/:sid` + icon upload) updates the other. Name ≤ 60 chars, description ≤ 300 |
+| `name`, `description`, `icon_url` | | the homeserver's own, shown in discovery and on the landing page. A server has its own name / description / icon (`PATCH /servers/:sid`); nothing is mirrored. Name ≤ 60 chars, description ≤ 300 |
 | `public_url` | `http://localhost:<PORT>` | the origin clients reach you at. **Set this in production** (https). It is the JWT audience and the base of upload URLs |
 | `accounts_mode` | `local` | `local` (accounts on this instance) or `nookara` (Nookara sign-in). Changing it needs a restart; accounts of the other kind can no longer log in |
 | `nookara_url` | `https://nookara.cc` | issuer for Nookara mode |
@@ -54,7 +54,8 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `voice` | empty | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` — Cloudflare Realtime SFU app + TURN key. Secrets are write-only over the API |
 | `youtube` | `{ enabled: true, ytdlp_path: "yt-dlp", cache_dir: "", cache_max_gb: 5 }` | the optional YouTube player, see below. `cache_dir` empty = `DATA_DIR/cache/yt` |
 | `nookara_registration` | `auto` | `auto`: register with `nookara_url` and use its relays (push, paid roles, daily credits, voice broker, directory). `off`: never contact Nookara. See "Nookara relays" below |
-| `listed` | `false` | list the instance in Nookara's public Ember directory (same value as the community's `listed`) |
+| `domain` | hostname of `public_url` | the homeserver's name in server addresses (`slug@domain`) |
+| `creation` | `{"mode":"admins","allowlist":[],"per_account":null}` | who may create servers here (instance admins always may) |
 | `tags` | `[]` | up to 8 directory tags |
 
 ### Upgrading from bonfire-server
@@ -105,7 +106,7 @@ Unless `nookara_registration` is `off`, the instance registers itself with Nooka
 - **Paid roles**: priced roles in a roles shop are paid with Nookara credits through a pay request the buyer approves on Nookara; the instance verifies Nookara's signed receipt and grants the role. Credits go to the instance owner's Nookara account once the owner links it: the instance signs a short-lived owner attestation (`GET /api/v1/instance/owner-attestation`) and the owner presents it to Nookara themselves (`POST /bonfire/instances/payout`), so no Nookara token ever goes to the instance. Otherwise credits go to Nookara.
 - **Daily credits** for chatting (only for instances Nookara staff marked `trusted`).
 - **Voice without your own Cloudflare account**: with no `voice` keys set, voice goes through Nookara's broker (free monthly minutes for untrusted instances). Your own keys always win.
-- **Directory**: set `listed` to show up in Nookara's public directory.
+- **Directory**: set a server's `listed` (`PATCH /api/v1/servers/:sid`) to show it in Nookara's public directory.
 - **Import from Discord / Fluxer**: prepare the import on Nookara, then hand the ticket to `POST /api/v1/import/nookara`.
 
 `GET /api/v1/instance/settings` shows the state under `nookara` (`registered`, `instance_id`, `trusted`, voice minutes, `last_error`). Details: PROTOCOL §12.11.
@@ -140,9 +141,9 @@ An instance that runs in a container which `bonfire-hostd` can rebuild can updat
 
 ## Instance backups and upload limits
 
-Every instance, including self-hosted and both hosted plans, has admin-only portable backups. `POST /api/v1/instance/backups { note? }` creates one, `GET /api/v1/instance/backups` lists them, and `GET /api/v1/instance/backups/:id/download` downloads the ZIP. `DELETE /api/v1/instance/backups/:id` removes it. They live under `DATA_DIR/backups/`; instance settings `max_backups` defaults to 10 (range 1-50, oldest pruned first).
+Every instance, including self-hosted and both hosted plans, has admin-only portable backups, one server at a time. `POST /api/v1/instance/backups { sid, note? }` creates one, `GET /api/v1/instance/backups?sid=` lists them (`sid` may be left out while there is one server), and `GET /api/v1/instance/backups/:id/download` downloads the ZIP. `DELETE /api/v1/instance/backups/:id` removes it. They live under `DATA_DIR/backups/`; instance settings `max_backups` defaults to 10 per server (range 1-50, oldest pruned first).
 
-Only the instance owner can restore: `POST /api/v1/instance/backups/:id/restore`, or upload an export ZIP (multipart `file`, max 500 MB) to `POST /api/v1/instance/restore`. Restore takes a safety backup (`before restore`), replaces the community in a transaction, returns `{ ok: true, sid }`, and closes gateway sockets for a fresh reconnect (`instance_restarting`, code 4010). Read-only instances still allow backup list/download. See PROTOCOL section 5b for response shapes and errors.
+Only the instance owner can restore: `POST /api/v1/instance/backups/:id/restore`, or upload an export ZIP (multipart `file`, max 500 MB) to `POST /api/v1/instance/restore`. Restore takes a safety backup (`before restore`), replaces that one server in a transaction (every other server is left alone), returns `{ ok: true, sid }`, and closes its members' gateway sockets for a fresh reconnect (`instance_restarting`, code 4010). Read-only instances still allow backup list/download. See PROTOCOL section 5b for response shapes and errors.
 
 Roles accept nullable `upload_max_mb` (integer 1-500) on create/PATCH. A member gets the maximum of the community default and their roles' overrides, capped by the instance and managed plan; the owner gets the ceiling. `GET /api/v1/servers/:sid` keeps `server.upload_max_mb` as the community default for settings, exposes the caller's effective value as `server.my_upload_max_mb`, and returns `server.upload_ceiling_mb` (the minimum of the instance ceiling and managed plan cap) for the role editor. Hosted Starter stays at 10 MB; Plus now allows 250 MB. Role limits travel with exports, including compatibility with older backups.
 
