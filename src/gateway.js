@@ -120,6 +120,7 @@ function peopleChanged(userId) {
     if (!db.raw()) return;
     const u = auth.userById(userId);
     if (!u || u.kind === 'bot') return;
+    try { require('./social/friends').presenceChanged(u, on); } catch (e) { console.error('[gateway] friends presence', e.message); } // PROTOCOL §4c
     for (const c of db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ?', userId)) {
       emit(c.id, { type: 'chat_presence', server: c.sid, user_id: u.principal, username: u.username, presence: on ? 'online' : 'offline' });
     }

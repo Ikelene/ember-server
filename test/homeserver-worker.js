@@ -15,6 +15,10 @@ const commands = {
   rotateKey() { return require('../src/federation/keys').rotate(); },
   keys() { return require('../src/federation/keys').view(); },
   ageKey({ kid, ms }) { require('../src/federation/keys')._test.age(kid, ms); },
+  // friends, DMs, profiles and keys (PROTOCOL §4c)
+  async idle() { await require('../src/social/s2s').idle(); await require('../src/push').idle(); },
+  setRetry(list) { require('../src/social/s2s')._test.setRetry(list); },
+  sql({ query, params = [] }) { const db = require('../src/db'); return /^\s*select/i.test(query) ? db.all(query, ...params) : db.run(query, ...params).changes; },
   async close() { await inst?.close(); inst = null; },
 };
 parentPort.on('message', async ({ id, cmd, args }) => {

@@ -1104,9 +1104,10 @@ function identities(idsParam) {
 }
 const SETTING_DEFAULTS = {
   show_typing: true, share_typing: true, sounds: true, notify_sound: 'short', notifications: 'mentions', compact: false, animations: true,
-  link_images: true, server_order: [], developer_mode: false, allow_vc_calls: true,
+  link_images: true, server_order: [], developer_mode: false, allow_vc_calls: true, dm_from: 'friends',
 };
-const SETTING_CHOICES = { notify_sound: ['short', 'long', 'classic'], notifications: ['all', 'mentions', 'none'] };
+// dm_from: who may start a DM with this account (PROTOCOL §4c): friends, anyone, nobody
+const SETTING_CHOICES = { notify_sound: ['short', 'long', 'classic'], notifications: ['all', 'mentions', 'none'], dm_from: ['friends', 'anyone', 'nobody'] };
 function validSetting(k, v) {
   if (!/^[a-z0-9_]{1,40}$/.test(k)) return false;
   if (k === 'server_order') return Array.isArray(v) && v.length <= 200 && v.every(x => /^s[0-9a-f]{10}$/.test(String(x)));

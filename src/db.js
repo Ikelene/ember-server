@@ -303,6 +303,30 @@ const MIGRATIONS = [
     device_name TEXT, show_preview INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, last_ok_at INTEGER, PRIMARY KEY (user_id, pushkey)
   );
   CREATE INDEX IF NOT EXISTS pushers_key ON pushers(pushkey);`,
+  // v27: friends, DMs, profiles and keys between homeservers (PROTOCOL §4c). A DM is a community of kind 'dm' on the
+  // homeserver of whoever started it; the other members' homeservers keep a pointer to it. `peer` and every other account
+  // named here is a stable id, "id@domain". social_cache: what was fetched from other homeservers (profiles, keys)
+  d => {
+    const has = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c);
+    if (!has('communities', 'kind')) d.exec("ALTER TABLE communities ADD COLUMN kind TEXT NOT NULL DEFAULT 'server'");
+    if (!has('users', 'profile_updated_at')) d.exec('ALTER TABLE users ADD COLUMN profile_updated_at INTEGER');
+    d.exec(`CREATE TABLE IF NOT EXISTS friends (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, peer TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, peer)
+      );
+      CREATE INDEX IF NOT EXISTS friends_peer ON friends(peer);
+      CREATE TABLE IF NOT EXISTS social_cache (kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (kind, id));
+      CREATE TABLE IF NOT EXISTS account_keys (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kid TEXT NOT NULL, kind TEXT NOT NULL, alg TEXT NOT NULL, public_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL, signed_by TEXT, sig TEXT, PRIMARY KEY (user_id, kid)
+      );
+      CREATE TABLE IF NOT EXISTS dm_pointers (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, dm_id TEXT NOT NULL, host_domain TEXT NOT NULL, host_origin TEXT NOT NULL,
+        name TEXT, members_json TEXT NOT NULL DEFAULT '[]', last_message_id TEXT, unread INTEGER NOT NULL DEFAULT 0, mention INTEGER NOT NULL DEFAULT 0,
+        extra_json TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, dm_id)
+      );
+      CREATE INDEX IF NOT EXISTS communities_kind ON communities(kind);`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

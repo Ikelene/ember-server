@@ -45,7 +45,7 @@ function write(before, { display_name = before.display_name, pfp = before.pfp ||
   const keep = {};
   for (const k of FIELDS) if (data[k]) keep[k] = data[k];
   if (data.sync) keep.sync = data.sync;
-  db.run('UPDATE users SET display_name = ?, pfp = ?, account_profile = ? WHERE id = ?', display_name, pfp, Object.keys(keep).length ? JSON.stringify(keep) : null, before.id);
+  db.run('UPDATE users SET display_name = ?, pfp = ?, account_profile = ?, profile_updated_at = ? WHERE id = ?', display_name, pfp, Object.keys(keep).length ? JSON.stringify(keep) : null, now(), before.id);
   const u = auth.userById(before.id);
   if (u.display_name !== before.display_name || (u.pfp || null) !== (before.pfp || null)) auth.identityChanged(u, before.username);
   for (const m of db.all('SELECT c.* FROM members m JOIN communities c ON c.id = m.community_id WHERE m.user_id = ?', u.id)) C().memberChanged(m, u.id, 'role');
