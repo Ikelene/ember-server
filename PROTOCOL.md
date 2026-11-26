@@ -403,6 +403,7 @@ New in v1:
 | `GET /servers/:sid/export` | owner | `application/zip` (§9) |
 | `POST /import` multipart `file` | instance admins, only while the instance has no community (§5a) | `{ sid }` |
 | `POST /import/velora { ticket }` | same rules as `/import` | `{ sid }`: downloads a Discord / Fluxer import prepared on Velora (§12.6, §12.11) |
+| `GET /import/matrix`, `PUT` / `DELETE /import/matrix/bot`, `GET /import/matrix/guilds[/:gid]`, `POST /import/matrix` | same rules as `/import` | a Matrix space as the community, read by the instance with a bot the admin brings (§16.7) |
 
 Invites behave like this:
 - **An invite code always admits** you, even when `join_policy=request`. That's the "anyone with the link" path.
@@ -490,7 +491,7 @@ Connect to `ws(s)://INSTANCE/gateway`.
 
 **Client to server** frames have the same names and fields as Velora today:
 - `chat_send { nonce, channel, message, reply_to?, attachments?, signature?, sticker? }`. The server replies `chat_ack { nonce, message }` or `chat_error { nonce, error }`.
-- `chat_typing { channel }`
+- `chat_typing { channel }` (`typing: false` = stopped). Others get `chat_typing { server, channel, username, user_id, typing }`. Someone typing on the other side of a bridge (§16.6) comes as `chat_typing { server, channel, username: "<their name there>", user_id: null, typing, bridged: { platform, name, avatar } }`: they have no account here, so a client shows `bridged.name` and `bridged.avatar` (a picture on this instance, or null) with the platform's mark, and keys them by platform + name, not by `username`.
 - `chat_read { channel, message_id }`
 - the `chat_rtc_*` family (§10)
 
@@ -611,7 +612,7 @@ If verification fails, the instance rejects the message with `bad_signature`. Bo
 
 | path | contents |
 |---|---|
-| `manifest.json` | `{ format: "bonfire-export-v1", source: "<origin>", source_kind: "instance" \| "velora-legacy" \| "velora-import", exported_at: <ms>, community: "<sid>" }` |
+| `manifest.json` | `{ format: "bonfire-export-v1", source: "<origin>", source_kind: "instance" \| "velora-legacy" \| "velora-import" \| "matrix-import", exported_at: <ms>, community: "<sid>" }` |
 | `community.json` | `{ name, description, icon, banner, settings: {join_policy, allow_uploads, upload_max_mb}, categories: [name…], channels: [ {cid, name, topic, category, position, locked, type, config, perms: [ {role: "<rid>", allow, deny} ]} ], roles: [ {rid, name, color, position, permissions, upload_max_mb, hoist, mentionable, is_default} ], emojis: [ {eid, name, animated, file} ], stickers: [ {tid, name, animated, file} ], invites: [ {code, expires_at, max_uses} ] }` |
 | `members.jsonl` | one JSON object per line: `{ user: <user object>, roles: ["<rid>"…], joined_at, owner?: true }` |
 | `messages/<cid>.jsonl` | oldest first, one JSON object per line: `{ id, author: <user object> \| null, author_name?, author_avatar?, body, attachments, embeds?, reply_to, created_at, edited_at, system, sys_kind?, pinned, sticker?: "<tid>", reactions: [ {emoji, users: [uid…]} ], signature?, bridge? }` |
@@ -951,6 +952,38 @@ The instance owner connects **their own bot**: an ordinary Matrix account on any
 **Stopping.** A `401` / `M_UNKNOWN_TOKEN` stops the bot with `state: "error"`, `error: "invalid_token"` until a new token is saved; anything else retries with backoff (1 s doubling to 60 s). `429` answers are waited out (`retry_after_ms`, 15 s at most, 5 tries).
 
 Not done: encrypted rooms, per-person accounts on Matrix (that needs an application service on the homeserver), reactions, and importing a room's history.
+
+### 16.6 Typing
+
+Who is typing is carried both ways on every linked text channel (Discord, Fluxer and Matrix), while the bridge is on.
+
+- **There -> here.** The person shows up here as themselves: `chat_typing` with `bridged: { platform, name, avatar }` (§7), the name and picture a bridged message of theirs would have. Clients forget a typer after 7 s, so the instance says it again every 5 s while it lasts, and sends `typing: false` when it ends.
+  - Discord / Fluxer: the gateway's `TYPING_START` (Discord needs the `GUILD_MESSAGE_TYPING` intent, which the bot now asks for; Fluxer has no intents and sends it to bots anyway). It lasts 10 s unless another one arrives, and ends when that person's message arrives. An event with no `member` is looked up with `GET /guilds/:gid/members/:uid` (kept 10 minutes).
+  - Matrix: the `m.typing` event of `/sync` (the bot's filter now lets it through) lists everyone typing in the room; people who join the list start, people who leave it stop.
+  - The bot's own typing is never shown here.
+- **Here -> there.** Nobody but the bot can type over there, so the bot does, without saying who: Discord / Fluxer `POST /channels/:id/typing` at most once every 8 s per channel; Matrix `PUT /_matrix/client/v3/rooms/:room/typing/:bot { typing: true, timeout: 8000 }` at most once every 6 s per room, and `{ typing: false }` once the message is sent. Discord and Fluxer have no "stopped typing" call, and the message goes out through a webhook, so the bot can show as typing for a few seconds after the message landed.
+- Someone who turned `share_typing` off is never announced, here or there. Typing by bots (`POST /channels/:cid/typing` of the bot API) is not carried.
+
+### 16.7 A Matrix space as the community
+
+The Discord / Fluxer import (§12.6) is done by Velora with its own bot. Matrix has no such bot, so the instance does it itself (`src/bridge/matrix-import.js`) with a Matrix account the admin brings: the same kind of bot as §16.5, and the same rules for the homeserver address. Instance admins only, and only while the instance has no community (`403 not_allowed` / `forbidden`, `409 community_exists`). These routes are **not** behind the bridges plan: copying a space is not a bridge.
+
+| Route | Answer |
+|---|---|
+| `GET /api/v1/import/matrix` | `{ ready, bot: "@name:server" \| null, saved, can_bridge }`. `saved`: the bridge's own bot (§16.5) is being used; `can_bridge`: the plan allows bridges |
+| `PUT /api/v1/import/matrix/bot { homeserver, token }` | checked with `/account/whoami` (`400 invalid_homeserver` / `invalid_token`, `502 platform_unreachable`), then the same answer. The token is kept **in memory only**, for 30 minutes, per admin, and is never returned |
+| `DELETE /api/v1/import/matrix/bot` | forgets it |
+| `GET /api/v1/import/matrix/guilds[?fresh=1]` | `{ bot, guilds: [ { id: "<room id of the space>", name, icon: null, rooms } ] }`: every space the bot is in, plus `{ id: "rooms", name: "Rooms outside a space", loose: true }` when it is in rooms that belong to none of them. `503 bridge_not_set_up` without a bot |
+| `GET /api/v1/import/matrix/guilds/:gid` | the picker preview, the shape of §12.6: `{ platform: "matrix", guild: { id, name, description, icon: null, has_icon, banner: null }, groups: [ { id, name, channels: [ { id, name, topic, kind: "text" \| "voice" \| null, skip, private, locked, encrypted, joined } ] } ], roles, everyone_send, emojis: [ { id, name, animated, url: null } ], emoji_total, can_bridge }`. `404 bot_not_in_server` |
+| `POST /api/v1/import/matrix { guild_id, channels: [room id…], roles: ["admin", "mod"], name?, icon?, emojis?, bridge? }` | `{ sid, channels, roles, emojis, bridged }`. `pick_a_channel`, `429 import_running` |
+
+- **Reading the space.** One `/sync` with a filter that leaves nothing but room state gives every room the bot is in; its invites are accepted first. Rooms of the space the bot is not in come from `GET /_matrix/client/v1/rooms/:space/hierarchy` (as far as the homeserver shows them to the bot); a homeserver without it just shows fewer rooms.
+- **What becomes what.** A room is a text channel (a call / video room a voice channel; any other room type is not brought over). A space inside the space is a category, with every room below it, however deep; rooms directly in the space go to "Text channels". The order is the space's (`order`, then age). The room's topic is the channel's topic.
+- **Private and locked.** A room that is not `public`, `restricted` or `knock_restricted` comes over hidden from `@everyone` and visible to the roles brought over. A room where `events_default` is above `users_default` comes over locked.
+- **Roles.** Matrix has power levels, not roles: `admin` (Admin, administrator) and `mod` (Moderator: kick, ban, manage messages, mention everyone) stand in for them. Nobody has them after the import.
+- **Picture and emoji.** The space's avatar becomes the icon. Custom emoji come from the space's `im.ponies.room_emotes` state events (MSC2545), `emoticon` usage only, 100 at most.
+- **Members and messages** stay on Matrix. The import is a `bonfire-export-v1` zip (`source_kind: "matrix-import"`) fed to the normal importer (§9).
+- **`bridge: true`** (only when the plan allows bridges): the bot is saved as the bridge's bot (§16.5), the community is linked, and each imported text room is linked to its channel. Encrypted rooms are left out, and so are rooms the bot is not in and may not walk into (it joins `public` and `restricted` ones itself).
 
 ## 17. CloudLink bridge
 

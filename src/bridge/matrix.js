@@ -106,12 +106,12 @@ async function api(method, route, body, { token = tokenOf(), base = homeserver()
 }
 // a file behind an mxc:// address (authenticated media first, the old public path for homeservers that predate it)
 const MXC = /^mxc:\/\/([A-Za-z0-9.:[\]_-]{1,255})\/([A-Za-z0-9_=-]{1,255})$/;
-async function media(mxc, { thumb = false, maxBytes = 4 << 20 } = {}) {
+async function media(mxc, { thumb = false, size = 128, maxBytes = 4 << 20, token = tokenOf(), base = homeserver() } = {}) {
   const m = MXC.exec(String(mxc || ''));
   if (!m) throw new Error('bad_mxc');
-  const tail = `/${thumb ? 'thumbnail' : 'download'}/${enc(m[1])}/${enc(m[2])}${thumb ? '?width=128&height=128&method=crop' : ''}`;
-  let r = await request('GET', `${homeserver()}/_matrix/client/v1/media${tail}`, { token: tokenOf(), maxBytes });
-  if ([400, 404, 405].includes(r.status)) r = await request('GET', `${homeserver()}/_matrix/media/v3${tail}`, { token: tokenOf(), maxBytes });
+  const tail = `/${thumb ? 'thumbnail' : 'download'}/${enc(m[1])}/${enc(m[2])}${thumb ? `?width=${size}&height=${size}&method=crop` : ''}`;
+  let r = await request('GET', `${base}/_matrix/client/v1/media${tail}`, { token, maxBytes });
+  if ([400, 404, 405].includes(r.status)) r = await request('GET', `${base}/_matrix/media/v3${tail}`, { token, maxBytes });
   if (r.status !== 200) throw Object.assign(new Error(`media ${r.status}`), { status: r.status });
   return r.body;
 }
@@ -132,6 +132,22 @@ async function discover(base) {
     return typeof found === 'string' && found ? cleanHomeserver(found) : base;
   } catch { return base; }
 }
+// whose token this is on that homeserver -> "@bot:example.org"
+async function whoami(base, tok) {
+  let who;
+  try { who = await api('GET', `${V3}/account/whoami`, undefined, { token: tok, base, timeout: 12000 }); } catch (e) {
+    if (e.status === 401 || e.status === 403) throw err('invalid_token', 400, { platform: P });
+    if (e.code === 'EPRIVATE') throw err('invalid_homeserver', 400, { platform: P });
+    throw err('platform_unreachable', 502, { platform: P });
+  }
+  if (typeof who?.user_id !== 'string' || !/^@[^\s:]+:\S+$/.test(who.user_id)) throw err('platform_unreachable', 502, { platform: P });
+  return who.user_id;
+}
+const cleanToken = v => {
+  const t = typeof v === 'string' ? v.trim().replace(/^Bearer\s+/i, '') : '';
+  if (t.length > 4096 || /\s/.test(t)) throw err('invalid_token', 400, { platform: P });
+  return t;
+};
 // patch: { homeserver?: "<address>", token?: "<new>" | null (remove) | "" (keep) }. Checked with /account/whoami before it's saved.
 async function saveSettings(v) {
   if (!v || typeof v !== 'object') return;
@@ -143,24 +159,17 @@ async function saveSettings(v) {
   const hsIn = typeof v.homeserver === 'string' && v.homeserver.trim() ? v.homeserver : null;
   if (v.homeserver != null && typeof v.homeserver !== 'string') throw err('invalid_homeserver', 400, { platform: P });
   if (v.token != null && typeof v.token !== 'string') throw err('invalid_token', 400, { platform: P });
-  const tokIn = typeof v.token === 'string' ? v.token.trim().replace(/^Bearer\s+/i, '') : '';
+  const tokIn = cleanToken(v.token);
   if (!hsIn && !tokIn) return; // nothing new
-  if (tokIn.length > 4096 || /\s/.test(tokIn)) throw err('invalid_token', 400, { platform: P });
   const base = hsIn ? await discover(cleanHomeserver(hsIn)) : homeserver();
   const tok = tokIn || tokenOf();
   if (!base) throw err('invalid_homeserver', 400, { platform: P });
   if (!tok) throw err('invalid_token', 400, { platform: P });
-  let who;
-  try { who = await api('GET', `${V3}/account/whoami`, undefined, { token: tok, base, timeout: 12000 }); } catch (e) {
-    if (e.status === 401 || e.status === 403) throw err('invalid_token', 400, { platform: P });
-    if (e.code === 'EPRIVATE') throw err('invalid_homeserver', 400, { platform: P });
-    throw err('platform_unreachable', 502, { platform: P });
-  }
-  if (typeof who?.user_id !== 'string' || !/^@[^\s:]+:\S+$/.test(who.user_id)) throw err('platform_unreachable', 502, { platform: P });
-  if (who.user_id !== botId() || base !== homeserver()) store.setSetting('matrix.since', null); // another account / server: its own place in the stream
+  const id = await whoami(base, tok);
+  if (id !== botId() || base !== homeserver()) store.setSetting('matrix.since', null); // another account / server: its own place in the stream
   store.setSetting('matrix.homeserver', base);
   store.setSetting('matrix.token', tok);
-  store.setSetting('matrix.user_id', who.user_id);
+  store.setSetting('matrix.user_id', id);
   restart();
 }
 
@@ -347,6 +356,7 @@ async function outbound(link, ctx, msg) {
   }
   const sent = await send(link.ext_channel_id, { ...contentOf(name, text, quote), ...(relates ? { 'm.relates_to': relates } : {}) });
   if (sent?.event_id) db.run('INSERT OR IGNORE INTO bridge_msgs (message_id, platform, ext_message_id, ext_channel_id, outbound, created_at) VALUES (?, ?, ?, ?, 1, ?)', Number(msg.id), P, String(sent.event_id), link.ext_channel_id, now());
+  typingOut(link, false);
 }
 async function editOut(link, ctx, msg) {
   const m = db.get('SELECT ext_message_id, outbound FROM bridge_msgs WHERE message_id = ? AND platform = ?', Number(msg.id), P);
@@ -364,11 +374,36 @@ async function deleteOut(link, id) {
   await api('PUT', `${V3}/rooms/${enc(link.ext_channel_id)}/redact/${enc(m.ext_message_id)}/${enc(`ember${Date.now()}_${++txn}`)}`, {}).catch(() => {});
 }
 
+// ---------------------------------------------------------------- who is typing
+// m.typing lists everyone typing in the room right now, and comes again when that changes
+const typingNow = new Map(); // room id -> Set of user ids
+async function typingIn(roomId, ids) {
+  if (!B().linkByExt(P, roomId)) return;
+  const now = new Set((Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string' && x !== botId()).slice(0, 20));
+  const was = typingNow.get(roomId) || new Set();
+  if (now.size) typingNow.set(roomId, now); else typingNow.delete(roomId);
+  for (const id of was) if (!now.has(id)) B().typingStop(P, roomId, id);
+  for (const id of now) {
+    if (was.has(id)) continue;
+    const m = await memberOf(roomId, id).catch(() => null);
+    if (typingNow.get(roomId)?.has(id)) B().typingStart(P, roomId, id, { platform: P, name: m?.name || localpart(id), avatar: await hostAvatar(m?.avatar) }, 30000);
+  }
+}
+// the bot types in the room while someone types in the linked channel (8 s at a time), and stops when the message lands
+const typedOut = new Map(); // room id -> when
+function typingOut(link, on = true) {
+  const room = link.ext_channel_id, t = Date.now(), last = typedOut.get(room) || 0;
+  if (on ? t - last < 6000 : !last) return;
+  if (on) typedOut.set(room, t); else typedOut.delete(room);
+  if (typedOut.size > 5000) typedOut.delete(typedOut.keys().next().value);
+  api('PUT', `${V3}/rooms/${enc(room)}/typing/${enc(botId())}`, on ? { typing: true, timeout: 8000 } : { typing: false }).catch(() => {});
+}
+
 // ---------------------------------------------------------------- the sync loop
 const filterOf = limit => JSON.stringify({
   presence: { types: [] }, account_data: { types: [] },
   room: {
-    account_data: { types: [] }, ephemeral: { types: [] },
+    account_data: { types: [] }, ephemeral: { types: ['m.typing'] },
     state: { types: ['m.room.member'], lazy_load_members: true },
     timeline: { types: ['m.room.message', 'm.sticker', 'm.room.redaction', 'm.room.member', 'm.room.name', 'm.room.canonical_alias', 'm.room.encryption'], limit, lazy_load_members: true },
   },
@@ -409,6 +444,7 @@ async function onSync(r, first) {
   for (const roomId of Object.keys(r?.rooms?.leave || {})) { roomInfo.delete(roomId); roomList = null; }
   for (const [roomId, room] of Object.entries(r?.rooms?.join || {})) {
     for (const ev of room?.state?.events || []) if (ev?.type === 'm.room.member') noteMember(roomId, ev);
+    if (!first) for (const ev of room?.ephemeral?.events || []) if (ev?.type === 'm.typing') typingIn(roomId, ev.content?.user_ids).catch(e => console.error('[bridge] matrix typing', e.message));
     for (const ev of room?.timeline?.events || []) {
       if (first && !['m.room.member'].includes(ev?.type)) continue;
       try { onRoomEvent(roomId, ev); } catch (e) { console.error('[bridge] matrix event', e.message); }
@@ -431,5 +467,5 @@ const _test = { allowLocal(on) { allowLocal = !!on; }, setResolver(fn) { resolve
 
 module.exports = {
   P, configured, botId, homeserver, settingsView, saveSettings, rooms, roomOf, outbound, editOut, deleteOut, init: restart, shutdown,
-  cleanHomeserver, textIn, textOut, splitReply, onRoomEvent, onSync, safeLookup, _test,
+  cleanHomeserver, cleanToken, discover, whoami, api, media, MXC, typingIn, typingOut, textIn, textOut, splitReply, onRoomEvent, onSync, safeLookup, _test,
 };

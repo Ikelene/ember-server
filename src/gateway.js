@@ -169,6 +169,7 @@ async function onFrame(sock, msg) {
         if (t - (st.typingAt || 0) < 1500 && msg.typing !== false) break;
         st.typingAt = t;
         emit(c.id, { type: 'chat_typing', server: c.sid, channel: ch.cid, username: me.username, user_id: me.principal, typing: msg.typing !== false }, { except: sock });
+        require('./bridge').typing(ch, msg.typing !== false);
         break;
       }
       case 'voice_sound': { // soundboard: play a sound to everyone in the voice room you're in

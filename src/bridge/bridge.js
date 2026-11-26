@@ -255,11 +255,81 @@ function enqueue(key, fn) {
 const recentOut = new Set(); // ext message ids we just sent through a webhook
 function rememberOut(id) { recentOut.add(String(id)); setTimeout(() => recentOut.delete(String(id)), 120e3).unref?.(); }
 
+// ---------------------------------------------------------------- who is typing, both ways
+// over there -> here: clients here show the person (name + picture, as with a bridged message) and forget a typer after 7 s,
+// so it is said again while it lasts. key: `${platform}:${their channel}:${their user}`
+const typers = new Map(); // key -> { ch, c, who, until, timer }
+function emitTyping(t, on) {
+  require('../gateway').emit(t.c.id, { type: 'chat_typing', server: t.c.sid, channel: t.ch.cid, username: t.who.name, user_id: null, typing: on, bridged: t.who });
+}
+// who: { platform, name, avatar }; lasts: how long their side shows it for without hearing more (ms)
+function typingStart(p, ext, uid, who, lasts) {
+  const link = linkByExt(p, ext);
+  if (!link || !link.enabled || !who?.name) return;
+  const key = `${p}:${ext}:${uid}`;
+  const old = typers.get(key);
+  if (old) { old.until = Date.now() + lasts; old.who = who; return; }
+  const ch = db.get('SELECT id, cid, community_id FROM channels WHERE id = ?', link.channel_id);
+  const c = ch && db.get('SELECT id, sid FROM communities WHERE id = ?', ch.community_id);
+  if (!c) return;
+  const t = { ch, c, who, until: Date.now() + lasts, timer: null };
+  t.timer = setInterval(() => { if (Date.now() >= t.until) { clearInterval(t.timer); typers.delete(key); } else emitTyping(t, true); }, 5000);
+  t.timer.unref?.();
+  typers.set(key, t);
+  if (typers.size > 2000) typingStop(...typers.keys().next().value.split(':'));
+  emitTyping(t, true);
+}
+function typingStop(p, ext, uid) {
+  const key = `${p}:${ext}:${uid}`;
+  const t = typers.get(key);
+  if (!t) return;
+  clearInterval(t.timer);
+  typers.delete(key);
+  emitTyping(t, false);
+}
+const botIdOf = p => String(clients.get(p)?.user?.id || selfUser.get(p)?.user?.id || '');
+const extMembers = new Map(); // `${p}:${guild}:${user}` -> { at, v } (a TYPING_START that names nobody)
+async function typingIn(p, d) {
+  const link = linkByExt(p, d.channel_id);
+  if (!link || !link.enabled) return;
+  const uid = String(d.user_id || d.member?.user?.id || '');
+  if (!uid || uid === botIdOf(p)) return; // (the bot types over there for people here)
+  let m = d.member?.user ? d.member : null;
+  if (!m) {
+    const k = `${p}:${link.guild_id}:${uid}`, hit = extMembers.get(k);
+    if (hit && Date.now() - hit.at < 600e3) m = hit.v;
+    else {
+      m = await PL.rest(p, 'GET', `/guilds/${link.guild_id}/members/${uid}`).catch(() => null);
+      extMembers.set(k, { at: Date.now(), v: m });
+      if (extMembers.size > 2000) extMembers.delete(extMembers.keys().next().value);
+    }
+  }
+  const u = m?.user;
+  const name = clean(m?.nick || u?.global_name || u?.username, 80);
+  if (!name) return;
+  typingStart(p, d.channel_id, uid, { platform: p, name, avatar: await hostAvatar(p, u) }, 10000);
+}
+// here -> over there: the bot shows as typing (it is the only one who can), at most once every 8 s per channel
+const typedOut = new Map(); // `${channel id}:${platform}` -> when
+function onTyping(ch, on = true) {
+  if (!require('../managed').allows('bridges') || ch.type === 'voice') return;
+  for (const link of linksOfChannel(ch.id)) {
+    if (!link.enabled || !configured(link.platform)) continue;
+    if (link.platform === MATRIX) { MX().typingOut(link, on); continue; }
+    const k = `${ch.id}:${link.platform}`, t = Date.now();
+    if (!on || t - (typedOut.get(k) || 0) < 8000) continue;
+    typedOut.set(k, t);
+    if (typedOut.size > 5000) typedOut.delete(typedOut.keys().next().value);
+    PL.rest(link.platform, 'POST', `/channels/${link.ext_channel_id}/typing`).catch(() => {});
+  }
+}
+
 function onEvent(p, t, d) {
   if (!PL.IDS.includes(p) || !d) return;
   if (/^(GUILD_|VOICE_)/.test(t)) { if (p === 'discord') VB().onDispatch(t, d); return; } // voice links (voice-bridge.js)
+  if (t === 'TYPING_START') { typingIn(p, d).catch(e => console.error('[bridge] typing', e.message)); return; }
   const key = `in:${p}:${d.channel_id}`;
-  if (t === 'MESSAGE_CREATE') return enqueue(key, () => inbound(p, d));
+  if (t === 'MESSAGE_CREATE') { if (d.author?.id) typingStop(p, d.channel_id, String(d.author.id)); return enqueue(key, () => inbound(p, d)); }
   if (t === 'MESSAGE_UPDATE') {
     return enqueue(key, async () => {
       if (d.content === undefined) return;
@@ -590,5 +660,5 @@ const idle = () => Promise.all([...queues.values()]); // tests: wait for queued 
 
 module.exports = {
   init, shutdown, onEvent, onPost, onEdit, onDelete, channelTag, settingsView, saveSettings, platforms, guilds, status, link, setEnabled, unlink, setChannel,
-  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo, hostAvatar, enqueue, linkByExt,
+  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo, hostAvatar, enqueue, linkByExt, onTyping, typingStart, typingStop,
 };

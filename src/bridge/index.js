@@ -25,6 +25,16 @@ function register(real) {
   const app = {};
   for (const m of ['get', 'post', 'put', 'patch', 'delete']) app[m] = (p, o, f) => (typeof o === 'function' ? real[m](p, gated(o)) : real[m](p, o, gated(f)));
 
+  // ---- a Matrix space as this instance's community (PROTOCOL §16.6): instance admins, only while there is no community.
+  // Not behind the bridges plan: copying a space is not a bridge (only its "bridge it" switch is)
+  const imp = require('./matrix-import');
+  real.get(v1('/import/matrix'), { admin: true }, req => imp.view(req.user));
+  real.put(v1('/import/matrix/bot'), { admin: true }, req => imp.setBot(req.user, req.body || {}));
+  real.delete(v1('/import/matrix/bot'), { admin: true }, req => imp.dropBot(req.user));
+  real.get(v1('/import/matrix/guilds'), { admin: true }, req => imp.guilds(req.user, req.query.fresh === '1'));
+  real.get(v1('/import/matrix/guilds/:gid'), { admin: true }, req => imp.preview(req.user, req.params.gid));
+  real.post(v1('/import/matrix'), { admin: true }, req => imp.run(req.user, req.body || {}));
+
   // ---- instance settings: the owner's bot tokens (admins; tokens are write-only) ----
   app.get(v1('/bridge/settings'), { admin: true }, () => ({ bridges: bridge.settingsView() }));
   app.patch(v1('/bridge/settings'), { admin: true }, async req => ({ bridges: await bridge.saveSettings(req.body || {}) }));
@@ -44,6 +54,8 @@ function register(real) {
 }
 
 const channelTag = channelId => bridge.channelTag(channelId);
+// someone here is typing in this channel (gateway.js): the linked channels see the bot typing
+const typing = (ch, on) => { try { bridge.onTyping(ch, on); } catch (e) { console.error('[bridge] typing', e.message); } };
 const features = () => { if (!managed.allows('bridges')) return false; const PL = require('./platform'); return { discord: !!PL.tokenOf('discord'), fluxer: !!PL.tokenOf('fluxer'), matrix: require('./matrix').configured(), cloudlink: true }; };
 
-module.exports = { init, shutdown, register, channelTag, features, bridge, cloudlink };
+module.exports = { init, shutdown, register, channelTag, typing, features, bridge, cloudlink };

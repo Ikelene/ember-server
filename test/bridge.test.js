@@ -58,6 +58,8 @@ function fakeServer() {
       const wh = /^\/channels\/(\d+)\/webhooks$/.exec(pth);
       if (wh && req.method === 'POST') { const id = String(7000 + ++hookN); return json(200, { id, token: `tok${id}`, name: parsed?.name }); }
       if (/^\/channels\/\d+\/messages\/\d+$/.test(pth) && req.method === 'DELETE') { res.writeHead(204); return res.end(); }
+      if (/^\/channels\/\d+\/typing$/.test(pth) && req.method === 'POST') { res.writeHead(204); return res.end(); }
+      if (pth === '/guilds/111/members/78') return json(200, { nick: null, user: { id: '78', username: 'lookedup', global_name: 'Looked Up' } });
       json(404, { message: 'Unknown' });
     });
   });
@@ -132,7 +134,7 @@ test('bot tokens: checked on save, write-only, masked; the gateway identifies wi
   assert.equal(got.body.bridges.discord.bot.username, 'TestBot');
   assert.ok(!fs.readFileSync(`${dir}/config.json`, 'utf8').includes(TOKEN)); // not in config.json either (database only)
   const id = await until(() => idents.find(x => x.token === TOKEN));
-  assert.equal(id.intents, 1 | 128 | 512 | 32768); // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | MESSAGE_CONTENT
+  assert.equal(id.intents, 1 | 128 | 512 | 2048 | 32768); // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | GUILD_MESSAGE_TYPING | MESSAGE_CONTENT
   await until(async () => (await alice.a.get('/api/v1/bridge/settings')).body.bridges.discord.state === 'ready');
   // an empty token keeps the stored one
   assert.equal((await alice.a.patch('/api/v1/bridge/settings', { discord: { token: '' } })).body.bridges.discord.token, '********WXYZ');
@@ -247,6 +249,43 @@ test('edits and deletes are mirrored both ways', async () => {
   await alice.a.del(`/api/v1/messages/${m3.message.id}`);
   const del = await until(() => calls.find(c => c.method === 'DELETE' && c.path === '/channels/222/messages/5003'));
   assert.equal(del.auth, `Bot ${TOKEN}`);
+});
+
+test('typing goes both ways: the person shows here with name and picture, the bot types over there', async () => {
+  const typed = x => x.type === 'chat_typing' && x.bridged;
+  // Discord -> here
+  dispatch('TYPING_START', { channel_id: '222', guild_id: '111', user_id: '77', timestamp: 1, member: { nick: 'Typey', user: { id: '77', username: 'ty', avatar: 'abc' } } });
+  const f = await wa.waitFor(x => typed(x) && x.bridged.name === 'Typey');
+  assert.equal(f.channel, general); assert.equal(f.username, 'Typey'); assert.equal(f.typing, true); assert.equal(f.user_id, null);
+  assert.equal(f.bridged.platform, 'discord');
+  assert.match(f.bridged.avatar, /\/uploads\/bridge\/avatars\/discord_77_abc\.png$/);
+  // their message ends it
+  dispatch('MESSAGE_CREATE', { id: '5010', channel_id: '222', type: 0, author: { id: '77', username: 'ty' }, member: { nick: 'Typey' }, content: 'typed it' });
+  await wa.waitFor(x => typed(x) && x.bridged.name === 'Typey' && x.typing === false);
+  // an event that names nobody: the member is looked up
+  dispatch('TYPING_START', { channel_id: '222', guild_id: '111', user_id: '78', timestamp: 1 });
+  await wa.waitFor(x => typed(x) && x.bridged.name === 'Looked Up');
+  // the bot's own typing (it types for people here) and a channel that isn't linked are ignored
+  dispatch('TYPING_START', { channel_id: '222', guild_id: '111', user_id: '900', timestamp: 1, member: { user: { id: '900', username: 'TestBot' } } });
+  dispatch('TYPING_START', { channel_id: '223', guild_id: '111', user_id: '79', timestamp: 1, member: { user: { id: '79', username: 'elsewhere' } } });
+  await sleep(120);
+  assert.ok(!wa.frames.some(x => typed(x) && ['TestBot', 'elsewhere'].includes(x.bridged.name)));
+  // here -> Discord: the bot types, once per 8 s per channel
+  const typings = () => calls.filter(c => c.method === 'POST' && c.path === '/channels/222/typing');
+  const wb = await wsClient(base).login(bob.session); clients.push(wb);
+  wb.send({ type: 'chat_typing', channel: general });
+  const call = await until(() => typings()[0]);
+  assert.equal(call.auth, `Bot ${TOKEN}`);
+  B.onTyping(require('../src/db').get('SELECT * FROM channels WHERE cid = ?', general));
+  await sleep(80);
+  assert.equal(typings().length, 1);
+  // someone who keeps their typing to themselves is not announced over there either
+  await bob.a.patch('/api/v1/settings', { share_typing: false });
+  const before = wa.frames.filter(x => x.type === 'chat_typing' && x.username === 'bob').length;
+  await sleep(1600);
+  wb.send({ type: 'chat_typing', channel: general });
+  await sleep(120);
+  assert.equal(wa.frames.filter(x => x.type === 'chat_typing' && x.username === 'bob').length, before);
 });
 
 test('a webhook deleted over there is made again', async () => {

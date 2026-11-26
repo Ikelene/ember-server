@@ -12,7 +12,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // what the bot needs in each server: see channels, read history, send, embed links, attach files, manage messages + webhooks,
 // and for voice links connect + speak
 const BOT_PERMS = String(1024 + 2048 + 8192 + 16384 + 32768 + 65536 + 536870912 + 1048576 + 2097152);
-const INTENTS = 1 | 128 | 512 | 32768; // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | MESSAGE_CONTENT
+const INTENTS = 1 | 128 | 512 | 2048 | 32768; // GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | GUILD_MESSAGE_TYPING | MESSAGE_CONTENT
 
 const DEFAULTS = {
   discord: {
@@ -155,7 +155,7 @@ class GatewayClient {
         this.state = 'ready'; this.error = null; this.attempts = 0;
         log(`[bridge] ${this.p} gateway ready as ${this.user?.username || '?'}`);
       } else if (m.t === 'RESUMED') { this.state = 'ready'; this.error = null; this.attempts = 0; }
-      else if (/^(MESSAGE_(CREATE|UPDATE|DELETE|DELETE_BULK)|GUILD_(CREATE|DELETE)|VOICE_(STATE|SERVER)_UPDATE)$/.test(m.t || '')) {
+      else if (/^(MESSAGE_(CREATE|UPDATE|DELETE|DELETE_BULK)|TYPING_START|GUILD_(CREATE|DELETE)|VOICE_(STATE|SERVER)_UPDATE)$/.test(m.t || '')) {
         try { const r = this.onDispatch(this.p, m.t, m.d); if (r?.catch) r.catch(e => console.error(`[bridge] ${this.p} ${m.t}`, e.message)); } catch (e) { console.error(`[bridge] ${this.p} ${m.t}`, e.message); }
       }
     }

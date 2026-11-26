@@ -74,6 +74,8 @@ function fakeServer() {
       if (m && req.method === 'POST') { joined.add(m[1]); return json(200, { room_id: m[1] }); }
       m = /^\/rooms\/([^/]+)\/send\/m\.room\.message\/([^/]+)$/.exec(v3);
       if (m && req.method === 'PUT') return json(200, { event_id: `$out${++sendN}` });
+      m = /^\/rooms\/([^/]+)\/typing\/([^/]+)$/.exec(v3);
+      if (m && req.method === 'PUT') return json(200, {});
       m = /^\/rooms\/([^/]+)\/redact\/([^/]+)\/([^/]+)$/.exec(v3);
       if (m && req.method === 'PUT') return json(200, { event_id: `$red${++sendN}` });
       return json(404, { errcode: 'M_UNRECOGNIZED' });
@@ -305,6 +307,25 @@ test('edits and deletes are mirrored both ways', async () => {
   await B.idle();
   await alice.a.del(`/api/v1/messages/${m10.message.id}`);
   await until(() => calls.find(c => c.method === 'PUT' && c.path.startsWith('/_matrix/client/v3/rooms/!gen:fake.test/redact/$in10/')));
+});
+
+test('typing goes both ways: Matrix people show here with name and picture, the bot types in the room', async () => {
+  const typed = x => x.type === 'chat_typing' && x.bridged;
+  const typingNow = ids => push({ join: { '!gen:fake.test': { ephemeral: { events: [{ type: 'm.typing', content: { user_ids: ids } }] } } } });
+  typingNow(['@zed:other.test', BOT]);
+  const f = await wa.waitFor(x => typed(x) && x.typing === true);
+  assert.deepEqual([f.bridged.platform, f.bridged.name, f.username, f.channel, f.user_id], ['matrix', 'Zeddy', 'Zeddy', general, null]);
+  assert.match(f.bridged.avatar, /\/uploads\/bridge\/avatars\/matrix_[0-9a-f]{24}\.png$/);
+  typingNow([BOT]); // zed stopped
+  await wa.waitFor(x => typed(x) && x.bridged.name === 'Zeddy' && x.typing === false);
+  assert.equal(wa.frames.filter(typed).length, 2); // the bot's own typing is never shown here
+  // here -> Matrix: the bot types in the room, and stops when the message lands
+  const puts = () => calls.filter(c => c.method === 'PUT' && c.path.endsWith(`/rooms/!gen:fake.test/typing/${BOT}`));
+  const wb = await wsClient(base).login(bob.session); clients.push(wb);
+  wb.send({ type: 'chat_typing', channel: general });
+  assert.deepEqual((await until(() => puts()[0])).body, { typing: true, timeout: 8000 });
+  await say(bob, general, 'typed and sent');
+  assert.deepEqual((await until(() => puts()[1])).body, { typing: false });
 });
 
 test('pause, unlink a channel, unlink the bridge (Manage server)', async () => {

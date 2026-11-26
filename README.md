@@ -175,6 +175,8 @@ Online members get the `chat_mention` gateway event themselves; `notifyOffline` 
 - **Channel types** `text`, `voice`, `logs`, `welcome` (join / leave notices), `link`, `roles` (self-assign shop; priced roles are paid with Velora credits), `starboard` (⭐ threshold reposting), `game` (Minecraft). PROTOCOL §6.1.
 - **Discord / Fluxer bridge** with your own bot: messages, replies, edits, deletes, pictures both ways, auto-linking channels by name. §16.
 - **Matrix bridge** with your own bot account on any homeserver: messages, replies, edits, deletes and files both ways in unencrypted rooms. §16.5.
+- **Typing indicators over the bridges**: someone typing on Discord, Fluxer or Matrix shows here with their name and picture; the bot types over there while someone types here. §16.6.
+- **Import a Matrix space** as the server during setup: rooms become channels, sub-spaces categories, with the picture and custom emoji. §16.7.
 - **CloudLink bridge** in logs channels (gmsg both ways, `!online`, SSRF-guarded). §17.
 - **Ember Link (Minecraft)**: `bonfire server <url>` connects a server; join-info card, live console with audit log, synced chat and join / death / advancement lines. §18.
 - **Webhooks**: Discord-compatible `POST /api/v1/webhooks/:wid/:token` (embeds, files, `?wait=true`, 30/min per hook). §13.
