@@ -19,6 +19,7 @@ const remote = require('../federation/remote');
 const denylist = require('../federation/denylist');
 const seen = require('../federation/seen');
 const limits = require('../federation/limits');
+const where = require('./where');
 
 const PREFIX = '/_ember/s2s/v1';
 const MAX_AGE = 300, MAX_AHEAD = 60; // seconds
@@ -45,10 +46,12 @@ function assertPeer(domain) {
   if (!remote.domainAllowed(domain)) throw err('homeserver_not_allowed', 403, { domain });
 }
 // one signed request. -> { status, body (parsed JSON or null) }; throws 502 homeserver_unreachable when nothing answers
+// domain = this homeserver's own: the place config `social.s2s_url` names for its Nookara accounts (PROTOCOL §4c)
 async function request(domain, method, path, body) {
-  assertPeer(domain);
-  const hs = await resolve.homeserver(domain);
-  const url = hs.s2s_url + path, payload = body === undefined ? null : JSON.stringify(body);
+  let base;
+  if (domain === config.domain() && where.urls().s2s_url !== config.publicUrl() + PREFIX) base = where.urls().s2s_url;
+  else { assertPeer(domain); base = (await resolve.homeserver(domain)).s2s_url; }
+  const url = base + path, payload = body === undefined ? null : JSON.stringify(body);
   let r;
   try { r = await safe.request(method, url, { headers: { ...sign({ method, url, body: payload }), ...(payload ? { 'Content-Type': 'application/json' } : {}) }, body: payload, timeout: TIMEOUT, maxBytes: 1 << 20 }); }
   catch (e) { throw err('homeserver_unreachable', 502, { domain, reason: e.code === 'EPRIVATE' ? 'private_address' : 'unreachable' }); }
@@ -121,10 +124,12 @@ async function verify(req) {
   return { domain, origin: hs.origin, ips };
 }
 // "id@domain" of an account hosted here -> its user row (404 user_not_found)
+// (a Nookara account whose side of s2s is answered elsewhere: 421 misdirected { s2s_url })
 function localAccount(id) {
   const who = R.parseSub(id);
-  const u = who && who.domain === config.domain() && config.mode() === 'local' ? auth.userByPrincipal(who.id) : null;
-  if (!u || u.kind !== 'local' || u.banned) throw err('user_not_found', 404);
+  if (who && who.domain === config.domain() && where.idElsewhere(who.id)) throw err('misdirected', 421, { s2s_url: where.urls().s2s_url });
+  const u = who && who.domain === config.domain() ? auth.userByPrincipal(who.id) : null;
+  if (!auth.hostedHere(u) || u.banned) throw err('user_not_found', 404);
   return u;
 }
 // the two accounts of a call: `from` belongs to the homeserver that signed it, `to` lives here. -> { from: "id@domain", to: user row }
@@ -142,6 +147,6 @@ function on(app, method, path, fn) {
 function register(app) {
   on(app, 'POST', '/ping', (req, hs) => ({ ok: true, homeserver: config.domain(), you: hs.domain }));
 }
-const discovery = () => ({ social: { api_url: `${config.publicUrl()}/api/v2`, s2s_url: config.publicUrl() + PREFIX } });
+const discovery = () => ({ social: where.urls() });
 
 module.exports = { PREFIX, MAX_AGE, canonical, digest, sign, request, call, later, idle, verify, parties, localAccount, on, register, discovery, assertPeer, _test: { setRetry(list) { RETRY = list; } } };

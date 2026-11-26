@@ -117,7 +117,7 @@ function unblock(me, rawId) {
 const PRESENCE = ['online', 'idle', 'dnd', 'offline'];
 // one of our accounts connected or left: its friends here hear it, and so do the homeservers its other friends are on
 function presenceChanged(u, online) {
-  if (u.kind !== 'local') return;
+  if (!require('../auth').hostedHere(u)) return;
   const my = people.fullId(u), status = online ? 'online' : 'offline', domains = new Set();
   for (const f of db.all("SELECT peer FROM friends WHERE user_id = ? AND state = 'friend'", u.id)) {
     const p = people.parseId(f.peer);

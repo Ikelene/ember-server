@@ -10,6 +10,8 @@ const { err, now, clean, limiter } = require('../util');
 const R = require('../federation/rules');
 const resolve = require('../federation/resolve');
 const s2s = require('./s2s');
+const where = require('./where');
+const { KIND_NOOKARA } = require('../compat');
 const AP = () => require('../account-profile');
 const gateway = () => require('../gateway');
 
@@ -34,12 +36,18 @@ function parseId(raw) {
   if (!who) return null;
   const local = who.domain === own();
   const user = local ? auth.userByPrincipal(who.id) : null;
-  if (local && (!user || user.kind !== 'local' || user.banned || config.mode() !== 'local')) return null;
+  if (local && (!auth.hostedHere(user) || user.banned)) return null;
   return { id: `${who.id}@${who.domain}`, domain: who.domain, local, user };
 }
 const mustParse = raw => { const p = parseId(raw); if (!p) throw err('user_not_found', 404); return p; };
-// only accounts hosted here have friends, DMs and keys here
-const mine = me => { if (me?.kind !== 'local' || config.mode() !== 'local') throw err('local_accounts_only', 400); return me; };
+// only accounts hosted here have DMs here
+const mineForDms = me => { if (!auth.hostedHere(me)) throw err('local_accounts_only', 400); return me; };
+// ... and friends and keys, unless they are kept where config `social.api_url` says (a Nookara account: 409 social_elsewhere)
+const mine = me => {
+  mineForDms(me);
+  if (where.apiElsewhere(me)) throw err('social_elsewhere', 409, { api_url: where.urls().api_url });
+  return me;
+};
 
 // ---------- what was fetched from other homeservers ----------
 const cached = (kind, id) => { const r = db.get('SELECT body, fetched_at FROM social_cache WHERE kind = ? AND id = ?', kind, id); if (!r) return null; try { return { body: JSON.parse(r.body), at: r.fetched_at }; } catch { return null; } };
@@ -75,7 +83,9 @@ function lookupLocal(handle) {
   const m = /^@?([^@\s]{1,64})(?:@([^@\s]{1,253}))?$/.exec(String(handle || '').trim().toLowerCase());
   if (!m || config.mode() !== 'local') throw err('user_not_found', 404);
   if (m[2] && m[2] !== own()) throw err('wrong_homeserver', 404);
-  const u = db.get("SELECT * FROM users WHERE kind = 'local' AND username_lc = ? AND banned = 0", m[1]);
+  // (and the Nookara accounts of this homeserver, by their Nookara username)
+  const u = db.get("SELECT * FROM users WHERE kind = 'local' AND username_lc = ? AND banned = 0", m[1])
+    || (config.nookaraIdentity() ? db.get('SELECT * FROM users WHERE kind = ? AND lower(username) = ? AND banned = 0 ORDER BY id LIMIT 1', KIND_NOOKARA, m[1]) : null);
   if (!u) throw err('user_not_found', 404);
   return snippetOf(u);
 }
@@ -172,4 +182,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, fullId, handleOf, snippetOf, snippet, cleanSnippet, parseId, mustParse, mine, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };
+module.exports = { register, fullId, handleOf, snippetOf, snippet, cleanSnippet, parseId, mustParse, mine, mineForDms, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };

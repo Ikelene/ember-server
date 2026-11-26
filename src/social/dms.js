@@ -15,6 +15,7 @@ const limits = require('../federation/limits');
 const s2s = require('./s2s');
 const people = require('./people');
 const friends = require('./friends');
+const where = require('./where');
 const gateway = () => require('../gateway');
 const C = () => require('../communities');
 
@@ -52,13 +53,20 @@ function hosted(rawId, me) {
   if (!c || !isMember(c, me.id)) throw err('dm_not_found', 404);
   return c;
 }
+// where a member hears about a DM hosted here: the homeserver of an account of another one, or the place config
+// `social.s2s_url` names for a Nookara account of this one. -> { domain, to } | null (the DM list is kept here)
+function peerOf(u) {
+  if (u.kind === 'remote') return { domain: u.domain, to: u.principal };
+  if (where.s2sElsewhere(u)) return { domain: own(), to: people.fullId(u) };
+  return null;
+}
 const notHere = id => { const d = String(id).split('@')[1]; return !!d && d.toLowerCase() !== own(); };
 // every member's connected clients here get the DM as they see it
 function announce(c) { for (const u of membersOf(c)) gateway().pushToUser(u.id, { type: 'social_dm_update', dm: view(c, u) }); }
 // the homeservers of the members who live elsewhere hear that the DM changed (its name, who is in it)
 function tellOthers(c, kind = 'renamed') {
   const dm = describe(c);
-  for (const u of membersOf(c)) if (u.kind === 'remote') s2s.later(u.domain, '/dm_pointer', { dm, to: u.principal, kind });
+  for (const u of membersOf(c)) { const p = peerOf(u); if (p) s2s.later(p.domain, '/dm_pointer', { dm, to: p.to, kind }); }
 }
 // the user row of an account of another homeserver, made when it is first named here (its first sign-in fills it in)
 function remoteUser(s) {
@@ -71,7 +79,7 @@ function remoteUser(s) {
 
 // POST /api/v2/social/dms { members: [handle], member_ids?: [id], name?, group? }: starts a DM here
 async function create(me, body = {}) {
-  people.mine(me);
+  people.mineForDms(me);
   const my = people.fullId(me);
   const handles = Array.isArray(body.members) ? body.members : [], given = Array.isArray(body.member_ids) ? body.member_ids : [];
   if (handles.length + given.length < 1 || handles.length + given.length > MAX_MEMBERS * 2 || [...handles, ...given].some(x => typeof x !== 'string')) throw err('invalid_members', 400);
@@ -90,6 +98,7 @@ async function create(me, body = {}) {
   for (const s of others) {
     if (friends.hasBlocked(me, s.id)) throw err('user_blocked', 409, { member: s.id });
     const p = people.parseId(s.id);
+    if (p.local && where.s2sElsewhere(p.user)) { users.push(p.user); continue; } // asked where its social API is, below
     if (p.local) { if (!friends.dmAllowed(p.user, my)) throw err('dm_not_allowed', 403, { member: s.id }); users.push(p.user); continue; }
     s2s.assertPeer(p.domain);
     const u = remoteUser(s);
@@ -100,11 +109,12 @@ async function create(me, body = {}) {
   const dm = { id: `${sid}@${own()}`, host: own(), name: name || null, group, owner: group ? my : null, sid, channel: cid, members: [people.snippetOf(me), ...others], created_at: t };
   const told = [];
   for (const u of users) {
-    if (u.kind !== 'remote') continue;
-    try { await s2s.call(u.domain, 'POST', '/dm_pointer', { dm, to: u.principal, kind: 'added', from: my }); told.push(u); }
+    const to = peerOf(u);
+    if (!to) continue;
+    try { await s2s.call(to.domain, 'POST', '/dm_pointer', { dm, to: to.to, kind: 'added', from: my }); told.push(to); }
     catch (e) {
-      for (const x of told) s2s.later(x.domain, '/dm_pointer', { dm, to: x.principal, kind: 'removed' });
-      throw err(e.code, e.status, { ...(e.extra || {}), member: u.principal });
+      for (const x of told) s2s.later(x.domain, '/dm_pointer', { dm, to: x.to, kind: 'removed' });
+      throw err(e.code, e.status, { ...(e.extra || {}), member: to.to });
     }
   }
   const c = db.tx(() => {
@@ -117,6 +127,9 @@ async function create(me, body = {}) {
     return db.get('SELECT * FROM communities WHERE id = ?', id);
   });
   for (const u of [me, ...users]) gateway().subscribe(u.id, c.id);
+  // the starter's own DM list, when it is kept elsewhere, gets the pointer too
+  const mine = peerOf(me);
+  if (mine) s2s.later(mine.domain, '/dm_pointer', { dm, to: mine.to, kind: 'added', from: my });
   announce(c);
   return { dm: view(c, me), created: true };
 }
@@ -141,7 +154,8 @@ function takeOut(c, u) {
   });
   gateway().unsubscribe(u.id, c.id);
   gateway().pushToUser(u.id, { type: 'social_dm_remove', id: idOf(c) });
-  if (u.kind === 'remote') s2s.later(u.domain, '/dm_pointer', { dm: { id: idOf(c), host: own() }, to: u.principal, kind: 'removed' });
+  const out = peerOf(u);
+  if (out) s2s.later(out.domain, '/dm_pointer', { dm: { id: idOf(c), host: own() }, to: out.to, kind: 'removed' });
   const left = membersOf(c);
   if (!left.length) { db.run('DELETE FROM communities WHERE id = ?', c.id); gateway().dropCommunity(c.id); return; }
   if (Number(c.owner_id) === Number(u.id)) { db.run('UPDATE communities SET owner_id = ? WHERE id = ?', left[0].id, c.id); c = db.get('SELECT * FROM communities WHERE id = ?', c.id); } // the longest-standing member takes over
@@ -198,7 +212,7 @@ function read(me, rawId) {
 // GET /api/v2/social/dms: the DMs hosted here that I am in, and (accounts of this homeserver) the pointers to the rest
 function list(me) {
   const here = db.all("SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE c.kind = 'dm' AND m.user_id = ?", me.id).map(c => view(c, me));
-  const there = me.kind === 'local' ? db.all('SELECT * FROM dm_pointers WHERE user_id = ?', me.id).map(pointerView) : [];
+  const there = auth.hostedHere(me) ? db.all('SELECT * FROM dm_pointers WHERE user_id = ?', me.id).map(pointerView) : [];
   return { dms: [...here, ...there].sort((a, b) => b.updated_at - a.updated_at) };
 }
 const one = (me, rawId) => ({ dm: notHere(rawId) ? pointerView(pointer(me, rawId)) : view(hosted(rawId, me), me) });
@@ -213,7 +227,7 @@ function pointerView(r) {
   };
 }
 function pointer(me, rawId) {
-  const r = me.kind === 'local' ? db.get('SELECT * FROM dm_pointers WHERE user_id = ? AND dm_id = ?', me.id, String(rawId).replace(/@[^@]*$/, m => m.toLowerCase())) : null;
+  const r = auth.hostedHere(me) ? db.get('SELECT * FROM dm_pointers WHERE user_id = ? AND dm_id = ?', me.id, String(rawId).replace(/@[^@]*$/, m => m.toLowerCase())) : null;
   if (!r) throw err('dm_not_found', 404);
   return r;
 }
@@ -241,8 +255,9 @@ function onPost(msg, ctx, meta) {
   const author = meta.userId ? auth.userById(meta.userId) : null;
   const preview = require('../notify').plainBody(msg.body, ctx.snap).replace(/\s+/g, ' ').trim().slice(0, 300) || (msg.attachments?.length ? 'sent a file' : '');
   for (const u of membersOf(c)) {
-    if (u.kind !== 'remote' || u.id === meta.userId) continue;
-    const key = `${c.id}|${u.id}`, e = pending.get(key) || { domain: u.domain, community: c.id, user: u.id, body: { dm: idOf(c), to: u.principal, count: 0, mention: false } };
+    const peer = peerOf(u);
+    if (!peer || u.id === meta.userId) continue;
+    const key = `${c.id}|${u.id}`, e = pending.get(key) || { domain: peer.domain, community: c.id, user: u.id, body: { dm: idOf(c), to: peer.to, count: 0, mention: false } };
     const pinged = String(msg.body || '').includes(`<@${u.principal}>`) || msg.reply?.author?.id === u.principal;
     Object.assign(e.body, { last_message_id: String(msg.id), count: e.body.count + 1, mention: e.body.mention || pinged, preview, name: isGroup(c) ? c.name || null : null,
       sender: author ? { id: people.fullId(author), display_name: author.display_name || author.username } : null });
