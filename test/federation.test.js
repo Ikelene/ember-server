@@ -200,6 +200,7 @@ test('an unknown kid fetches the keys again, at most once a minute per homeserve
   let r = await exchange(m.mint({}, { key: k2 }));
   assert.deepEqual([r.status, r.body.error], [401, 'unknown_kid']);
   assert.equal(m.jwksFetches, n + 1);
+  assert.equal(m.lastJwksQuery, 'kid=k2'); // the forced refetch names the kid it is after (extra_jwks homeservers refetch on it)
   m.published = null; // published now, but B asked a moment ago
   r = await exchange(m.mint({}, { key: k2 }));
   assert.deepEqual([r.status, r.body.error], [401, 'unknown_kid']);

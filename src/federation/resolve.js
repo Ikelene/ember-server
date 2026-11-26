@@ -66,8 +66,12 @@ async function homeserver(domain) {
   return homeservers.get(domain);
 }
 
-async function loadJwks(hs) {
-  const doc = await getJson(hs.jwks_uri);
+// missingKid: the forced refetch names the kid it is after (`?kid=`), so a homeserver that republishes other keys
+// (federation.extra_jwks, §4b "Extra keys") fetches them again instead of serving its hour-old copy
+async function loadJwks(hs, missingKid = null) {
+  let url = hs.jwks_uri;
+  if (missingKid) { const u = new URL(url); u.searchParams.set('kid', missingKid); url = u.href; }
+  const doc = await getJson(url);
   const keys = new Map();
   for (const k of Array.isArray(doc.keys) ? doc.keys.slice(0, 50) : []) {
     if (k?.kty !== 'OKP' || k.crv !== 'Ed25519' || typeof k.kid !== 'string' || (k.use && k.use !== 'sig')) continue;
@@ -86,7 +90,7 @@ async function keyFor(domain, hs, kid) {
     if (!entry.keys.has(kid) && Date.now() - entry.forced > REFETCH_EVERY) {
       const forced = Date.now();
       entry.forced = forced; // counted even when the fetch fails
-      entry = await loadJwks(hs); entry.forced = forced;
+      entry = await loadJwks(hs, kid); entry.forced = forced;
     }
   } catch (e) { throw unreachable(domain, 'jwks_' + (e.message || 'unreachable')); }
   return entry.keys.get(kid) || null;
