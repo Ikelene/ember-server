@@ -68,8 +68,7 @@ async function run(args, { out = s => process.stdout.write(s + '\n'), log = s =>
     db.open();
     const auth = require('./auth'), bots = require('./bots'), C = require('./communities');
     const owner = o.owner ? auth.userByPrincipal(o.owner) : auth.ownerRow();
-    const community = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
-    const mayManage = owner && (auth.isAdmin(owner) || (community && C.snapOf(community).can(owner.id, require('./perms').P.MANAGE_SERVER)));
+    const mayManage = owner && bots.canManage(owner);
     if (!owner || owner.kind === 'bot' || owner.banned || !mayManage) throw new Error('Owner must be an existing, active instance administrator or community manager');
     const result = db.tx(() => {
       if (command === 'create') {
@@ -110,10 +109,13 @@ function main(argv) {
   config.init({});
   db.open();
   try {
-    const zip = require('./export').exportForBackup();
-    if (!zip) { console.error('nothing to export: no community yet'); return 3; }
-    fs.writeFileSync(out, zip, { mode: 0o600 });
-    console.log(JSON.stringify({ ok: true, size: zip.length }));
+    const all = require('./export').exportForBackup();
+    if (!all.length) { console.error('nothing to export: no community yet'); return 3; }
+    // one server: exactly <out>, as always (hostd reads that file). Several: one file each, <out>-<slug>.zip
+    const ext = path.extname(out), stem = out.slice(0, out.length - ext.length);
+    const files = all.map(x => ({ sid: x.sid, slug: x.slug, file: all.length === 1 ? out : `${stem}-${x.slug}${ext || '.zip'}`, size: x.zip.length, zip: x.zip }));
+    for (const f of files) fs.writeFileSync(f.file, f.zip, { mode: 0o600 });
+    console.log(JSON.stringify({ ok: true, size: files.reduce((n, f) => n + f.size, 0), files: files.map(({ zip, ...f }) => f) }));
     return 0;
   } finally { db.close(); }
 }

@@ -135,7 +135,7 @@ function serverView(c, snap, me) {
   const base = me ? snap.perms(me.id) : 0;
   const role = isMember ? perms.roleLabel(snap.isOwner(me.id), base) : null;
   return {
-    sid: c.sid, name: c.name, description: c.description, icon: c.icon_url || null, banner: c.banner_url || null,
+    sid: c.sid, slug: c.slug, address: addressOf(c), name: c.name, description: c.description, icon: c.icon_url || null, banner: c.banner_url || null,
     is_default: false, discoverable: !!c.listed, member_count: memberCount(c.id), member_cap: memberLimit(c), read_only: managed.readOnly(),
     max_message_length: S().get(c).messages.max_length, link_previews: S().get(c).messages.link_previews,
     allow_cloning: clonelock().allowsCloning(c), // Settings > Emojis: other servers / personal emojis may copy this server's emojis + stickers (clonelock.js)
@@ -271,53 +271,64 @@ function serverDetail(sid, me) {
 // allowlist: only the people on the server's list; invite: only with an invite link. An invite link always lets someone in.
 const JOIN_POLICIES = ['open', 'request', 'password', 'allowlist', 'invite'];
 
-// ---------- one community per instance (PROTOCOL §5a) ----------
-// config.json is the source of truth for name / description / icon_url; the community row mirrors it.
-const theCommunity = () => db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
+// ---------- many servers per homeserver (PROTOCOL §5a) ----------
+const SLUG = require('./slug');
+const communityCount = () => db.get('SELECT COUNT(*) AS n FROM communities').n;
+const addressOf = c => `${c.slug}@${config.domain()}`;
+const slugTaken = (s, exceptId = 0) => !!db.get('SELECT 1 FROM communities WHERE slug = ? AND id <> ?', s, exceptId);
+// a slug someone typed: 400 invalid_slug / 409 slug_taken
+function checkSlug(raw, exceptId = 0) {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (!SLUG.valid(s)) throw err('invalid_slug');
+  if (slugTaken(s, exceptId)) throw err('slug_taken', 409);
+  return s;
+}
+// Who may create a server: instance admins always; everyone else by the `creation` setting (mode, allowlist, per_account).
 function assertMayCreate(me) {
-  if (!auth.isAdmin(me)) throw err('forbidden', 403);
-  if (theCommunity()) throw err('community_exists', 409);
+  if (!me || me.kind === 'bot') throw err('forbidden', 403);
+  if (auth.isAdmin(me)) return;
+  const rule = config.get().creation;
+  if (rule.mode === 'request') throw err('creation_requires_approval', 403); // (the approval queue comes later)
+  const listed = rule.mode === 'allowlist' && (rule.allowlist.includes(String(me.principal).toLowerCase()) || rule.allowlist.includes(String(me.username).toLowerCase()));
+  if (rule.mode !== 'anyone' && !listed) throw err('forbidden', 403);
+  if (!auth.claimed()) throw err('instance_not_claimed', 409);
+  if (rule.per_account !== null) {
+    const used = db.get('SELECT COUNT(*) AS n FROM communities WHERE owner_id = ?', me.id).n;
+    if (used >= rule.per_account) throw err('creation_limit', 403, { limit: rule.per_account, used });
+  }
 }
-// discovery: the one community, always (not gated on `listed`), or null while the instance is not set up
+// Routes that never had a sid (v1, one community per instance): the given sid, else the only community there is.
+// No community at all: null. Several and no sid: 400 sid_required.
+function pickCommunity(sid) {
+  if (sid !== undefined && sid !== null && String(sid).trim() !== '') return findCommunity(sid);
+  const two = db.all('SELECT * FROM communities ORDER BY id LIMIT 2');
+  if (two.length > 1) throw err('sid_required');
+  return two[0] || null;
+}
+// "slug@domain" or just "slug" -> the server here
+function resolveAddress(address) {
+  const m = /^([^@\s]+)(?:@([^@\s]+))?$/.exec(String(address || '').trim().toLowerCase());
+  if (!m) throw err('server_not_found', 404);
+  if (m[2] && m[2] !== config.domain()) throw err('wrong_homeserver', 404);
+  const c = db.get('SELECT * FROM communities WHERE slug = ?', m[1]);
+  if (!c) throw err('server_not_found', 404);
+  return { sid: c.sid, slug: c.slug, address: addressOf(c) };
+}
+// the discovery document's view of a server
+const discoveryView = c => ({ sid: c.sid, slug: c.slug, address: addressOf(c), name: c.name, icon_url: c.icon_url || null, description: c.description, member_count: memberCount(c.id), join_policy: c.join_policy });
+const listedCommunities = () => db.all('SELECT * FROM communities WHERE listed = 1 ORDER BY id');
+// discovery `community` (protocol 1 clients know one per instance): the only one, else the oldest listed one, else the oldest
 function discoveryCommunity() {
-  const c = theCommunity();
-  return c ? { sid: c.sid, name: c.name, icon_url: c.icon_url || null, description: c.description, member_count: memberCount(c.id), join_policy: c.join_policy } : null;
+  const c = communityCount() === 1 ? db.get('SELECT * FROM communities') : listedCommunities()[0] || db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
+  return c ? discoveryView(c) : null;
 }
-// community -> config.json (after the row is written)
-function mirrorToConfig(c) {
-  const v = config.get();
-  const patch = {};
-  if (v.name !== c.name) patch.name = c.name;
-  if (v.description !== c.description) patch.description = c.description;
-  if ((v.icon_url || null) !== (c.icon_url || null)) patch.icon_url = c.icon_url || null;
-  if (!!v.listed !== !!c.listed) patch.listed = !!c.listed; // the Nookara directory toggle (relay/directory.js)
-  if (Object.keys(patch).length) config.update(patch);
-}
-// config.json -> community (boot, hand edits, PATCH /instance/settings)
-function syncFromConfig() {
-  try {
-    const c = theCommunity();
-    if (!c) return;
-    const v = config.get();
-    const set = {};
-    if (c.name !== v.name) set.name = v.name;
-    if (c.description !== v.description) set.description = v.description;
-    if ((c.icon_url || null) !== (v.icon_url || null)) set.icon_url = v.icon_url || null;
-    if (typeof v.listed === 'boolean' && !!c.listed !== v.listed) set.listed = v.listed ? 1 : 0; // only once config.json has the key
-    if (!Object.keys(set).length) return;
-    db.run(`UPDATE communities SET ${Object.keys(set).map(k => k + ' = ?').join(', ')} WHERE id = ?`, ...Object.values(set), c.id);
-    Object.assign(c, set);
-    gateway.emit(c.id, { type: 'chat_server_update', server: serverView(c, snapOf(c), null) });
-  } catch (e) { console.error('[communities] syncing config.json failed:', e.message); }
-}
-config.events.on('change', syncFromConfig);
+const directoryPoke = () => { try { require('./relay/directory').poke(); } catch { /* relays off */ } };
 
-// opts.empty: caller builds channels/roles itself (import) and mirrors to config.json afterwards
-// The community is always owned by the instance owner; an admin who creates it is added as a member.
+// opts.empty: caller builds channels/roles itself (import). opts.trusted: the caller already decided (restoring a backup).
+// The server belongs to whoever creates it.
 function createCommunity(me, body = {}, opts = {}) {
-  assertMayCreate(me);
-  const owner = auth.ownerRow();
-  if (!owner) throw err('instance_not_claimed', 409);
+  if (!opts.trusted) assertMayCreate(me);
+  if (!auth.claimed()) throw err('instance_not_claimed', 409);
   const name = clean(body.name, 60);
   if (!name) throw err('name_required');
   const policy = body.join_policy === undefined ? 'request' : body.join_policy;
@@ -325,12 +336,13 @@ function createCommunity(me, body = {}, opts = {}) {
   const sid = randId('s');
   const t = now();
   const c = db.tx(() => {
+    const slug = body.slug !== undefined && body.slug !== null && body.slug !== '' ? checkSlug(body.slug) : SLUG.derive(name, slugTaken);
     const r = db.run(
-      'INSERT INTO communities (sid, name, description, owner_id, invite_code, join_policy, listed, created_at, categories) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      sid, name, clean(body.description, 300), owner.id, inviteCode(), policy, (body.listed ?? body.discoverable) ? 1 : 0, t, '[]');
+      'INSERT INTO communities (sid, slug, name, description, owner_id, invite_code, join_policy, listed, created_at, categories) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      sid, slug, name, clean(body.description, 300), me.id, inviteCode(), policy, (body.listed ?? body.discoverable) ? 1 : 0, t, '[]');
     const id = r.lastInsertRowid;
     insertRole(id, { name: '@everyone', permissions: EVERYONE_DEFAULT, is_default: 1, position: 0 });
-    for (const uid of new Set([owner.id, me.id])) { db.run('INSERT INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', id, uid, t); memberEvent(id, uid, 'join', null, t); }
+    db.run('INSERT INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', id, me.id, t); memberEvent(id, me.id, 'join', null, t);
     if (!opts.empty) {
       insertChannel(id, { name: 'general', category: 'Text channels', type: 'text' }, 0);
       insertChannel(id, { name: 'General', category: 'Voice channels', type: 'voice' }, 1);
@@ -338,8 +350,8 @@ function createCommunity(me, body = {}, opts = {}) {
     }
     return db.get('SELECT * FROM communities WHERE id = ?', id);
   });
-  for (const uid of new Set([owner.id, me.id])) gateway.subscribe(uid, c.id);
-  if (!opts.empty) mirrorToConfig(c);
+  gateway.subscribe(me.id, c.id);
+  if (c.listed) directoryPoke();
   return c;
 }
 function insertRole(communityId, r) {
@@ -363,6 +375,11 @@ function updateServer(sid, me, body) {
   if (body.description !== undefined) set.description = clean(body.description, 300);
   const listed = body.listed ?? body.discoverable;
   if (listed !== undefined) set.listed = listed ? 1 : 0;
+  if (body.slug !== undefined) { // the address changes with it: the owner's call alone
+    if (!snap.isOwner(me.id)) throw err('owner_only', 403);
+    const slug = checkSlug(body.slug, c.id);
+    if (slug !== c.slug) set.slug = slug;
+  }
   if (body.icon_url !== undefined) {
     if (body.icon_url !== null && (typeof body.icon_url !== 'string' || body.icon_url.length >= 512)) throw err('invalid_icon_url');
     set.icon_url = body.icon_url || null;
@@ -380,7 +397,7 @@ function updateServer(sid, me, body) {
     db.run(`UPDATE communities SET ${Object.keys(set).map(k => k + ' = ?').join(', ')} WHERE id = ?`, ...Object.values(set), c.id);
     Object.assign(c, set);
     gateway.emit(c.id, { type: 'chat_server_update', server: serverView(c, snap, null) });
-    if ('name' in set || 'description' in set || 'icon_url' in set || 'listed' in set) mirrorToConfig(c); // instance settings are the same values
+    if (['name', 'description', 'icon_url', 'banner_url', 'listed', 'invite_code'].some(k => k in set)) directoryPoke();
     const changed = Object.keys(set).filter(k => k !== 'invite_code');
     if (changed.length) audit(c, me, 'server_update', { details: { changed } });
     if (set.invite_code) audit(c, me, 'invite_create', { details: { main_code: true } });
@@ -525,10 +542,13 @@ function banList(sid, me) {
   if (!snap.can(me.id, P.BAN)) throw err('not_allowed', 403);
   return { bans: db.all('SELECT * FROM bans WHERE community_id = ? ORDER BY created_at DESC', c.id).map(b => ({ user: userView(auth.userById(b.user_id)), banned_by: userView(auth.userById(b.banned_by)), created_at: b.created_at })) };
 }
-// kept for client compatibility: the instance's one community (if any), regardless of `listed`
+// every listed server here, plus the ones you are in. A homeserver with a single server shows it whether listed or not,
+// as protocol 1 did (the discovery document names it anyway).
 function discover(me) {
-  const c = theCommunity();
-  return c ? [{ ...serverView(c, snapOf(c), null), joined: snapOf(c).isMember(me.id) }] : [];
+  const rows = communityCount() === 1 ? db.all('SELECT * FROM communities')
+    : db.all('SELECT c.* FROM communities c WHERE c.listed = 1 OR EXISTS (SELECT 1 FROM members m WHERE m.community_id = c.id AND m.user_id = ?) ORDER BY c.id', me.id);
+  return rows
+    .map(c => { const snap = snapOf(c); return { ...serverView(c, snap, null), joined: snap.isMember(me.id) }; });
 }
 
 // ---------- invites + joining ----------
@@ -1115,7 +1135,7 @@ module.exports = { linkInfo,
   canManageClones,
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
   effectiveUploadMax, roleView, serverView, channelView, memberView, setNick, readState, mentionCounts, myServers, serverDetail,
-  createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
+  createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, discoveryView, listedCommunities, communityCount, pickCommunity, resolveAddress, addressOf, assertMayCreate,
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
   channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,
   createRole, updateRole, deleteRole, orderRoles, setMemberRole, setRoleIcon,

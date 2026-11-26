@@ -41,27 +41,37 @@ const view = r => ({
   verified: !!r.gallery_verified, ...(r.gallery_id ? { trusted_in: require('./relay/gallery').trustedIn(r.gallery_id) } : {}), gallery: r.gallery_id ? { id: r.gallery_id, test: !!r.gallery_test } : null, // added from Nookara's bot gallery: its profile / token come from Nookara
 });
 const managedByGallery = r => { if (r.gallery_id) throw err('gallery_bot_managed', 403); };
-// who may manage bots: instance admins, or anyone with Manage server in the community
-function canManage(me) {
+// the servers where `me` has Manage server
+const managedBy = me => db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', me.id).filter(c => C.snapOf(c).can(me.id, P.MANAGE_SERVER));
+// who may make bots: instance admins, or anyone with Manage server in `sid` (no sid: in any server here)
+function canManage(me, sid) {
   if (auth.isAdmin(me)) return true;
-  const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
-  return !!c && C.snapOf(c).can(me.id, P.MANAGE_SERVER);
+  if (sid) { const c = db.get('SELECT * FROM communities WHERE sid = ?', String(sid)); return !!c && C.snapOf(c).can(me.id, P.MANAGE_SERVER); }
+  return managedBy(me).length > 0;
 }
-function guard(me) { if (!canManage(me)) throw err('not_allowed', 403); }
+function guard(me, sid) { if (!canManage(me, sid)) throw err('not_allowed', 403); }
+// bots are accounts of the whole homeserver: instance admins manage all of them, a server's managers the ones they made.
+// (With a single server, as in protocol 1, its managers manage every bot.)
+const managesAll = me => auth.isAdmin(me) || (C.communityCount() === 1 && canManage(me));
 function own(me, ref) {
   guard(me);
   const r = botRow(parseId(ref));
   if (!r) throw err('bot_not_found', 404);
+  if (!managesAll(me) && Number(r.owner_id) !== Number(me.id)) throw err('not_allowed', 403);
   return r;
 }
 // the manage page lists only bots created on this server; gallery bots (gallery_id set) are managed from Nookara, never here
-const mine = me => { guard(me); return { bots: db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL ORDER BY user_id').map(r => view(botRow(r.user_id))), max: maxBots(), used: managed.botCount() }; };
+const mine = (me, sid) => {
+  guard(me, sid);
+  const rows = managesAll(me) ? db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL ORDER BY user_id') : db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL AND owner_id = ? ORDER BY user_id', me.id);
+  return { bots: rows.map(r => view(botRow(r.user_id))), max: maxBots(), used: managed.botCount() };
+};
 function checkName(name, exceptId = 0) {
   if (!NAME.test(name)) throw err('bad_bot_name');
   if (db.get('SELECT 1 FROM users WHERE LOWER(username) = ? AND id <> ?', name.toLowerCase(), exceptId)) throw err('name_taken');
 }
-function create(me, { name, description } = {}) {
-  guard(me);
+function create(me, { name, description, sid } = {}) {
+  guard(me, sid);
   name = String(name || '').trim();
   checkName(name);
   const have = managed.botCount();
@@ -117,10 +127,10 @@ function info(me, username) {
   const u = db.get("SELECT id FROM users WHERE kind = 'bot' AND LOWER(username) = ?", String(username || '').toLowerCase());
   const r = u && botRow(u.id);
   if (!r) throw err('bot_not_found', 404);
-  const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
-  const snap = c && C.snapOf(c);
-  const mayAdd = !!snap && snap.can(me.id, P.MANAGE_SERVER) && (r.public || Number(r.owner_id) === me.id || auth.isAdmin(me)) && !snap.isMember(r.user_id);
-  return { bot: { id: r.principal, username: r.username, description: r.description, public: !!r.public, verified: !!r.gallery_verified, gallery_id: r.gallery_id ? String(r.gallery_id) : null, ...(r.gallery_id ? { trusted_in: require('./relay/gallery').trustedIn(r.gallery_id) } : {}), owner: auth.userById(r.owner_id)?.username || null, mine: Number(r.owner_id) === me.id }, can_add_to: mayAdd ? [{ sid: c.sid, name: c.name, icon: c.icon_url || null }] : [] };
+  // every server where you have Manage server and the bot is not in yet
+  const usable = r.public || Number(r.owner_id) === me.id || auth.isAdmin(me);
+  const addTo = usable ? managedBy(me).filter(c => !db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, r.user_id)) : [];
+  return { bot: { id: r.principal, username: r.username, description: r.description, public: !!r.public, verified: !!r.gallery_verified, gallery_id: r.gallery_id ? String(r.gallery_id) : null, ...(r.gallery_id ? { trusted_in: require('./relay/gallery').trustedIn(r.gallery_id) } : {}), owner: auth.userById(r.owner_id)?.username || null, mine: Number(r.owner_id) === me.id }, can_add_to: addTo.map(c => ({ sid: c.sid, slug: c.slug, name: c.name, icon: c.icon_url || null })) };
 }
 function addToServer(me, username, sid) {
   const u = db.get("SELECT id FROM users WHERE kind = 'bot' AND LOWER(username) = ?", String(username || '').toLowerCase());
@@ -358,7 +368,7 @@ function dispatch(communityId, obj) {
 }
 
 module.exports = {
-  mine, create, update, setAvatar, resetToken, remove, info, addToServer, fromHeader, parseId, viewOf: id => view(botRow(id)), closeGatewaysOf: closeGateways,
+  canManage, mine, create, update, setAvatar, resetToken, remove, info, addToServer, fromHeader, parseId, viewOf: id => view(botRow(id)), closeGatewaysOf: closeGateways,
   userObj, guildObj, channelObj, roleObj, messageObj, textIn, handleUpgrade, shutdown, dispatch, uidOf, permsToDiscord, isOnline, sendToBot,
   ROLE_BASE, MAX_BOTS, apiUrl, gatewayUrl, memberRemoved, gatewaysOf,
 };

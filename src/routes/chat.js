@@ -27,6 +27,8 @@ function register(app) {
   app.get(v1('/servers'), req => ({ servers: C.myServers(req.user) }));
   app.get(v1('/discover'), req => ({ servers: C.discover(req.user) }));
   app.post(v1('/servers'), req => { const c = C.createCommunity(req.user, req.body || {}); return C.serverDetail(c.sid, req.user); });
+  // a server's address (slug@domain, or just the slug) -> its sid; public, like the discovery document
+  app.get(v1('/servers/resolve'), A, req => C.resolveAddress(req.query.address));
   app.get(v1('/servers/:sid'), req => C.serverDetail(req.params.sid, req.user));
   app.patch(v1('/servers/:sid'), req => ({ server: C.updateServer(req.params.sid, req.user, { ...(req.body || {}), new_invite: !!req.body?.new_invite }) }));
   app.put(v1('/servers/:sid/layout'), req => C.setLayout(req.params.sid, req.user, {

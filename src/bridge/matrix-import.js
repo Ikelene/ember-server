@@ -263,7 +263,6 @@ async function run(me, body) {
     files['community.json'] = strToU8(JSON.stringify(community));
     files['members.jsonl'] = strToU8('');
     files['manifest.json'] = strToU8(JSON.stringify({ format: EXPORT_FORMAT, source: normalizeOrigin(config.publicUrl()), source_kind: 'matrix-import', exported_at: Date.now(), community: `matrix_${g.guild.id}` }));
-    C.assertMayCreate(me); // someone may have set the community up meanwhile
     const c = require('../export').importCommunity(me, Buffer.from(zipSync(files, { level: 6 })));
     let bridged = 0;
     if (body.bridge && managed.allows('bridges')) bridged = await bridgeRooms(me, s, c, picked).catch(e => { console.error('[import] matrix bridge', e.message); return 0; });

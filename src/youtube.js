@@ -153,10 +153,12 @@ function trim() {
 function prepare(id) { need(); checkId(id); if (!fs.existsSync(file(id))) start(id); return statusOf(id); }
 function status(id) { need(); checkId(id); return statusOf(id); }
 // a copy as a regular upload (message attachment); fetches first when needed - call again when ready
-async function save(id, user, title) {
+async function save(id, user, title, sid) {
   need(); checkId(id);
   if (!fs.existsSync(file(id))) { start(id); return statusOf(id); }
-  const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
+  // the server whose upload rules apply: `sid` (yours), else the only server; with several and no sid, the instance's limit
+  const C = require('./communities');
+  const c = sid ? C.memberCommunity(sid, user).c : C.communityCount() === 1 ? C.pickCommunity() : null;
   if (c && !c.allow_uploads) throw err('uploads_disabled', 403);
   const size = fs.statSync(file(id)).size;
   if (size > (c ? require('./communities').effectiveUploadMax(c, require('./communities').snapOf(c), user) : config.get().max_upload_mb) * 1024 * 1024) throw err('file_too_large', 413);

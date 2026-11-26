@@ -43,11 +43,11 @@ test('boot: bonfire.db becomes ember.db, config.json velora keys become nookara 
   db.open(); db.run("INSERT INTO meta (k, v) VALUES ('velora_dir', 'x')"); db.close();
   fs.renameSync(path.join(dir, 'ember.db'), path.join(dir, 'bonfire.db'));
   for (const ext of ['-wal', '-shm']) if (fs.existsSync(path.join(dir, 'ember.db' + ext))) fs.renameSync(path.join(dir, 'ember.db' + ext), path.join(dir, 'bonfire.db' + ext));
-  // reset the database to before v21 so the column / meta migration runs on it
+  // reset the database to before v21 so the column / meta migration runs on it (and v22, slugs, after it)
   {
     const { DatabaseSync } = require('node:sqlite');
     const raw = new DatabaseSync(path.join(dir, 'bonfire.db'));
-    raw.exec("ALTER TABLE users RENAME COLUMN nookara_id TO velora_id; UPDATE meta SET k = 'velora_dir' WHERE k = 'nookara_dir'; PRAGMA user_version = 20;");
+    raw.exec("ALTER TABLE users RENAME COLUMN nookara_id TO velora_id; UPDATE meta SET k = 'velora_dir' WHERE k = 'nookara_dir'; DROP INDEX communities_slug; ALTER TABLE communities DROP COLUMN slug; ALTER TABLE instance_backups DROP COLUMN community_id; PRAGMA user_version = 20;");
     raw.close();
   }
   const { startServer } = require('../src/index');

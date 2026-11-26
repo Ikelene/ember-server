@@ -172,48 +172,58 @@ test('create a community: defaults, detail shape', async () => {
   assert.ok(Math.abs(mem.body.members[0].joined_at - Date.now()) < 60000);
 });
 
-test('one community per instance: second create -> 409, discovery shape', async () => {
+test('a second server: admins may create it, others not by default; discovery shape', async () => {
   const again = await alice.a.post('/api/v1/servers', { name: 'Second' });
-  assert.equal(again.status, 409);
-  assert.equal(again.body.error, 'community_exists');
-  assert.equal((await bob.a.post('/api/v1/servers', { name: 'Second' })).status, 403); // 403 wins for non-admins
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.equal(again.body.server.role, 'owner');
+  const denied = await bob.a.post('/api/v1/servers', { name: 'Third' }); // creation mode "admins"
+  assert.equal(denied.status, 403); assert.equal(denied.body.error, 'forbidden');
+  const two = (await api(base).get('/.well-known/ember')).body;
+  assert.equal(two.communities_count, 2);
+  assert.equal(two.community.sid, sid); // protocol 1 clients: none listed, so the oldest
+  assert.deepEqual(two.communities, []); // only listed servers are named
+  assert.equal((await alice.a.del(`/api/v1/servers/${again.body.server.sid}`)).status, 200);
   const d = (await api(base).get('/.well-known/ember')).body;
-  assert.deepEqual(d.community, { sid, name: 'Camp Fire', icon_url: null, description: 'hello', member_count: 1, join_policy: 'request' });
-  assert.equal(d.name, 'Camp Fire'); // the instance takes the community's name
-  assert.equal(d.description, 'hello');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).name, 'Camp Fire');
-  // legacy /discover returns the one community whether or not it is "listed"
+  assert.deepEqual(d.community, { sid, slug: 'camp-fire', address: 'camp-fire@localhost', name: 'Camp Fire', icon_url: null, description: 'hello', member_count: 1, join_policy: 'request' });
+  assert.equal(d.protocol, 1); assert.equal(d.protocol_version, 2);
+  assert.deepEqual(d.homeserver, { domain: 'localhost', name: d.name, description: d.description, icon_url: d.icon_url });
+  assert.notEqual(d.name, 'Camp Fire'); // the homeserver keeps its own name
+  assert.notEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).name, 'Camp Fire');
+  // /discover with a single server returns it whether or not it is "listed"
   const disc = await bob.a.get('/api/v1/discover');
   assert.deepEqual(disc.body.servers.map(s => [s.sid, s.joined]), [[sid, false]]);
   assert.equal(d.community.sid, (await alice.a.get('/api/v1/servers')).body.servers[0].sid);
 });
 
-test('instance and community name/description/icon are the same values', async () => {
+test('the homeserver and a server each have their own name/description/icon', async () => {
   const cfgFile = () => JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-  // instance -> community
+  // homeserver settings leave the server alone
   const s = await alice.a.patch('/api/v1/instance/settings', { name: 'Renamed Camp', description: 'via settings', icon_url: 'https://img.example/i.png' });
   assert.equal(s.status, 200, JSON.stringify(s.body));
   let det = (await alice.a.get(`/api/v1/servers/${sid}`)).body.server;
-  assert.deepEqual([det.name, det.description, det.icon], ['Renamed Camp', 'via settings', 'https://img.example/i.png']);
-  assert.equal((await api(base).get('/.well-known/ember')).body.community.name, 'Renamed Camp');
-  // community -> instance (PATCH + icon upload/delete)
-  const p = await alice.a.patch(`/api/v1/servers/${sid}`, { name: 'Camp Fire', description: 'hello' });
+  assert.deepEqual([det.name, det.description, det.icon], ['Camp Fire', 'hello', null]);
+  let disc = (await api(base).get('/.well-known/ember')).body;
+  assert.equal(disc.community.name, 'Camp Fire');
+  assert.deepEqual(disc.homeserver, { domain: 'localhost', name: 'Renamed Camp', description: 'via settings', icon_url: 'https://img.example/i.png' });
+  // server settings leave the homeserver alone (PATCH + icon upload/delete)
+  const p = await alice.a.patch(`/api/v1/servers/${sid}`, { name: 'Camp Fire 2', description: 'hello again' });
   assert.equal(p.status, 200, JSON.stringify(p.body));
-  assert.deepEqual([cfgFile().name, cfgFile().description], ['Camp Fire', 'hello']);
-  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.name, 'Camp Fire');
+  assert.deepEqual([cfgFile().name, cfgFile().description], ['Renamed Camp', 'via settings']);
+  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.name, 'Renamed Camp');
+  await alice.a.patch(`/api/v1/servers/${sid}`, { name: 'Camp Fire', description: 'hello' });
   const fd = new FormData();
   fd.append('file', new Blob([PNG], { type: 'image/png' }), 'icon.png');
   const up = await alice.a.raw('POST', `/api/v1/servers/${sid}/icon`, fd);
   assert.equal(up.status, 200, JSON.stringify(up.body));
   assert.match(up.body.server.icon, /\/uploads\//);
-  assert.equal(cfgFile().icon_url, up.body.server.icon);
-  const disc = (await api(base).get('/.well-known/ember')).body;
-  assert.equal(disc.icon_url, up.body.server.icon);
+  assert.equal(cfgFile().icon_url, 'https://img.example/i.png');
+  disc = (await api(base).get('/.well-known/ember')).body;
+  assert.equal(disc.icon_url, 'https://img.example/i.png');
   assert.equal(disc.community.icon_url, up.body.server.icon);
   assert.equal((await alice.a.del(`/api/v1/servers/${sid}/icon`)).status, 200);
-  assert.equal(cfgFile().icon_url, null);
+  assert.equal(cfgFile().icon_url, 'https://img.example/i.png');
   assert.equal((await api(base).get('/.well-known/ember')).body.community.icon_url, null);
-  // a bad value is rejected on both sides without touching the other
+  // a bad value is rejected on both sides
   assert.equal((await alice.a.patch(`/api/v1/servers/${sid}`, { name: '  ' })).status, 400);
   assert.equal((await alice.a.patch('/api/v1/instance/settings', { name: '' })).status, 400);
   // removed settings are ignored in an old config.json
@@ -481,12 +491,9 @@ test('uploads, emojis, then export -> import round trip', async () => {
   assert.equal(cj.emojis.length, 1);
   assert.equal(cj.emojis[0].file.startsWith('files/'), true);
 
-  // import is only possible while the instance has no community
+  // importing makes a new server, so it follows the creation rules
   const mk = () => { const f = new FormData(); f.append('file', new Blob([ex.body], { type: 'application/zip' }), 'export.zip'); return f; };
   assert.equal((await bob.a.raw('POST', '/api/v1/import', mk())).body.error, 'forbidden');
-  const blocked = await alice.a.raw('POST', '/api/v1/import', mk());
-  assert.equal(blocked.status, 409);
-  assert.equal(blocked.body.error, 'community_exists');
   assert.equal((await alice.a.del(`/api/v1/servers/${sid}`)).status, 200);
   assert.equal((await api(base).get('/.well-known/ember')).body.community, null);
 
@@ -496,7 +503,7 @@ test('uploads, emojis, then export -> import round trip', async () => {
   assert.equal((await alice.a.raw('POST', '/api/v1/import', bad)).body.error, 'invalid_export');
   assert.equal((await api(base).get('/.well-known/ember')).body.community, null);
 
-  // import it back as a brand new community owned by the instance owner
+  // import it back as a brand new community owned by the importer
   const imp = await alice.a.raw('POST', '/api/v1/import', mk());
   assert.equal(imp.status, 200, JSON.stringify(imp.body));
   assert.notEqual(imp.body.sid, sid);
@@ -526,10 +533,11 @@ test('uploads, emojis, then export -> import round trip', async () => {
   assert.equal((await bob.a.get(`/api/v1/servers/${imp.body.sid}`)).status, 200);
   // instance admins may delete any community, other members may not
   assert.equal((await bob.a.del(`/api/v1/servers/${imp.body.sid}`)).status, 403);
-  // the imported community is now the instance's community (name mirrored into discovery)
+  // the imported community is now the homeserver's only server; the homeserver keeps its own name
   const disc = (await api(base).get('/.well-known/ember')).body;
   assert.equal(disc.community.sid, imp.body.sid);
-  assert.equal(disc.name, before.body.server.name);
+  assert.equal(disc.community.name, before.body.server.name);
+  assert.equal(disc.name, 'Renamed Camp');
   sid = imp.body.sid;
   generalCid = gen.cid;
   voiceCid = after.body.channels.find(c => c.type === 'voice').cid;
@@ -550,7 +558,7 @@ test('gateway: bad session closes with 4001; voice without keys is voice_unavail
   assert.equal((await w.waitFor(f => f.type === 'chat_error' && f.nonce === 'v2')).error, 'not_allowed');
 });
 
-test('delete returns the instance to "not set up"; it can be created again; admins create for the owner', async () => {
+test('delete returns the instance to "not set up"; it can be created again; whoever creates a server owns it', async () => {
   assert.equal((await carol.a.del(`/api/v1/servers/${sid}`)).status, 403); // not a member, not an admin
   assert.equal((await alice.a.put('/api/v1/instance/admins/' + encodeURIComponent(carol.user.id))).status, 200);
   assert.equal((await carol.a.del(`/api/v1/servers/${sid}`)).status, 200); // instance admins may delete
@@ -559,22 +567,21 @@ test('delete returns the instance to "not set up"; it can be created again; admi
   assert.equal(gone.community, null);
   assert.equal((await alice.a.get('/api/v1/servers')).body.servers.length, 0);
   assert.deepEqual((await alice.a.get('/api/v1/discover')).body.servers, []);
-  // create again; an admin who is not the owner creates it: the owner still owns it, the creator is a member
+  // create again; an admin who is not the instance owner creates it: it is theirs, the instance owner is not put in it
   const r = await carol.a.post('/api/v1/servers', { name: 'Reborn', join_policy: 'open' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.server.role, 'member');
+  assert.equal(r.body.server.role, 'owner');
   const nsid = r.body.server.sid;
   assert.notEqual(nsid, sid);
-  const mem = (await alice.a.get(`/api/v1/servers/${nsid}/members`)).body.members;
-  assert.deepEqual(mem.map(m => [m.username, m.role]).sort(), [['alice', 'owner'], ['carol', 'member']]);
-  assert.equal((await alice.a.get(`/api/v1/servers/${nsid}`)).body.server.role, 'owner');
+  const mem = (await carol.a.get(`/api/v1/servers/${nsid}/members`)).body.members;
+  assert.deepEqual(mem.map(m => [m.username, m.role]), [['carol', 'owner']]);
+  assert.equal((await alice.a.get(`/api/v1/servers/${nsid}`)).body.error, 'not_a_member');
   const d = (await api(base).get('/.well-known/ember')).body;
-  assert.deepEqual(d.community, { sid: nsid, name: 'Reborn', icon_url: null, description: '', member_count: 2, join_policy: 'open' });
-  assert.equal(d.name, 'Reborn');
-  assert.equal((await alice.a.post('/api/v1/servers', { name: 'again' })).body.error, 'community_exists');
+  assert.deepEqual(d.community, { sid: nsid, slug: 'reborn', address: 'reborn@localhost', name: 'Reborn', icon_url: null, description: '', member_count: 1, join_policy: 'open' });
+  assert.notEqual(d.name, 'Reborn');
   // joining works by sid on an open community
   assert.equal((await bob.a.post(`/api/v1/servers/${nsid}/join`)).status, 200);
-  assert.equal((await api(base).get('/.well-known/ember')).body.community.member_count, 3);
+  assert.equal((await api(base).get('/.well-known/ember')).body.community.member_count, 2);
 });
 
 test('logout revokes the session', async () => {

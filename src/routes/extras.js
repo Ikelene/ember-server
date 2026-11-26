@@ -57,14 +57,15 @@ function register(app) {
   // ---- link previews: the instance fetches the page, never the browser (needs a session) ----
   app.get(v1('/unfurl'), async req => {
     if (!unfurlLimit.hit(req.user.id)) throw err('rate_limited', 429);
-    const c = require('../db').get('SELECT * FROM communities ORDER BY id LIMIT 1'); // (one community per instance)
+    // ?sid= the server whose rules apply (yours); without it the only server's, and the defaults when there are several
+    const c = req.query.sid ? C.memberCommunity(req.query.sid, req.user).c : C.communityCount() === 1 ? C.pickCommunity() : null;
     const rules = require('../settings').get(c).messages; // Server settings > Message rules > Link previews
     if (!rules.link_previews) return { embed: null };
     return { embed: await unfurl.unfurl(String(req.query.url || ''), { proxy: rules.preview_proxy }) };
   });
 
   // ---- bot accounts: managed by people with Manage server (and instance admins) ----
-  app.get(v1('/bots'), req => bots.mine(req.user));
+  app.get(v1('/bots'), req => bots.mine(req.user, req.query.sid));
   app.post(v1('/bots'), req => bots.create(req.user, req.body));
   // bot gallery: add a bot Nookara approved (or the person owns) with the ticket Nookara handed them: POST { ticket, sid } (PROTOCOL §14.1)
   app.post(v1('/bots/gallery/add'), async req => { scope(req, 'chat'); return require('../relay/gallery').add(req.user, req.body || {}); });
@@ -82,6 +83,6 @@ function register(app) {
   app.get(v1('/yt/stream/:id'), { auth: false }, (req, res) => youtube.stream(req, res)); // signed link instead of a session
   app.post(v1('/yt/:id/prepare'), req => { scope(req, 'chat'); return youtube.prepare(req.params.id); });
   app.get(v1('/yt/:id/status'), req => { scope(req, 'chat'); return youtube.status(req.params.id); });
-  app.post(v1('/yt/:id/save'), req => { scope(req, 'chat'); scope(req, 'media'); return youtube.save(req.params.id, req.user, req.body?.title); });
+  app.post(v1('/yt/:id/save'), req => { scope(req, 'chat'); scope(req, 'media'); return youtube.save(req.params.id, req.user, req.body?.title, req.body?.sid); });
 }
 module.exports = { register };

@@ -18,7 +18,7 @@ const MAP = { // Nookara's answer -> what the client is told
 };
 
 async function importFromNookara(me, ticket) {
-  C.assertMayCreate(me); // 403 forbidden / 409 community_exists before contacting Nookara
+  C.assertMayCreate(me); // 403 before contacting Nookara
   if (typeof ticket !== 'string' || !/^bit_[A-Za-z0-9_-]{43}$/.test(ticket)) throw err('ticket_invalid', 400);
   if (!client.enabled()) throw err(ERR.off, 503, { message: 'Nookara relays are switched off on this instance (nookara_registration: "off").' });
   if (!client.registered()) throw err(ERR.notRegistered, 503, { message: 'This instance is not registered with Nookara yet.', retry: true });
@@ -29,8 +29,7 @@ async function importFromNookara(me, ticket) {
     if (e.status === 429) throw err('rate_limited', 429, { retry: true, retry_after: e.extra?.retry_after });
     throw err(ERR.downloadFailed, 502, { message: 'Could not download the import from Nookara.', detail: e.code || null });
   }
-  C.assertMayCreate(me); // someone may have set the community up meanwhile
-  const c = exp.importCommunity(me, buf);
+  const c = exp.importCommunity(me, buf); // (checks again: the rules may have changed meanwhile)
   return { sid: c.sid };
 }
 module.exports = { importFromNookara };

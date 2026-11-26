@@ -168,8 +168,13 @@ test('the import makes the community, and bridges the rooms it can', async () =>
   assert.ok(calls.some(c => c.method === 'POST' && c.path.endsWith('/join/!lobby:fake.test') && c.query.includes('server_name=fake.test')));
 });
 
-test('one community per instance: a second import is refused', async () => {
-  assert.equal((await alice.a.get('/api/v1/import/matrix')).status, 409);
+test('a second import makes a second server', async () => {
+  assert.equal((await alice.a.get('/api/v1/import/matrix')).status, 200);
+  const before = (await alice.a.get('/api/v1/servers')).body.servers.length;
   const r = await alice.a.post('/api/v1/import/matrix', { guild_id: SPACE, channels: ['!gen:fake.test'] });
-  assert.equal(r.status, 409); assert.equal(r.body.error, 'community_exists');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const list = (await alice.a.get('/api/v1/servers')).body.servers;
+  assert.equal(list.length, before + 1);
+  assert.equal(list.find(s => s.sid === r.body.sid).role, 'owner');
+  assert.equal(new Set(list.map(s => s.slug)).size, list.length);
 });

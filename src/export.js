@@ -113,8 +113,9 @@ function readExport(buffer) {
   if (manifest?.format !== FORMAT || !cj || typeof cj !== 'object' || !Array.isArray(cj.channels) || !Array.isArray(cj.roles)) throw err('invalid_export', 400);
   return { entries, manifest, cj };
 }
-function importCommunity(me, buffer, parsed) {
-  C.assertMayCreate(me);
+// A new server owned by `me`. opts.trusted: no creation check (restoring a backup); opts.slug: the address to take when it is free
+function importCommunity(me, buffer, parsed, opts = {}) {
+  if (!opts.trusted) C.assertMayCreate(me);
   const { entries, manifest, cj } = parsed || readExport(buffer);
   const sameInstance = normalizeOrigin(manifest.source) === origin();
   const nookara = config.mode() === 'nookara';
@@ -140,7 +141,8 @@ function importCommunity(me, buffer, parsed) {
   const result = db.tx(() => {
     const st = cj.settings || {};
     // (a password isn't exported: a password server comes back asking to join)
-    const c = C.createCommunity(me, { name: cj.name, description: cj.description, join_policy: ['open', 'request', 'allowlist', 'invite'].includes(st.join_policy) ? st.join_policy : 'request' }, { empty: true });
+    const slug = opts.slug && !db.get('SELECT 1 FROM communities WHERE slug = ?', opts.slug) ? opts.slug : undefined;
+    const c = C.createCommunity(me, { name: cj.name, description: cj.description, slug, join_policy: ['open', 'request', 'allowlist', 'invite'].includes(st.join_policy) ? st.join_policy : 'request' }, { empty: true, trusted: opts.trusted });
     const set = { allow_uploads: st.allow_uploads === false ? 0 : 1, upload_max_mb: Number.isInteger(st.upload_max_mb) && st.upload_max_mb >= 1 && st.upload_max_mb <= 500 ? st.upload_max_mb : 25 };
     // (allow_signing / require_signing in older exports are ignored: signing is always optional)
     set.icon_url = mapUrl(cj.icon, 'chat'); set.banner_url = mapUrl(cj.banner, 'chat');
@@ -291,12 +293,11 @@ function importCommunity(me, buffer, parsed) {
     setImmediate(() => { const fresh = db.get('SELECT * FROM communities WHERE id = ?', c.id); if (!fresh) return; const snap = C.snapOf(fresh); for (const uid of toAnnounce) require('./gateway').pushToUser(uid, { type: 'chat_server_added', server: C.serverView(fresh, snap, auth.userById(uid)) }); });
     return db.get('SELECT * FROM communities WHERE id = ?', c.id);
   });
-  C.mirrorToConfig(result);
   require('./bridge/cloudlink').channelsChanged(); // imported CloudLink bridge channels connect now
   return result;
 }
 
-// EMBER_IMPORT_ON_BOOT=<zip>: a restored backup (PROTOCOL §19.6). Imported once, on a boot where the instance has no community yet,
+// EMBER_IMPORT_ON_BOOT=<zip>: a restored backup (PROTOCOL §19.6). Imported once, on a boot where the homeserver has no server yet,
 // owned by the instance owner; the file is deleted afterwards.
 function importOnBoot() {
   const file = env('IMPORT_ON_BOOT');
@@ -313,11 +314,9 @@ function importOnBoot() {
     return c;
   } catch (e) { console.error('[import] boot import failed:', e.code || e.message); return null; }
 }
-// the owner's community as an export zip, for the host's backups (src/cli.js). null = nothing to back up
+// every server as an export zip, for the host's backups (src/cli.js): [{ sid, slug, name, zip }]. Empty = nothing to back up
 function exportForBackup() {
-  const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
-  if (!c) return null;
-  return exportCommunity(c.sid, auth.userById(c.owner_id));
+  return db.all('SELECT * FROM communities ORDER BY id').map(c => ({ sid: c.sid, slug: c.slug, name: c.name, zip: exportCommunity(c.sid, auth.userById(c.owner_id)) }));
 }
 
 module.exports = { readExport, exportCommunity, importCommunity, importOnBoot, exportForBackup, FORMAT };

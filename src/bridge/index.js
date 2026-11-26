@@ -41,7 +41,7 @@ function register(real) {
 
   // ---- Discord / Fluxer (same shapes as Nookara's /chat/bridge/*; Manage server) ----
   app.get(v1('/bridge/platforms'), () => bridge.platforms());
-  app.get(v1('/bridge/:platform/guilds'), req => bridge.guilds(req.user, req.params.platform));
+  app.get(v1('/bridge/:platform/guilds'), req => bridge.guilds(req.user, req.params.platform, req.query.sid));
   app.get(v1('/bridge/servers/:sid'), req => bridge.status(req.user, req.params.sid));
   app.put(v1('/bridge/servers/:sid'), req => bridge.link(req.user, req.params.sid, s(req.body?.platform), s(req.body?.guild_id), req.body?.automap !== false));
   app.patch(v1('/bridge/servers/:sid'), req => bridge.setEnabled(req.user, req.params.sid, s(req.body?.platform), !!req.body?.enabled));

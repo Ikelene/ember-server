@@ -1,7 +1,7 @@
 'use strict';
-// The public Ember directory on Nookara (PROTOCOL §12.9): PUT relayPath('/directory') while the instance setting `listed`
-// (= the community's `listed`) is on; `listed: false` takes the listing down. Re-pushed (debounced) whenever what would be
-// listed changes, and every 6 hours anyway.
+// The public Ember directory on Nookara (PROTOCOL §12.9): PUT relayPath('/directory') with every server whose `listed` is on;
+// `listed: false` (none listed) takes the listing down. Re-pushed (debounced) whenever what would be listed changes, and every
+// 6 hours anyway.
 const { relayPath } = require('../compat');
 const db = require('../db');
 const config = require('../config');
@@ -15,15 +15,20 @@ let tick = null, soon = null, busy = false, info = { listed: false, hidden_by_st
 
 const abs = u => { try { return u ? new URL(u, config.publicUrl()).href : null; } catch { return null; } };
 function payload() {
-  const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
-  if (!c || !c.listed) return { listed: false };
+  const list = C.listedCommunities();
+  if (!list.length) return { listed: false };
   const cfg = config.get(), origin = cfg.public_url;
-  return {
-    listed: true, name: c.name, description: c.description || '', icon_url: abs(c.icon_url), banner_url: abs(c.banner_url), member_count: C.memberCount(c.id),
+  const entry = c => ({
+    name: c.name, description: c.description || '', icon_url: abs(c.icon_url), banner_url: abs(c.banner_url), member_count: C.memberCount(c.id),
     // the community's permanent invite, opened in Ember on the web
     invite_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
     tags: Array.isArray(cfg.tags) ? cfg.tags.slice(0, 8) : [],
-  };
+  });
+  // One listed server: exactly the entry Nookara has always taken. Several: the oldest stays in those fields and all of them ride
+  // along in `communities`. TODO: Nookara reads only the single entry for now; it will list `communities` once it is updated.
+  const out = { listed: true, ...entry(list[0]) };
+  if (list.length > 1) out.communities = list.map(c => ({ sid: c.sid, slug: c.slug, address: C.addressOf(c), ...entry(c) }));
+  return out;
 }
 const last = () => { try { return JSON.parse(db.metaGet('nookara_dir') || 'null'); } catch { return null; } };
 
@@ -35,8 +40,9 @@ async function push(force = false) {
   busy = true;
   try {
     let body = { ...p }, out;
-    for (let i = 0; i < 4; i++) { // Nookara only stores https links: drop a link it refuses rather than the whole listing
+    for (let i = 0; i < 5; i++) { // Nookara only stores https links: drop a link it refuses rather than the whole listing
       try { out = await client.call('PUT', relayPath('/directory'), body); break; } catch (e) {
+        if (e.code === 'invalid_communities' && body.communities) { delete body.communities; continue; } // a Nookara that does not take the list yet
         if (e.code === 'invalid_icon_url' && body.icon_url) { body.icon_url = null; continue; }
         if (e.code === 'invalid_banner_url' && body.banner_url) { body.banner_url = null; continue; }
         if (e.code === 'invalid_invite_url' && body.invite_url) { body.invite_url = null; continue; }

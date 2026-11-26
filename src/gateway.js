@@ -94,6 +94,8 @@ function pushToAdmins(obj) { for (const [uid, set] of byUser) { const u = set.va
 function broadcastAll(obj) { for (const sock of all) if (authed(sock)) send(sock, obj); }
 
 function closeAll(code, reason) { for (const sock of all) { try { sock.close(code, reason); } catch { /* gone */ } } }
+// some people's sockets only (a restored server: its members reconnect, nobody else notices)
+function closeUsers(userIds, code, reason, last = null) { for (const uid of userIds) for (const sock of [...(byUser.get(Number(uid)) || [])]) { if (last) send(sock, last); try { sock.close(code, reason); } catch { /* gone */ } } }
 const onlineUserIds = () => [...byUser.keys()];
 // the public landing page (landing.js): how many people and signed-in sockets, never who
 function counts() {
@@ -277,4 +279,4 @@ function shutdown(code = 1001, reason = 'shutdown') {
   wss?.close();
 }
 
-module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, onlineUserIds, counts, isOnline, socketsOf, present, peopleChanged };
+module.exports = { restrictionChanged, attach, shutdown, send, subscribe, unsubscribe, dropCommunity, emit, emitWhere, pushToUser, pushToAdmins, broadcastAll, closeAll, closeUsers, onlineUserIds, counts, isOnline, socketsOf, present, peopleChanged };

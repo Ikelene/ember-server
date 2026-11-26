@@ -272,8 +272,6 @@ test('import from Nookara: ticket -> signed bundle download -> zip importer', T,
   assert.equal(r.status, 200, JSON.stringify(r.body));
   sid = r.body.sid;
   assert.equal(relayCalls('GET /import/bundle').at(-1).query.ticket, ticket);
-  r = await alice.a.post('/api/v1/import/nookara', { ticket }); // one community per instance
-  assert.equal(r.body.error, 'community_exists');
   const d = (await alice.a.get(`/api/v1/servers/${sid}`)).body;
   assert.equal(d.server.name, 'Imported Guild');
   general = d.channels.find(c => c.name === 'general').cid; lounge = d.channels.find(c => c.type === 'voice').cid; shopCid = d.channels.find(c => c.type === 'roles').cid;
@@ -451,7 +449,7 @@ test('directory: listed toggle pushes the listing, unlisting removes it', T, asy
   V.directory.length = 0;
   await alice.a.patch('/api/v1/instance/settings', { tags: ['Gaming', 'chat'] });
   assert.equal((await alice.a.patch(`/api/v1/servers/${sid}`, { listed: true })).status, 200);
-  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.listed, true); // same value as the community's
+  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.listed, true); // true while any server is listed
   await until(() => V.directory.length >= 1, 3000, 'directory push');
   const inv = (await alice.a.get(`/api/v1/servers/${sid}`)).body.server.invite;
   assert.deepEqual(V.directory.at(-1), { listed: true, name: 'Imported Guild', description: 'from discord', icon_url: null, banner_url: null, member_count: 3, invite_url: `${VURL}/chat#/i/${encodeURIComponent(IURL)}/invite/${inv}`, tags: ['gaming', 'chat'] });
@@ -459,7 +457,9 @@ test('directory: listed toggle pushes the listing, unlisting removes it', T, asy
   const n = V.directory.length;
   await directory.push(); // nothing changed: no push
   assert.equal(V.directory.length, n);
-  await alice.a.patch('/api/v1/instance/settings', { listed: false });
+  await alice.a.patch('/api/v1/instance/settings', { listed: false }); // the old instance switch: accepted, changes nothing
+  assert.equal((await alice.a.get(`/api/v1/servers/${sid}`)).body.server.listed, true);
+  assert.equal((await alice.a.patch(`/api/v1/servers/${sid}`, { listed: false })).status, 200);
   await until(() => V.directory.at(-1)?.listed === false, 3000, 'unlisting');
   assert.deepEqual(V.directory.at(-1), { listed: false });
   assert.equal((await alice.a.get(`/api/v1/servers/${sid}`)).body.server.listed, false);

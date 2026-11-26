@@ -88,9 +88,13 @@ function botCount(communityId = null) {
   const db = require('./db');
   return db.get('SELECT COUNT(*) AS n FROM bots b WHERE EXISTS (SELECT 1 FROM members m WHERE m.user_id = b.user_id' + (communityId === null ? '' : ' AND m.community_id = ?') + ')', ...(communityId === null ? [] : [communityId])).n;
 }
-function usage() {
+// what one server uses of the plan (communityId; without one: the only server there is, else nothing server-shaped is counted).
+// storage_mb stays the whole homeserver's: uploads are not tied to a server.
+function usage(communityId = null) {
   if (!active()) return null;
-  const db = require('./db'), c = db.get('SELECT id FROM communities ORDER BY id LIMIT 1');
+  const db = require('./db');
+  const only = communityId === null ? db.all('SELECT id FROM communities ORDER BY id LIMIT 2') : [];
+  const c = communityId !== null ? db.get('SELECT id FROM communities WHERE id = ?', communityId) : only.length === 1 ? only[0] : null;
   const count = table => c ? db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE community_id = ?`, c.id).n : 0;
   const used = { bots: botCount(c?.id ?? null), emojis: count('emojis'), sounds: count('sounds'), member_cap: c ? db.get("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND u.kind <> 'bot'", c.id).n : 0, max_upload_mb: null,
     files_per_member: null, upload_expiry_days: null, storage_mb: Math.ceil(db.get('SELECT COALESCE(SUM(size), 0) AS n FROM uploads').n / (1024 * 1024)) };

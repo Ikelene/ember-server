@@ -491,8 +491,8 @@ async function platforms() {
   return { platforms: out };
 }
 // the bot's servers over there (any of them can be linked: the bot is the owner's)
-async function guilds(me, p) {
-  const c = db.get('SELECT sid FROM communities ORDER BY id LIMIT 1'); // the instance's one community (PROTOCOL §5a)
+async function guilds(me, p, sid) {
+  const c = C.pickCommunity(sid); // ?sid=, or the only server there is (400 sid_required with several)
   if (!c) throw err('server_not_found', 404);
   manageable(me, c.sid);
   if (p === MATRIX) { // no servers over there: the one thing to link is "the rooms the bot is in"

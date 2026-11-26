@@ -22,7 +22,7 @@ function discovery() {
   const mode = config.mode();
   // withLegacy: the `nookara` object also goes out as `velora` (older clients read that)
   return withLegacy({
-    software: SOFTWARE, version: pkg.version, protocol: 1,
+    software: SOFTWARE, version: pkg.version, protocol: 1, protocol_version: 2,
     open_protocol: true, protocol_name: 'Ember Instance Protocol', protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md',
     about: "Ember is an open chat protocol, not a Nookara-only product: anyone can write an Ember client and use or run Ember servers. Nookara's web, desktop and Android apps are just the clients the Nookara ecosystem uses.",
     build: V.build(), // PROTOCOL §3: { version, commit, commit_short, commit_date, built_at, dirty, build_id }
@@ -36,6 +36,10 @@ function discovery() {
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
     managed: managed.view(), // Nookara-hosted plan + limits (PROTOCOL §19), null on a normal instance
+    // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
+    homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
+    communities_count: C.communityCount(),
+    communities: C.listedCommunities().map(C.discoveryView),
     community: C.discoveryCommunity(),
     // the instance's relay key (PROTOCOL §12.1): Nookara checks it here before binding this url to the key
     ...require('../relay/client').identity(),
@@ -53,7 +57,7 @@ function register(app, { restart }) {
     const s = auth.resolveSession(auth.bearer(req));
     if (s && !s.user.banned && auth.isAdmin(s.user)) {
       out.admin = true;
-      out.plan = managed.usage();
+      out.plan = managed.usage(planCommunity(req)); // ?sid= one server's usage
       out.runtime = V.runtime();
       out.stats = V.stats();
       // ?refresh=1 (Server info > Refresh): really ask Nookara again instead of the cached answer
@@ -107,13 +111,16 @@ function register(app, { restart }) {
     gateway.pushToUser(req.user.id, { type: 'instance_update', settings: config.publicView() });
     return { ok: true };
   });
-  const settingsView = () => ({ ...config.adminView(), operator_terms: require('../operator-terms').view(), managed: managed.view(), plan: managed.usage(), ...withLegacy({ nookara: withLegacy(require('../relay').status()) }), local_admins: auth.localAdmins().map(u => u.username) });
-  app.get('/api/v1/instance/settings', { admin: true }, settingsView);
+  // `listed` is a server's own setting now; old admin pages still read it here: true while any server is listed
+  const planCommunity = req => (req?.query?.sid ? C.findCommunity(req.query.sid).id : null);
+  const settingsView = req => ({ ...config.adminView(), listed: C.listedCommunities().length > 0, operator_terms: require('../operator-terms').view(), managed: managed.view(), plan: managed.usage(planCommunity(req)), ...withLegacy({ nookara: withLegacy(require('../relay').status()) }), local_admins: auth.localAdmins().map(u => u.username) });
+  app.get('/api/v1/instance/settings', { admin: true }, req => settingsView(req));
   app.patch('/api/v1/instance/settings', { admin: true }, req => {
     managed.guardSettings(req.body, config.get());
     // switching to local accounts: Nookara sign-in stops working, so someone must be able to sign in with a password and switch back
     if (req.body?.accounts_mode === 'local' && config.get().accounts_mode !== 'local' && !auth.localAdmins().length) throw err('local_admin_required', 409);
     config.update(req.body); if (req.body?.max_backups !== undefined) require('../backups').prune();
+    if (req.body?.tags !== undefined) require('../relay/directory').poke();
     // the owner switching to accounts their own account isn't: after the restart they claim it again with this code (and keep the community)
     const next = config.adminView().accounts_mode, me = req.user;
     if (req.body?.accounts_mode !== undefined && auth.isOwner(me) && me.kind !== (next === 'local' ? 'local' : KIND_NOOKARA)) return { ...settingsView(), handover_code: setup.handoverCode() };
@@ -126,11 +133,12 @@ function register(app, { restart }) {
     return require('../operator-terms').acceptLater(req.user);
   });
   app.post('/api/v1/instance/operator-terms/dismiss', { admin: true }, () => require('../operator-terms').dismiss());
-  // (owner, like adding admins) a local (username + password) admin account, made while still on Nookara accounts: instance admin, and an Administrator role on the server
+  // (owner, like adding admins) a local (username + password) admin account, made while still on Nookara accounts: instance admin, and an
+  // Administrator role on the server `sid` (or the only one there is; with several and no sid it is an instance admin only)
   app.post('/api/v1/instance/local-admin', { owner: true }, async req => {
+    const c = req.body?.sid || C.communityCount() === 1 ? C.pickCommunity(req.body?.sid) : null;
     const id = await auth.createLocalUser(req.body?.username, req.body?.password);
     db.run('INSERT OR IGNORE INTO instance_admins (user_id) VALUES (?)', id);
-    const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
     if (c) {
       const owner = auth.userById(c.owner_id), u = auth.userById(id);
       C.addMember(c, id, { announce: false });

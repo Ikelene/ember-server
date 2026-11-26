@@ -24,7 +24,11 @@ const DEFAULTS = {
   youtube: { enabled: true, ytdlp_path: 'yt-dlp', cache_dir: '', cache_max_gb: 5 },
   // Nookara relays (PROTOCOL §12): 'auto' registers with nookara_url on boot; 'off' never contacts Nookara (no push / payments / daily / voice broker / directory)
   nookara_registration: 'auto', tags: [],
+  // who may create servers here (PROTOCOL §5a): instance admins always may. per_account: how many one account may own (null = no cap)
+  creation: { mode: 'admins', allowlist: [], per_account: null },
 };
+const CREATION_MODES = ['admins', 'allowlist', 'request', 'anyone'];
+const DOMAIN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 function init({ dataDir, port } = {}) {
   if (dataDir) DATA_DIR = path.resolve(dataDir);
@@ -53,7 +57,7 @@ function sanitize(p, loose = false) {
   const out = {};
   const bad = code => { if (!loose) throw err(code, 400); };
   const str = (k, n) => { if (p[k] !== undefined) { if (typeof p[k] === 'string' && p[k].length <= n) out[k] = p[k].trim(); else bad('invalid_' + k); } };
-  str('name', 60); str('description', 300); // same limits as the community's (they are the same values, PROTOCOL §5a)
+  str('name', 60); str('description', 300); // the homeserver's own name / description (a server has its own, PROTOCOL §5a)
   if (out.name === '') { delete out.name; bad('invalid_name'); }
   if (p.icon_url !== undefined) { if (p.icon_url === null || p.icon_url === '') out.icon_url = null; else if (typeof p.icon_url === 'string' && p.icon_url.length < 512) out.icon_url = p.icon_url; else bad('invalid_icon_url'); }
   for (const k of ['public_url', 'nookara_url']) {
@@ -82,7 +86,23 @@ function sanitize(p, loose = false) {
     } else bad('invalid_youtube');
   }
   if (p.nookara_registration !== undefined) { if (['auto', 'off'].includes(p.nookara_registration)) out.nookara_registration = p.nookara_registration; else bad(ERR.badRegistration); }
-  if (p.listed !== undefined) { if (typeof p.listed === 'boolean') out.listed = p.listed; else bad('invalid_listed'); } // the Nookara directory (same value as the community's `listed`)
+  // (`listed` was the one community's directory switch: it is a server's own setting now, so the key is accepted and dropped)
+  if (p.domain !== undefined) { // the homeserver's name in server addresses (slug@domain); null = the public url's hostname
+    const d = typeof p.domain === 'string' ? p.domain.trim().toLowerCase() : null;
+    if (p.domain === null || d === '') out.domain = null; else if (d && DOMAIN.test(d)) out.domain = d; else bad('invalid_domain');
+  }
+  if (p.creation !== undefined) {
+    if (p.creation && typeof p.creation === 'object' && !Array.isArray(p.creation)) {
+      const c = {}, v = p.creation;
+      if (v.mode !== undefined) { if (CREATION_MODES.includes(v.mode)) c.mode = v.mode; else bad('invalid_creation'); }
+      if (v.allowlist !== undefined) {
+        if (Array.isArray(v.allowlist) && v.allowlist.length <= 1000 && v.allowlist.every(x => typeof x === 'string' && x.trim().length >= 1 && x.trim().length <= 64)) c.allowlist = [...new Set(v.allowlist.map(x => x.trim().toLowerCase()))];
+        else bad('invalid_creation');
+      }
+      if (v.per_account !== undefined) { if (v.per_account === null || (Number.isInteger(v.per_account) && v.per_account >= 1 && v.per_account <= 1000)) c.per_account = v.per_account; else bad('invalid_creation'); }
+      out.creation = c;
+    } else bad('invalid_creation');
+  }
   if (p.tags !== undefined) {
     const ok = Array.isArray(p.tags) && p.tags.length <= 8 && p.tags.every(t => typeof t === 'string' && t.trim().length >= 1 && t.trim().length <= 24 && !t.includes(','));
     if (ok) out.tags = [...new Set(p.tags.map(t => t.trim().toLowerCase()))]; else bad('invalid_tags');
@@ -92,11 +112,12 @@ function sanitize(p, loose = false) {
 
 // the effective settings: defaults < file < env. (Old community_creation / auto_join keys in config.json are ignored.)
 function get() {
-  const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) } };
+  const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) }, creation: { ...DEFAULTS.creation, ...(data.creation || {}) } };
   if (envMode()) v.accounts_mode = envMode();
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
   v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
   v.nookara_url = normalizeOrigin(v.nookara_url);
+  if (!v.domain) { try { v.domain = new URL(v.public_url).hostname.toLowerCase(); } catch { v.domain = 'localhost'; } }
   if (['auto', 'off'].includes(env('NOOKARA_REGISTRATION'))) v.nookara_registration = env('NOOKARA_REGISTRATION');
   if (managed.active()) { // Nookara-hosted (PROTOCOL §19): sign-in and registration are fixed, uploads are capped by the plan
     v.accounts_mode = 'nookara'; v.nookara_registration = 'auto';
@@ -110,6 +131,7 @@ function envMode() { const m = readMode(env('ACCOUNTS_MODE')); return ['nookara'
 // the mode this process booted with (switching needs a restart)
 const mode = () => runningMode || get().accounts_mode;
 const publicUrl = () => get().public_url;
+const domain = () => get().domain;
 
 function update(patch) {
   const clean = sanitize(patch || {});
@@ -118,6 +140,7 @@ function update(patch) {
     clean.voice = { ...cur, ...Object.fromEntries(Object.entries(clean.voice).filter(([k, v]) => v !== '' || !/secret|token/.test(k))) };
   }
   if (clean.youtube) clean.youtube = { ...(data.youtube || {}), ...clean.youtube };
+  if (clean.creation) clean.creation = { ...(data.creation || {}), ...clean.creation };
   data = { ...data, ...clean };
   write();
   events.emit('change');
@@ -157,11 +180,11 @@ function adminView() {
   const saved = managed.active() ? 'nookara' : data.accounts_mode || v.accounts_mode;
   // accounts_mode values go out under their old wire name (compat wireMode); the renamed keys also go out under the old names
   return withLegacy({
-    name: v.name, description: v.description, icon_url: v.icon_url, public_url: v.public_url,
+    name: v.name, description: v.description, icon_url: v.icon_url, public_url: v.public_url, domain: v.domain, creation: v.creation,
     accounts_mode: wireMode(saved), running_accounts_mode: wireMode(mode()), restart_required: saved !== mode(),
     accounts_mode_env: !!envMode(), // the env var wins over the saved setting
     nookara_url: v.nookara_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
-    youtube: v.youtube, nookara_registration: v.nookara_registration, listed: !!v.listed, tags: v.tags,
+    youtube: v.youtube, nookara_registration: v.nookara_registration, tags: v.tags,
     voice: { cf_app_id: v.voice.cf_app_id, has_app_secret: !!v.voice.cf_app_secret, cf_turn_key_id: v.voice.cf_turn_key_id, has_turn_token: !!v.voice.cf_turn_token },
   });
 }
@@ -172,4 +195,4 @@ function publicView() {
 }
 const voiceConfigured = () => { if (!managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
 
-module.exports = { init, get, mode, publicUrl, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS };
+module.exports = { init, get, mode, publicUrl, domain, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS };

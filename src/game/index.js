@@ -30,9 +30,9 @@ function shutdown() {
   GW.shutdown();
 }
 
-// a community you're in + a permission there. sid is optional: an instance has one community (PROTOCOL §5a)
+// a community you're in + a permission there. sid is optional only while the homeserver has one server (400 sid_required otherwise)
 function communityWith(sid, me, bit) {
-  const s = sid || db.get('SELECT sid FROM communities ORDER BY id LIMIT 1')?.sid;
+  const s = C.pickCommunity(sid)?.sid;
   if (!s) throw err('server_not_found', 404);
   const r = C.memberCommunity(s, me);
   if (!r.snap.can(me.id, bit)) throw err('not_allowed', 403);
