@@ -249,6 +249,25 @@ const MIGRATIONS = [
     for (const c of d.prepare('SELECT id, name FROM communities ORDER BY id').all()) { const s = slug.derive(c.name, x => taken.has(x)); taken.add(s); set.run(s, c.id); }
     d.exec('UPDATE instance_backups SET community_id = (SELECT id FROM communities ORDER BY id LIMIT 1)');
   },
+  // v23: homeserver login (PROTOCOL §4a): access tokens are sessions that expire and belong to a refresh family; refresh tokens
+  // (stored hashed, rotated on use); the outside logins (OpenID Connect / OAuth 2.0) linked to an account
+  // (safe to run again: a database wound back to an older version already has these)
+  d => {
+    const cols = d.prepare('PRAGMA table_info(sessions)').all().map(c => c.name);
+    if (!cols.includes('expires_at')) d.exec('ALTER TABLE sessions ADD COLUMN expires_at INTEGER');
+    if (!cols.includes('family')) d.exec('ALTER TABLE sessions ADD COLUMN family TEXT');
+    d.exec(`CREATE INDEX IF NOT EXISTS sessions_family ON sessions(family);
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        hash TEXT PRIMARY KEY, family TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        client_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS refresh_tokens_family ON refresh_tokens(family);
+      CREATE TABLE IF NOT EXISTS login_links (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, method_id TEXT NOT NULL, subject TEXT NOT NULL,
+        email TEXT, email_verified INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY (method_id, subject)
+      );
+      CREATE INDEX IF NOT EXISTS login_links_user ON login_links(user_id);`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

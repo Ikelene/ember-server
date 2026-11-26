@@ -4,7 +4,7 @@ const { KIND_NOOKARA, ERR, NOOKARA_ID_FIELD, NOOKARA_PATHS } = require('./compat
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
-const { err, normalizeOrigin, sameNookara, b64url, fromB64url, sha256, now, clean } = require('./util');
+const { err, normalizeOrigin, sameNookara, b64url, fromB64url, sha256, now, clean, limiter } = require('./util');
 
 const SESSION_TTL = 30 * 24 * 3600 * 1000;
 const SKEW_S = 60;
@@ -63,9 +63,10 @@ function identityChanged(u, previousUsername) {
 }
 
 // ---------- sessions ----------
-function createSession(userId, scopes, app = null) {
+// ttl + family: an access token from the token endpoint (PROTOCOL §4a): it ends after ttl ms and goes with its refresh family
+function createSession(userId, scopes, app = null, { ttl = null, family = null } = {}) {
   const token = b64url(crypto.randomBytes(32));
-  db.run('INSERT INTO sessions (hash, user_id, scopes, created_at, last_used, app) VALUES (?, ?, ?, ?, ?, ?)', sha256(token), userId, JSON.stringify(scopes), now(), now(), app ? JSON.stringify(app) : null);
+  db.run('INSERT INTO sessions (hash, user_id, scopes, created_at, last_used, app, expires_at, family) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', sha256(token), userId, JSON.stringify(scopes), now(), now(), app ? JSON.stringify(app) : null, ttl ? now() + ttl : null, family);
   return token;
 }
 // -> { user, scopes, hash } | null
@@ -75,7 +76,7 @@ function resolveSession(token) {
   const s = db.get('SELECT * FROM sessions WHERE hash = ?', hash);
   if (!s) return null;
   const t = now();
-  if (t - s.last_used > SESSION_TTL) { db.run('DELETE FROM sessions WHERE hash = ?', hash); return null; }
+  if (t - s.last_used > SESSION_TTL || (s.expires_at && t >= s.expires_at)) { db.run('DELETE FROM sessions WHERE hash = ?', hash); return null; }
   const user = userById(s.user_id);
   if (!user) return null;
   // principals of the other account mode can no longer use the instance
@@ -83,11 +84,21 @@ function resolveSession(token) {
   if (t - s.last_used > 3600 * 1000) db.run('UPDATE sessions SET last_used = ? WHERE hash = ?', t, hash);
   let scopes = []; try { scopes = JSON.parse(s.scopes); } catch { /* none */ }
   let app = null; try { app = s.app ? JSON.parse(s.app) : null; } catch { /* none */ }
-  return { user, scopes, hash, app };
+  return { user, scopes, hash, app, family: s.family || null };
 }
-const revokeSession = token => { if (token) db.run('DELETE FROM sessions WHERE hash = ?', sha256(token)); };
+// signing out: the session goes, and with it the refresh family it came from (its other access tokens too)
+function revokeSession(token) {
+  if (!token) return;
+  const s = db.get('SELECT family FROM sessions WHERE hash = ?', sha256(token));
+  db.run('DELETE FROM sessions WHERE hash = ?', sha256(token));
+  if (s?.family) revokeFamily(s.family);
+}
+function revokeFamily(family) {
+  db.run('DELETE FROM refresh_tokens WHERE family = ?', family);
+  db.run('DELETE FROM sessions WHERE family = ?', family);
+}
 const bearer = req => { const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || ''); return m ? m[1] : null; };
-setInterval(() => { try { db.run('DELETE FROM sessions WHERE last_used < ?', now() - SESSION_TTL); db.run('DELETE FROM jti_seen WHERE exp < ?', Math.floor(now() / 1000) - 3600); } catch { /* db closed */ } }, 3600 * 1000).unref();
+setInterval(() => { try { db.run('DELETE FROM sessions WHERE last_used < ? OR expires_at < ?', now() - SESSION_TTL, now()); db.run('DELETE FROM refresh_tokens WHERE expires_at < ?', now()); db.run('DELETE FROM jti_seen WHERE exp < ?', Math.floor(now() / 1000) - 3600); } catch { /* db closed */ } }, 3600 * 1000).unref();
 
 // ---------- Nookara JWT ----------
 let jwksFetcher = async () => {
@@ -192,22 +203,28 @@ const USERNAME = /^[a-z0-9_.]{2,32}$/;
 const LOCAL_SCOPES = ['chat', 'voice', 'media'];
 const claimed = () => !!db.metaGet('owner_user_id');
 
+// the password way in, when the accounts settings have one switched on
+const passwordMethod = () => config.get().accounts.login_methods.find(m => m.kind === 'password' && m.enabled) || null;
+// anyone may make an account: registration is open, or nobody has claimed the homeserver yet (its first account)
+const registrationOpen = () => config.get().accounts.registration === 'open' || !claimed();
 async function registerLocal(username, password) {
   if (config.mode() !== 'local') throw err('wrong_accounts_mode', 400);
-  if (config.get().registration !== 'open' && claimed()) throw err('registration_closed', 403);
+  if (!passwordMethod()) throw err('password_login_disabled', 403);
+  if (!registrationOpen()) throw err('registration_closed', 403);
   return finishLogin(userById(await createLocalUser(username, password)), LOCAL_SCOPES);
 }
 // a username + password account (also made by an admin while still on Nookara accounts: the way back in after switching to local)
-async function createLocalUser(username, password) {
+// noPassword: an account that signs in through a linked outside login only (PROTOCOL §4a)
+async function createLocalUser(username, password, { noPassword = false, displayName = null } = {}) {
   const name = String(username || '').trim().toLowerCase();
   if (!USERNAME.test(name)) throw err('invalid_username');
-  if (typeof password !== 'string' || password.length < 8 || password.length > 200) throw err('invalid_password');
+  if (!noPassword && (typeof password !== 'string' || password.length < 8 || password.length > 200)) throw err('invalid_password');
   if (db.get("SELECT 1 FROM users WHERE kind IN ('local', 'bot') AND username_lc = ?", name)) throw err('username_taken', 409);
-  const hash = await hashPassword(password);
+  const hash = noPassword ? null : await hashPassword(password);
   let id;
   try {
     id = db.tx(() => {
-      const r = db.run("INSERT INTO users (principal, kind, username, display_name, username_lc, password_hash, created_at, last_login) VALUES ('pending', 'local', ?, ?, ?, ?, ?, ?)", name, name, name, hash, now(), now());
+      const r = db.run("INSERT INTO users (principal, kind, username, display_name, username_lc, password_hash, created_at, last_login) VALUES ('pending', 'local', ?, ?, ?, ?, ?, ?)", name, clean(displayName, 64) || name, name, hash, now(), now());
       db.run('UPDATE users SET principal = ? WHERE id = ?', 'l:' + r.lastInsertRowid, r.lastInsertRowid);
       return r.lastInsertRowid;
     });
@@ -218,12 +235,23 @@ async function createLocalUser(username, password) {
 const localAdmins = () => db.all("SELECT u.* FROM users u WHERE u.kind = 'local' AND (u.id IN (SELECT user_id FROM instance_admins) OR CAST(u.id AS TEXT) = ?)", String(db.metaGet('owner_user_id') ?? ''));
 async function loginLocal(username, password) {
   if (config.mode() !== 'local') throw err('wrong_accounts_mode', 400);
+  if (!passwordMethod()) throw err('password_login_disabled', 403);
   const u = db.get("SELECT * FROM users WHERE kind = 'local' AND username_lc = ?", String(username || '').trim().toLowerCase());
   const ok = await checkPassword(String(password || '').slice(0, 200), u?.password_hash);
   if (!u || !ok) throw err('invalid_credentials', 401);
   db.run('UPDATE users SET last_login = ? WHERE id = ?', now(), u.id);
   return finishLogin(u, LOCAL_SCOPES);
 }
+// the same check without making a session (the /login page): -> the user row
+async function checkLocal(username, password) {
+  const u = db.get("SELECT * FROM users WHERE kind = 'local' AND username_lc = ?", String(username || '').trim().toLowerCase());
+  const ok = await checkPassword(String(password || '').slice(0, 200), u?.password_hash);
+  if (!u || !ok) throw err('invalid_credentials', 401);
+  if (u.banned) throw err('banned', 403);
+  return u;
+}
+// sign-in limits per address, shared by /api/v1/auth/* and the /login page
+const limits = { register: limiter(10, 3600 * 1000), login: limiter(20, 600 * 1000) };
 
 // ---------- owner / admins ----------
 const ownerRow = () => { const id = db.metaGet('owner_user_id'); return id ? userById(Number(id)) : null; };
@@ -246,7 +274,7 @@ function setOwner(userId) {
 
 module.exports = {
   userView, botVerified, userById, userByPrincipal, upsertNookaraUser, refreshNookaraProfile, setRestricted, ensureNookaraPlaceholder,
-  createSession, resolveSession, revokeSession, bearer,
+  createSession, resolveSession, revokeSession, revokeFamily, bearer, checkLocal, limits, passwordMethod, registrationOpen, LOCAL_SCOPES, USERNAME,
   verifyNookaraJwt, setJwksFetcher, keyFor, loginNookara, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
   claimed, ownerRow, ownerStranded, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,
 };
