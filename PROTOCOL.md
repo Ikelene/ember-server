@@ -130,11 +130,14 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "communities_count": 2,
   "communities": [ { "sid": "s…", "slug": "camp-fire", "address": "camp-fire@chat.example", "name": "…", "icon_url": null, "description": "", "member_count": 3, "join_policy": "open" | "request" | … } ],
   "community": <one entry of the same shape> | null,
+  "accounts": { "hosts_accounts": true, "registration": "open", "remote_accounts": { "mode": "none" } },
+  "login": { "authorize_url": "…/login", "token_url": "…/api/v2/auth/token", "revoke_url": "…/api/v2/auth/revoke", "methods": [ { "id": "password", "kind": "password", "name": "Password" } ] },
   "instance_key": "<b64url raw 32-byte Ed25519 public key>", "instance_id": "ik_…"
 }
 ```
 - `accounts_mode` is still `"velora"` on the wire for a Nookara-accounts instance (older clients compare against it); `software` is still `"bonfire-server"`. Both change in protocol v2.
 - `registration` applies only to local mode.
+- `accounts` and `login` are the homeserver's account settings and where to sign in (§4a); `login` is only there when accounts are hosted here. `accounts_mode` and `registration` stay for old clients.
 - `features.signing` is false in local mode. `features.youtube` is true only when the optional yt-dlp player works (§15).
 - `features.minecraft` is always true (the Ember Link game gateway, §18); `features.bridges` says which bridge bots the owner has configured (§16; CloudLink needs none, §17).
 - `protocol` stays `1` for old clients; `protocol_version: 2` says the homeserver hosts many servers (§5a).
@@ -197,6 +200,91 @@ The display name and picture are the user object's `display_name` and `pfp`, so 
 **Following a Nookara profile.** The server never talks to Nookara for this. A client that is signed in to both copies the person's Nookara profile over with the routes above (text fields with `PATCH`, the pictures downloaded and uploaded again so the server holds its own copy). `sync` is where it remembers that the profile should keep following: `PATCH { sync: { velora_id, stamp } }` stores `{ velora_id, stamp, at }` (`stamp`: an opaque string of up to 128 characters the client derives from the Nookara profile it copied), `PATCH { sync: null }` switches it off. A client signed in to the Nookara account `sync.velora_id` compares the stamp on connect and when that profile changes, and copies again when it differs. A client signed in to another Nookara account, or to none, leaves the profile alone.
 
 A moderator's profile reset (6.7, Manage users) on a local account clears its account profile too: name back to the username, pictures deleted, `sync` off.
+
+### 4a. Homeserver accounts and login (v2)
+
+A homeserver hosts accounts (`username@domain`) and many servers. Signing in happens on the homeserver's own web page, never inside the client: the client opens `/login`, the person signs in there, and the client gets tokens back through OAuth 2.0 (authorization code + PKCE). The routes of §4 keep working; this is what new clients use.
+
+**Account settings.** `config.json` has an `accounts` block:
+```json
+{ "hosts_accounts": true,
+  "registration": "open" | "closed" | "invite" | "approval",
+  "remote_accounts": { "mode": "none" | "all" | "allowlist" | "blocklist", "list": ["nookara.cc"] },
+  "link_verified_emails": false,
+  "login_methods": [ { "id": "password", "kind": "password", "name": "Password", "enabled": true },
+                     { "id": "corp", "kind": "oidc", "name": "Corp SSO", "enabled": true, "issuer": "https://id.example", "client_id": "…", "client_secret": "…", "scopes": "openid profile email" },
+                     { "id": "hub", "kind": "oauth2", "name": "Hub", "enabled": true, "client_id": "…", "client_secret": "…", "authorize_url": "…", "token_url": "…", "userinfo_url": "…", "scopes": "…", "id_field": "id", "username_field": "login", "email_field": "email", "email_verified_field": "verified" },
+                     { "id": "nookara", "kind": "nookara", "name": "Nookara", "enabled": false, "client_id": "…", "client_secret": "…" } ] }
+```
+- `hosts_accounts`: accounts live here (what `accounts_mode: "local"` meant). `false` is what `accounts_mode: "nookara"` meant: accounts come from elsewhere (`remote_accounts`), and sign-in is still §2.2 / §4 for now.
+- `registration`: only `open` lets anyone make an account (and anyone may while the homeserver is unclaimed, as before). `invite` and `approval` are stored and shown but act like `closed` for now.
+- `remote_accounts`: which other homeservers' accounts are let in. Stored and shown; enforced in a later step.
+- `login_methods`: the ways to sign in. `id` is `[a-z0-9][a-z0-9_-]{0,31}`, unique; at most one `password` method; at most 20. `kind: "nookara"` is OpenID Connect with `issuer` = `nookara_url` and scopes `openid profile`. Optional per method: `token_auth` (`"basic"` | `"post"`: how the client secret is sent to the token endpoint; from discovery for OpenID Connect, `post` by default for `oauth2`) and `pkce: false` (leave PKCE out for a provider that refuses it). Field names may be dotted paths (`data.id`).
+- While accounts are hosted, at least one method must be enabled (`400 no_login_method`). With the password method switched off, `/api/v1/auth/login` and `/register` answer `403 password_login_disabled`.
+- `ember_clients` (top level of `config.json`): the web origins an Ember client may be served from. Default `["https://nookara.cc", "https://canopy.ikelene.net", "https://ember.nookara.cc"]`; this server's own `public_url` origin always counts as well.
+- Migration: a `config.json` without the block gets one on load. `accounts_mode: "local"` becomes `hosts_accounts: true`, `registration` as it was, no remote accounts, the password method. `accounts_mode: "nookara"` becomes `hosts_accounts: false`, `remote_accounts: { mode: "allowlist", list: [<hostname of nookara_url>] }`, no methods. `accounts_mode` and `registration` are still written to `config.json` and still sent everywhere they were (derived: `local` when accounts are hosted; `open` or `closed`), and a settings `PATCH` with either still works. If a hand-edited file has both and they disagree, the old key is applied to the block. Switching `hosts_accounts` needs a restart, as `accounts_mode` did (`EMBER_ACCOUNTS_MODE` and managed hosting still override it).
+
+**Admin API** (instance admins):
+- `GET /api/v2/homeserver/accounts` -> `{ domain, hosts_accounts, registration, remote_accounts, link_verified_emails, ember_clients, login_methods, accounts_mode, running_accounts_mode, restart_required }`. Each method other than the password one also has `callback_url` (`<public_url>/login/callback/<id>`: the redirect address to register with the provider) and, for OpenID Connect, the endpoints found from its issuer. `client_secret` is write-only: it reads back as `"********WXYZ"` (the last four characters) or `null`.
+- `PATCH /api/v2/homeserver/accounts` with any of `hosts_accounts`, `registration`, `remote_accounts` (`mode` and / or `list`), `link_verified_emails`, `login_methods` (the whole list), `ember_clients` (`null` = the default) -> the same view. A method sent without `client_secret`, with an empty one, or with the masked one keeps its stored secret (matched by `id` + `kind`).
+- URLs must be `https` without credentials (`http` is allowed with `EMBER_DEV=1`): `400 invalid_method_url` `{ method, field }`. For `oidc` / `nookara` the server fetches `<issuer>/.well-known/openid-configuration` on save and takes `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` and `jwks_uri` from it (those are never taken from the request); `400 invalid_issuer` `{ method, message }` when it cannot be fetched, is incomplete, or names another issuer. A method saved with `enabled: false` may be saved while its issuer does not answer; it is looked up when first used. These requests, and the later ones to the token, userinfo and key addresses, only go to public addresses (the rule of the Matrix bridge, §16.5; `EMBER_DEV=1` lifts it) and follow no redirects.
+- Other errors: `invalid_registration`, `invalid_remote_accounts`, `invalid_login_methods` `{ method?, field? }`, `invalid_ember_clients`, `invalid_hosts_accounts`, `local_admin_required` (409: switching accounts on with nobody who could sign in), `managed_setting` (403).
+
+**Discovery** (§3) gains:
+```json
+"accounts": { "hosts_accounts": true, "registration": "open" | "closed" | "invite" | "approval", "remote_accounts": { "mode": "none" } },
+"login": { "authorize_url": "https://chat.example/login", "token_url": "https://chat.example/api/v2/auth/token", "revoke_url": "https://chat.example/api/v2/auth/revoke",
+           "methods": [ { "id": "password", "kind": "password", "name": "Password" } ] }
+```
+`login` is only there when the homeserver hosts accounts; `methods` are the enabled ones. `accounts.registration` is `open` while the homeserver is unclaimed. `accounts_mode` and `registration` stay for old clients.
+
+**Authorize: `GET /login`.** Query: `response_type=code`, `client_id=ember`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method=S256`, optional `login_hint` (fills in the username). Ember is a public client: no secret, PKCE with S256 is required (`code_challenge` is 43 base64url characters).
+
+`redirect_uri` rules:
+- its origin is in `ember_clients`; `https` (or `http` on `localhost` / `127.0.0.1` / `[::1]`); no credentials; at most 2000 characters;
+- and either it has no fragment and its path ends with `/auth/callback.html` (any directory, so `https://nookara.cc/ember/auth/callback.html` is fine), or it ends with the fragment route `#/auth/callback` (any path before it);
+- the answer goes back to exactly the address given. Without a fragment the parameters are added to the query: `…/auth/callback.html?code=…&state=…`. With the fragment route they are added **inside the fragment**: `…#/auth/callback?code=…&state=…` (a fragment never reaches a server, so nothing is lost);
+- the token request must repeat the same `redirect_uri` string.
+
+An unknown `client_id` or a `redirect_uri` that is not allowed shows an error page (400) and never redirects. Anything else wrong with the request goes back to the `redirect_uri` as `error` + `error_description` + `state`: `unsupported_response_type`, `invalid_request` (PKCE missing or not S256; a `state` over 512 characters, which is not echoed), `access_denied` (the person pressed Cancel). `state` is echoed exactly on every answer. A homeserver that hosts no accounts answers 404 with a page.
+
+The page is plain HTML with no scripts and nothing loaded from elsewhere: the homeserver's name and icon, a username + password form when the password method is on, one "Continue with …" link per other enabled method, "Create account" (username, password, password again) when registration is open, and Cancel. Forms carry a CSRF token that must match the `ember_csrf` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/login`); a post without it gets the page again with 403. Password tries and new accounts share the limits of `/api/v1/auth/login` and `/register`. The page sends no `Cross-Origin-Opener-Policy`, so a client that opened it as a pop-up keeps `window.opener`; it refuses to be framed.
+
+On success the browser is sent (302) to the `redirect_uri` with `code` (32 random bytes, good for 60 seconds, usable once, bound to the client, the `redirect_uri`, the challenge and the account) and `state`.
+
+**Outside logins.** `GET /login/start/<method id>?<the same authorization parameters>` sends the browser to the provider with `state`, `nonce` (OpenID Connect) and PKCE (S256), kept server-side for 10 minutes; the provider returns to `GET /login/callback/<method id>`. The server swaps the code for tokens and reads who it is:
+- OpenID Connect: the `id_token`'s signature is checked against the provider's JWKS (RS / PS / ES 256-512 and EdDSA; never `none` or a shared-secret algorithm), then `iss`, `aud` (= `client_id`), `nonce` and `exp`. The subject is `sub`; the username comes from `preferred_username` (or `username_field`), looked up in userinfo when the token lacks it.
+- OAuth 2.0: `userinfo_url` is called with the access token; the subject is `id_field` (default `id`), the username `username_field` (default: the first of `preferred_username`, `username`, `login`, `nickname`, `name`).
+
+Then:
+1. the login is linked to an account already (table `login_links`): signed in as that account;
+2. else, when `link_verified_emails` is on, the provider marks the email verified, and exactly one account has another login with the same verified email: linked to that account and signed in. **An email never links anything otherwise** (off by default);
+3. else, when registration is open: a new account (the provider's username, cut down to the username rules and made unique with a number; no password) linked to the login;
+4. else a page says "No account here is linked to this login", with a link back to the password form: signing in there links the login to that account and carries on.
+
+A provider error, a failed check or an unknown / used / expired `state` never signs anyone in: the login page comes back with a message (400), or an error page when there is no request to go back to.
+
+**Token: `POST /api/v2/auth/token`** (JSON or form-encoded; no authentication).
+- `{ grant_type: "authorization_code", client_id: "ember", code, code_verifier, redirect_uri }`
+- `{ grant_type: "refresh_token", client_id: "ember", refresh_token }`
+
+Both answer
+```json
+{ "access_token": "…", "refresh_token": "…", "expires_in": 3600, "token_type": "Bearer",
+  "account": { "id": "l:7", "username": "nat", "domain": "chat.example", "handle": "nat@chat.example", "display_name": "nat", "avatar_url": "https://…" | null } }
+```
+- The **access token** is an instance session token (§4) that ends after an hour: it is sent the same way (`Authorization: Bearer`, the gateway's `auth` frame) and every route takes it. `account.id` is the principal; `account.domain` is the homeserver's `domain`.
+- The **refresh token** is random, stored hashed (table `refresh_tokens`), good for 60 days and rotated on every use: each refresh returns a new one and spends the old. A spent one used again within 30 seconds gets the same new tokens (two tabs refreshing at once); after that it ends the whole family (every refresh and access token that came from that sign-in) and the person signs in again.
+- A code works once, whatever the outcome; a code presented a second time also ends what it issued.
+- Errors are `{ error, error_description }`: `invalid_request` (400), `invalid_client` (401), `invalid_grant` (400: unknown / expired / used code, wrong `code_verifier`, another `redirect_uri`, unknown / expired / reused refresh token), `unsupported_grant_type` (400), `access_denied` (403, banned), `rate_limited` (429).
+- CORS: `/api/v2/auth/*` answers cross-origin (preflight included) only to the `ember_clients` origins. Every other route stays open to any origin, as before.
+
+**`POST /api/v2/auth/revoke`** `{ token }` (a refresh or access token; no authentication) ends its family; always `{ ok: true }`. `POST /api/v1/auth/logout` with an access token does the same.
+
+**An account's logins** (signed in):
+- `GET /api/v2/account/logins` -> `{ logins: [ { id, kind, name, enabled, linked, email?, created_at? } ] }`: every configured method, and whether this account can use it (`linked`; for the password method: has a password).
+- `POST /login/link/<method id>` `{ return_to? }` -> `{ url }`: open `url` in a browser (once, within 10 minutes) to go through the provider and link the login to this account. Afterwards the browser goes to `return_to` (an `ember_clients` origin) with `linked=<method id>` or `link_error=<code>` added to its query, or shows a short page without one. A login that belongs to another account is refused (`login_already_linked`). Errors: `unknown_method` (404), `invalid_return_to`.
+- `DELETE /api/v2/account/logins/<method id>` -> the list again. `409 last_login_method` when nothing else would let the account in (a password while password sign-in is on, or a login whose method is enabled); `404 not_linked`; `400 cannot_remove_password`.
 
 ---
 

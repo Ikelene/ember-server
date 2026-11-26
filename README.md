@@ -50,6 +50,8 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `accounts_mode` | `local` | `local` (accounts on this instance) or `nookara` (Nookara sign-in). Changing it needs a restart; accounts of the other kind can no longer log in |
 | `nookara_url` | `https://nookara.cc` | issuer for Nookara mode |
 | `registration` | `open` | local mode: `open` / `closed` (always open while unclaimed) |
+| `accounts` | from `accounts_mode` | The homeserver's account settings: `hosts_accounts`, `registration` (`open` / `closed` / `invite` / `approval`), `remote_accounts`, `link_verified_emails`, `login_methods` (password, OpenID Connect, OAuth 2.0, the Nookara preset). `accounts_mode` and `registration` above are derived from it and still written. See "Accounts and login" below |
+| `ember_clients` | Nookara's, Canopy's and this server | The web origins an Ember client may be served from: where `/login` may send people back to, and who may call the token endpoint from a browser |
 | `max_upload_mb` | `25` | instance ceiling (1–500); each community also has `upload_max_mb` |
 | `voice` | empty | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` — Cloudflare Realtime SFU app + TURN key. Secrets are write-only over the API |
 | `youtube` | `{ enabled: true, ytdlp_path: "yt-dlp", cache_dir: "", cache_max_gb: 5 }` | the optional YouTube player, see below. `cache_dir` empty = `DATA_DIR/cache/yt` |
@@ -97,6 +99,12 @@ Put it behind a TLS-terminating reverse proxy (nginx, Caddy, Cloudflare Tunnel�
 ### Nookara mode
 
 Users sign in with a short-lived instance token minted by Nookara (`POST /bonfire/instance-token`). The server verifies the Ed25519 JWT against Nookara's JWKS (`iss`, `aud` = your `public_url`, `exp`, one-time `jti`). Message signing (§8) is available in this mode only.
+
+## Accounts and login
+
+A homeserver hosts accounts (`username@domain`) and many servers. People sign in on the homeserver's own page, `/login`, never inside the client: Ember opens it, and gets tokens back through OAuth 2.0 with PKCE (`POST /api/v2/auth/token`, access tokens for an hour, refresh tokens for 60 days). The page offers whatever the `accounts.login_methods` setting has switched on: a password, any OpenID Connect provider (give it the issuer, the server finds the rest), a plain OAuth 2.0 provider with a userinfo address, or the Nookara preset. Register `<public_url>/login/callback/<method id>` as the redirect address with the provider.
+
+Instance admins edit all of it at `GET` / `PATCH /api/v2/homeserver/accounts` (client secrets are write-only). An outside login only reaches an account it was linked to; a matching email links nothing unless `link_verified_emails` is on and the provider vouches for the address. A `config.json` from before this is migrated on load, and `accounts_mode` keeps working. The details are in [PROTOCOL.md](PROTOCOL.md) §4a.
 
 ### Nookara relays
 
