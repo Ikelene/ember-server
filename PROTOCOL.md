@@ -125,6 +125,9 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "build": { "version": "0.1.0", "commit": "<40 hex>" | null, "commit_short": "4eb45c9" | null, "commit_date": "<ISO 8601>" | null, "built_at": "<ISO 8601>" | null, "dirty": false, "build_id": "<commit, or commit+8 hex when dirty>" | null },
   "max_upload_mb": 25,
   "managed": { "plan": "starter", "limits": { "member_cap": 30, "max_upload_mb": 10, "emojis": 50, "sounds": 10, "bots": 2, "bridges": false, "custom_voice_keys": false }, "host": "velora" } | null,
+  "limits": { "defaults": { "member_cap": null, "voice_minutes": null, "max_upload_mb": 25, "storage_mb": null, "files_per_member": null, "upload_expiry_days": null, "emojis": null, "sounds": null, "bots": null, "bridges": ["discord", "fluxer", "matrix", "cloudlink"], "custom_voice_keys": true },
+              "tiers": [ { "id": "plus", "name": "Plus", "price_credits": 50, "period_weeks": 1 } ] },
+  "push": { "pushers_url": "…/api/v2/pushers" },
   "read_only": false,
   "homeserver": { "domain": "chat.example", "name": "My Instance", "description": "", "icon_url": null },
   "communities_count": 2,
@@ -149,7 +152,8 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 - `name` / `description` / `icon_url` are the homeserver's own; a server has its own (they are no longer mirrored).
 - `instance_key` / `instance_id` are the instance's relay key (§12.1). Nookara reads them here to check that a registering key controls the url.
 - `features.voice` is true when voice works: the instance's own Cloudflare keys, or Nookara's voice broker while registered and under its cap (§10).
-- `managed` is non-null on a Nookara-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
+- `limits` is what a server here may have unless it bought a tier or an admin said otherwise, and the tiers on offer (§19). `push.pushers_url` is where a client registers for push (§20).
+- `managed` stays for old clients. It is non-null on a Nookara-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
 - `read_only` is true while the instance refuses all writes (§19.3).
 - `previous_urls` lists earlier `public_url`s, newest first (a Nookara-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
 - `build` is the running server build (§5c). `commit` / `built_at` are `null` on a server not built by the release script (plain checkout).
@@ -227,8 +231,8 @@ A homeserver hosts accounts (`username@domain`) and many servers. Signing in hap
 - Migration: a `config.json` without the block gets one on load. `accounts_mode: "local"` becomes `hosts_accounts: true`, `registration` as it was, no remote accounts, the password method. `accounts_mode: "nookara"` becomes `hosts_accounts: false`, `remote_accounts: { mode: "allowlist", list: [<hostname of nookara_url>] }`, no methods. `accounts_mode` and `registration` are still written to `config.json` and still sent everywhere they were (derived: `local` when accounts are hosted; `open` or `closed`), and a settings `PATCH` with either still works. If a hand-edited file has both and they disagree, the old key is applied to the block. Switching `hosts_accounts` needs a restart, as `accounts_mode` did (`EMBER_ACCOUNTS_MODE` and managed hosting still override it).
 
 **Admin API** (instance admins):
-- `GET /api/v2/homeserver/accounts` -> `{ domain, hosts_accounts, registration, remote_accounts, link_verified_emails, ember_clients, login_methods, accounts_mode, running_accounts_mode, restart_required }`. Each method other than the password one also has `callback_url` (`<public_url>/login/callback/<id>`: the redirect address to register with the provider) and, for OpenID Connect, the endpoints found from its issuer. `client_secret` is write-only: it reads back as `"********WXYZ"` (the last four characters) or `null`.
-- `PATCH /api/v2/homeserver/accounts` with any of `hosts_accounts`, `registration`, `remote_accounts` (`mode` and / or `list`), `link_verified_emails`, `login_methods` (the whole list), `ember_clients` (`null` = the default) -> the same view. A method sent without `client_secret`, with an empty one, or with the masked one keeps its stored secret (matched by `id` + `kind`).
+- `GET /api/v2/homeserver/accounts` -> `{ domain, public_url, hosts_accounts, registration, remote_accounts, link_verified_emails, ember_clients, login_methods, accounts_mode, running_accounts_mode, restart_required }`. Each method other than the password one also has `callback_url` (`<public_url>/login/callback/<id>`: the redirect address to register with the provider) and, for OpenID Connect, the endpoints found from its issuer. `client_secret` is write-only: it reads back as `"********WXYZ"` (the last four characters) or `null`.
+- `PATCH /api/v2/homeserver/accounts` with any of `hosts_accounts`, `registration`, `remote_accounts` (`mode` and / or `list`), `link_verified_emails`, `login_methods` (the whole list), `ember_clients` (`null` = the default) -> the same view. A method sent without `client_secret`, with an empty one, or with the masked one keeps its stored secret (matched by `id` + `kind`); `client_secret: null` removes it. `public_url` lets a client show the callback address of a method that is not saved yet (`<public_url>/login/callback/<id>`).
 - URLs must be `https` without credentials (`http` is allowed with `EMBER_DEV=1`): `400 invalid_method_url` `{ method, field }`. For `oidc` / `nookara` the server fetches `<issuer>/.well-known/openid-configuration` on save and takes `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` and `jwks_uri` from it (those are never taken from the request); `400 invalid_issuer` `{ method, message }` when it cannot be fetched, is incomplete, or names another issuer. A method saved with `enabled: false` may be saved while its issuer does not answer; it is looked up when first used. These requests, and the later ones to the token, userinfo and key addresses, only go to public addresses (the rule of the Matrix bridge, §16.5; `EMBER_DEV=1` lifts it) and follow no redirects.
 - Other errors: `invalid_registration`, `invalid_remote_accounts`, `invalid_login_methods` `{ method?, field? }`, `invalid_ember_clients`, `invalid_hosts_accounts`, `local_admin_required` (409: switching accounts on with nobody who could sign in), `managed_setting` (403).
 
@@ -285,7 +289,7 @@ Both answer
 
 **An account's logins** (signed in):
 - `GET /api/v2/account/logins` -> `{ logins: [ { id, kind, name, enabled, linked, email?, created_at? } ] }`: every configured method, and whether this account can use it (`linked`; for the password method: has a password).
-- `POST /login/link/<method id>` `{ return_to? }` -> `{ url }`: open `url` in a browser (once, within 10 minutes) to go through the provider and link the login to this account. Afterwards the browser goes to `return_to` (an `ember_clients` origin) with `linked=<method id>` or `link_error=<code>` added to its query, or shows a short page without one. A login that belongs to another account is refused (`login_already_linked`). Errors: `unknown_method` (404), `invalid_return_to`.
+- `POST /login/link/<method id>` `{ return_to? }` -> `{ url }`: open `url` in a browser (once, within 10 minutes) to go through the provider and link the login to this account. Afterwards the browser goes to `return_to` (an `ember_clients` origin) with `linked=<method id>` or `link_error=<code>` added to its query, or shows a short page without one. A login that belongs to another account is refused (`login_already_linked`). Errors: `unknown_method` (404), `invalid_return_to`. `/login/link/*` answers cross-origin (preflight included) to the `ember_clients` origins; the rest of `/login` answers no other origin.
 - `DELETE /api/v2/account/logins/<method id>` -> the list again. `409 last_login_method` when nothing else would let the account in (a password while password sign-in is on, or a login whose method is enabled); `404 not_linked`; `400 cannot_remove_password`.
 
 ---
@@ -370,7 +374,7 @@ If the env var `EMBER_OWNER=v:<nookara id>` is set (Nookara mode only), the inst
 | `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. When the owner switches to the kind their own account isn't, the PATCH response adds `handover_code`: after the restart they sign in with an account of the new kind and claim with it (see Stranded owner). GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `EMBER_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
 | `nookara_url` | origin | default `https://nookara.cc` |
 | `registration` | `"open"` / `"closed"` | local mode |
-| `max_upload_mb` | int 1–500 | instance ceiling (managed: follows the plan) |
+| `max_upload_mb` | int 1–500 | the most one file may be, unless `limits.defaults.max_upload_mb`, a tier or an override says otherwise (§19) |
 | `max_backups` | int 1–50 | retained instance backups; default 10, oldest pruned first |
 | `voice` | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` | secrets are **write-only**; GET returns `{ cf_app_id, has_app_secret, cf_turn_key_id, has_turn_token }` |
 | `youtube` | `{ enabled, ytdlp_path, cache_dir, cache_max_gb }` | optional player, §15. Defaults `true`, `"yt-dlp"` (on PATH), `""` (= `DATA_DIR/cache/yt`), `5` |
@@ -379,6 +383,9 @@ If the env var `EMBER_OWNER=v:<nookara id>` is set (Nookara mode only), the inst
 | `creation` | object | who may create servers (§5a): `{ mode: "admins" \| "allowlist" \| "request" \| "anyone", allowlist: [username or principal…], per_account: N \| null }`, default `{ "mode": "admins", "allowlist": [], "per_account": null }`. A PATCH may send any subset of the three. `400 invalid_creation` |
 | `listed` | bool | read-only: true while any server is listed. Listing is a server's own setting now (`PATCH /servers/:sid { listed }`); the key is accepted and ignored in a PATCH |
 | `tags` | string[] | ≤ 8 directory tags, ≤ 24 chars each, lower-cased, no commas |
+| `bridges` | object | `{ discord_oauth: { client_id, client_secret } \| null, discord_shards: 1-64 }` (§16). The secret is write-only: GET returns `{ discord_oauth: { client_id, has_secret } \| null, discord_shards }`, and a PATCH without it keeps the stored one. `400 invalid_bridges` |
+| `push` | object | `{ default_gateway }`: the push gateway a pusher uses when its client names none (§20); `https`, default `https://nookara.cc/_ember/push/v1/notify`; `null` = the default. `400 invalid_push` |
+| `limits` | object | `{ defaults, tiers }` (§19); normally edited through `/api/v2/homeserver/limits` |
 
 `GET` (and `PATCH`) also return read-only relay status: `velora: { registration, nookara_url, registered, instance_id, trusted, voice: { cap_minutes, used_minutes } | null, registered_at, last_error, voice_backend: "direct" | "broker" | null, directory: { listed, hidden_by_staff, pushed_at, last_error } }`. `POST /api/v1/instance/velora/register` (admins) registers right away and returns the same object; it takes no body (a `token` field is ignored: Nookara tokens never go to an instance). `GET /api/v1/instance/owner-attestation` (instance owner only) returns `{ attestation, instance_id }` for the payee flow (§12.1).
 
@@ -396,6 +403,7 @@ The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The in
 - Deleting a server (`DELETE /servers/:sid`, its owner or an instance admin) removes that one only. With none left, discovery shows `community: null`.
 - **Routes that never had a sid** (`GET /bridge/:platform/guilds`, the game routes' optional `sid`, backups below) take `?sid=` (or `sid` in the body). Without it they use the only server when there is exactly one, and answer `400 sid_required` when there are several.
 - Joining = `POST /servers/:sid/join` (follows `join_policy`) or an invite code. There is no auto-join setting any more.
+- **Every server, for admins.** `GET /api/v2/homeserver/servers` (instance admins) -> `{ servers: [ { sid, slug, address, name, icon_url, owner: { id, username } | null, member_count, listed, created_at, limits_override: bool, tier: "<id>" | null } ], has_more }`, newest first. `?limit=` (default 50, at most 200) and `?before=<sid>` (the last `sid` of the page before).
 
 **Other admin routes:**
 - `POST /api/v1/instance/restart` (admins) returns `202 { ok: true }`. The instance broadcasts `{type:"instance_restarting"}`, closes its sockets, and calls `process.exit(75)`. The supervisor (docker `--restart unless-stopped`, systemd `Restart=always`, or the dev script) starts it again.
@@ -828,7 +836,8 @@ Response:
 - `sha256` is the hash of the **stored** bytes, which is what the client hashes when it signs.
 - The instance doesn't re-encode images in v1 because it has no native dependency. It strips JPEG EXIF via a byte-level APP1 drop and checks the type against the file's magic bytes.
 - Roles accept `upload_max_mb: <integer 1-500> | null` on `POST /api/v1/servers/:sid/roles` and `PATCH /api/v1/servers/:sid/roles/:rid`. Omission on create means null; omission on PATCH leaves it unchanged. Role objects (including gateway updates and exports) return this field; older exports without it import as null. Invalid values return `400 invalid_upload_max_mb`.
-- For a member, size is `min(instance.max_upload_mb, managed.limits.max_upload_mb if set, max(community.upload_max_mb, all held role upload_max_mb values))`; the implicit everyone role counts. Null role values add no override. An absent or invalid community limit falls back to the instance ceiling; absent instance configuration defaults to 25 MB. The owner gets the instance/plan ceiling. A lower role value cannot reduce the community default. Managed instance ceilings follow the plan (Starter 10 MB, Plus 250 MB by default).
+- An upload belongs to the server it was sent to (`sid`), and that server's `storage_mb` limit counts it (§19). Files stored before this was recorded belong to no server and count toward none.
+- For a member, size is `min(the server's max_upload_mb limit (§19: the instance's max_upload_mb unless a tier or override changes it), max(community.upload_max_mb, all held role upload_max_mb values))`; the implicit everyone role counts. Null role values add no override. An absent or invalid community limit falls back to the instance ceiling; absent instance configuration defaults to 25 MB. The owner gets the instance/plan ceiling. A lower role value cannot reduce the community default. Managed instance ceilings follow the plan (Starter 10 MB, Plus 250 MB by default).
 - `GET /api/v1/servers/:sid` keeps `server.upload_max_mb` as the community default, returns the caller's effective value in `server.my_upload_max_mb`, and exposes the instance/plan ceiling in `server.upload_ceiling_mb`. Use the default for community settings, the effective value for upload checks, and the ceiling for the role editor. Refresh detail after roles/settings change. Oversized streaming uploads stop buffering immediately and return `413 { error: "file_too_large", max_mb: <effective limit> }`.
 - Files are served with `Cache-Control: public, max-age=31536000, immutable` and `X-Content-Type-Options: nosniff`. Non-media types are served with `Content-Disposition: attachment`.
 
@@ -884,6 +893,8 @@ X-Bonfire-Sig:      b64url( Ed25519( METHOD "|" path "|" ts "|" sha256hex(body) 
 - Delivery matches Nookara's own mentions: the Android notification socket plus browser push, with the "quiet while you're here" hold. While the person is actively using Ember somewhere, the push is `held` and sent after they go idle (relayed pushes can't be checked for "read", so they are dropped after 2 hours).
 - Tapping the push opens Ember at that instance (`/chat#/i/<instance>`).
 - Limits: 600/min per instance, 20/min per instance and user (429 `user_rate_limited`).
+
+The instance also sends the same pings to the pushers people registered with it, through a push gateway (§20); the two do not depend on each other.
 
 ### 12.4 `POST /bonfire/relay/daily` (trusted only)
 `{ "user_id": "123" }` -> `{ "status": "claimed", "amount": 5 }` | `{ "status": "already" }` | `{ "status": "banned" }`. This is the same once-a-day credit as Ember/Fluxer chat (`source: ember`; 15 for Pro or staff). Untrusted instances get 403 `not_trusted`.
@@ -1066,14 +1077,28 @@ The instance owner connects **their own bot** for each platform (Discord, Fluxer
 
 Env fallbacks: `EMBER_DISCORD_TOKEN`, `EMBER_FLUXER_TOKEN` (used when the setting is empty). Discovery shows `features.bridges = { discord, fluxer, matrix, cloudlink: true }` (configured or not; `matrix` is missing on servers older than the Matrix bridge, 16.5).
 
-**Community routes** (same paths and shapes as Nookara's `/chat/bridge/*`; all need **Manage server** in the community; there is no linked-account check, since it is the owner's bot):
+**One bot, many servers.** The Discord / Fluxer bot belongs to the homeserver and every server on it shares it, so "the bot is in that guild" says nothing about who is asking. Before `PUT /bridge/servers/:sid` links a guild, the server must hold a **verified claim** for that `(sid, platform, guild_id)`; without one it answers `403 guild_not_verified { platform, guild_id }`. Instance admins are trusted and need none. A guild is linked to at most one server per homeserver: `409 guild_already_linked { sid }` (from the claim routes too). Links made before this check stay valid (`bridge_guilds.verified`).
 
 | route | result |
 |---|---|
-| `GET /bridge/platforms` | `{ platforms: [ { id, name, ready, bot, invite, linked: true } ] }` (`invite` = the bot's OAuth add-to-server link) |
+| `POST /api/v1/bridge/servers/:sid/claim { platform, guild_id }` | `{ code: "EC-XXXX-XXXX", expires_at, command: "!ember-claim EC-XXXX-XXXX" }`. The code lives 10 minutes; asking again replaces it. `bad_platform` (404), `bad_guild`, `guild_already_linked` (409) |
+| `GET /api/v1/bridge/servers/:sid/claim?platform=&guild_id=` | `{ status: "none" }` \| `{ status: "pending", code, expires_at }` \| `{ status: "verified", verified_at, how: "code" \| "oauth" }` |
+| `GET /api/v1/bridge/oauth/discord/start?sid=&guild_id=` | Discord only, when the `bridges.discord_oauth` setting is there (`503 oauth_not_set_up` otherwise; `GET /bridge/platforms` then has `oauth: true` on Discord): `{ url }`, to open in a browser |
+
+- **Claim code.** Someone with **Manage Server** in the guild posts `!ember-claim <code>` there (or a message that is exactly the code) in any channel the bot can read. The bot checks them over REST (`GET /guilds/:id`, `GET /guilds/:id/members/:uid`): the guild's owner, or any of their roles (with `@everyone`) has Manage Server (`0x20`) or Administrator (`0x8`). Then the claim is verified, the bot says so in that channel, and the server's sockets get `{ type: "chat_bridge_claim", server, platform, guild_id, status: "verified" }`. A code posted in another guild, by someone without the permission, or after it ran out verifies nothing. These messages are never bridged.
+- **Discord sign-in.** The page at `url` asks Discord for `identify guilds` and comes back to `GET /api/v1/bridge/oauth/discord/callback` (register `<public_url>/api/v1/bridge/oauth/discord/callback` as a redirect of the Discord application). The guild must be in the person's guilds with `owner` or `permissions & 0x20` (or Administrator); then the claim is verified and a short page says so. `state` works once, for 10 minutes.
+- A verified claim waits 24 hours to be used, for that server and guild only, and is spent by linking.
+- **`!ember-unlink`** in the guild, from someone with Manage Server there, removes the guild's link (its webhooks are deleted), whoever made it.
+- **Shards.** `bridges.discord_shards` (default 1) is how many gateway connections the Discord bot uses; with more than one each identifies with `shard: [i, n]`, 5.5 s apart, and `GET /bridge/settings` adds `shards: n` to `bridges.discord`. A guild's voice state updates go out on shard `(guild_id >> 22) % n`.
+
+**Community routes** (same paths and shapes as Nookara's `/chat/bridge/*`; all need **Manage server** in the community). Which platforms a server may bridge to is one of its limits (§19): linking or switching on a platform that is not on its `bridges` list answers `403 plan_feature { what: "bridges" }`; reading and unlinking always work.
+
+| route | result |
+|---|---|
+| `GET /bridge/platforms` | `{ platforms: [ { id, name, ready, bot, invite, linked: true } ] }` (`invite` = the bot's OAuth add-to-server link). With `?sid=` (Manage server there) the Matrix entry is that server's bot (`own: true` when it brought one, 16.5) |
 | `GET /bridge/:platform/guilds` | `{ guilds: [ { id, name, icon } ] }` = the bot's servers (`/users/@me/guilds`) |
 | `GET /bridge/servers/:sid` | `{ bridges: [ { platform, platform_name, guild_id, guild_name, enabled, problem, links: [ { cid, ext_channel_id, ext_name, hook, kind } ], ext_channels: [ { id, name, category, kind } ] } ], bridge, links, ext_channels, voice_links }` (`kind`: `text` \| `voice`; Discord voice / stage channels are listed too; `voice_links` = this instance can run them, §16.4) (`bridge` / `links` / `ext_channels` = the first bridge, for old clients). `problem`: `bot_not_in_server`, `unreachable`, `bridge_not_set_up` |
-| `PUT /bridge/servers/:sid { platform, guild_id, automap? }` | links the community to one server per platform (`already_bridged`, `bot_not_in_server` 404, `bridge_not_set_up` 503). `automap` (default true) links text channels whose names match after lower-casing and dropping everything but `a-z0-9` (`general` = `General`), and creates their webhooks right away |
+| `PUT /bridge/servers/:sid { platform, guild_id, automap? }` | links the community to one server per platform (`already_bridged`, `guild_already_linked` 409, `guild_not_verified` 403, `bot_not_in_server` 404, `bridge_not_set_up` 503). `automap` (default true) links text channels whose names match after lower-casing and dropping everything but `a-z0-9` (`general` = `General`), and creates their webhooks right away |
 | `PATCH /bridge/servers/:sid { platform, enabled }` | pause / resume without losing the links |
 | `DELETE /bridge/servers/:sid { platform }` (or `?platform=`) | unlinks; the bridge webhooks over there are deleted |
 | `PUT /bridge/servers/:sid/channels/:cid { platform, ext_channel_id \| null }` | link one text channel to one text / announcement channel over there, or (Discord only) one voice channel to a voice / stage channel there (`text_channels_only`, `voice_channels_only`, `already_linked`, `channel_not_found`, `bot_needs_webhooks`, `bridge_failed`); `null` unlinks it. A voice link has no webhook |
@@ -1105,6 +1130,15 @@ Not ported from Nookara: importing a Discord / Fluxer server through the bot (`/
 
 The instance owner connects **their own bot**: an ordinary Matrix account on any homeserver (`src/bridge/matrix.js`). There is no application service, so nothing is installed on the homeserver and it works on homeservers the owner doesn't run. It uses the same routes, tables and message hooks as the Discord / Fluxer bridge, with platform id `matrix`.
 
+**A bot per server.** The settings below are the **homeserver's** bot. Any server can bring its own Matrix account instead (table `matrix_bots`), and then uses that one for everything; a server without one uses the homeserver's, as before. Every bot has its own `/sync` loop, its own place in the stream and its own rooms. When two bots sit in the same room, only the bot of the server the room is linked to carries it, so nothing arrives twice.
+
+| route (Manage server) | result |
+|---|---|
+| `GET /api/v1/bridge/servers/:sid/matrix` | `{ matrix: { own, configured, token, homeserver, source, state, error, bot } }`. `own: true`: the server's own bot (`source: "server"`, the token masked). `own: false`: the homeserver's bot it falls back to (`source: "homeserver"` or `null`); its `token` and `homeserver` are `null` here |
+| `PATCH /api/v1/bridge/servers/:sid/matrix { homeserver?, token? }` | the same rules and errors as the homeserver's setting below (checked with `whoami` first; an empty field keeps the stored value); `token: null` removes the server's bot and goes back to the homeserver's. Needs `matrix` on the server's `bridges` limit (§19) |
+
+`GET /bridge/:platform/guilds?sid=`, `GET` / `PUT /bridge/servers/:sid` and the channel routes use the server's bot: its id in `guild_name`, its rooms in `ext_channels`.
+
 **Settings.** `GET /api/v1/bridge/settings` also answers `bridges.matrix = { configured, token: "********WXYZ" | null, homeserver: "https://..." | null, source, state: "off" | "connecting" | "ready" | "waiting" | "error" | "stopped", error, bot: { id, username } | null }` (`id` and `username` are both the bot's Matrix id, `@name:server`). `PATCH /api/v1/bridge/settings { matrix: { homeserver?, token? } }`: an empty or missing field keeps the stored value, `token: null` removes the bot (address, token and its place in the stream). Before anything is saved the pair is checked with `GET /_matrix/client/v3/account/whoami`: `400 invalid_token { platform: "matrix" }`, `400 invalid_homeserver { platform: "matrix" }`, `502 platform_unreachable`. Env fallbacks: `EMBER_MATRIX_HOMESERVER`, `EMBER_MATRIX_TOKEN`.
 
 **The homeserver address** is typed by an admin, so it is treated like any user-supplied address: `https` only, no `user:pass@`, no query, and never a private, loopback or link-local address. The name is resolved by the instance on every connection and the connection is refused if any address it resolves to is private (the same rule as link previews, 6.3). A typed server name is looked up once at `/.well-known/matrix/client` and its `m.homeserver.base_url` is used when there is one. `EMBER_DEV=1` allows `http` and local addresses (development only).
@@ -1121,7 +1155,7 @@ The instance owner connects **their own bot**: an ordinary Matrix account on any
 
 **Stopping.** A `401` / `M_UNKNOWN_TOKEN` stops the bot with `state: "error"`, `error: "invalid_token"` until a new token is saved; anything else retries with backoff (1 s doubling to 60 s). `429` answers are waited out (`retry_after_ms`, 15 s at most, 5 tries).
 
-Not done: encrypted rooms, per-person accounts on Matrix (that needs an application service on the homeserver), reactions, and importing a room's history.
+Not done: moving a server's existing links when it changes bots (they stay; a room the new bot is not in shows nothing until it is invited), encrypted rooms, per-person accounts on Matrix (that needs an application service on the homeserver), reactions, and importing a room's history.
 
 ### 16.6 Typing
 
@@ -1251,7 +1285,61 @@ An **instance** object is `{ iid, platform, software, mc_version, mod_version, n
 
 ---
 
-## 19. Nookara-hosted instances
+## 19. Limits and tiers
+
+What a server may have is decided per server, by the homeserver it lives on. In order: the **override** a homeserver admin set for that server, the **tier** it paid for while that lasts, the homeserver's **defaults**. A self-hosted homeserver's defaults limit nothing.
+
+### 19.0 Limits
+
+```json
+{ "member_cap": null, "voice_minutes": null, "max_upload_mb": 25, "storage_mb": null, "files_per_member": null, "upload_expiry_days": null,
+  "emojis": null, "sounds": null, "bots": null, "bridges": ["discord", "fluxer", "matrix", "cloudlink"], "custom_voice_keys": true }
+```
+- `null` = unlimited; `0` = not at all. `bridges` is the list of platforms a server may bridge to (`true` / `null` in a request = all four, `false` = none). `custom_voice_keys: false` = calls in that server never use the homeserver's own Cloudflare keys, only Nookara's broker (§12.7).
+- `max_upload_mb` left out of the defaults is the instance's `max_upload_mb` setting (§5); `null` means the hard ceiling of 500 MB.
+- `voice_minutes` is carried and shown but not metered by the instance yet: voice through the broker is still capped per homeserver by Nookara (§19.4).
+- `storage_mb` counts the uploads sent to that server (§11); older uploads belong to no server.
+- The server's own settings (§6.4: member limit, files per member, expiry, storage) can only narrow these; a saved number above the limit counts as the limit.
+
+**Homeserver settings** (`config.json` `limits`, or the admin API):
+```json
+"limits": { "defaults": { "emojis": 50, "member_cap": 100, "bridges": ["discord"] },
+            "tiers": [ { "id": "plus", "name": "Plus", "limits": { "emojis": null, "member_cap": null, "bridges": true }, "price_credits": 50, "period_weeks": 1 } ] }
+```
+`defaults` and each tier's `limits` are partial: a key that is left out falls through to the next level. A tier `id` is `[a-z0-9][a-z0-9_-]{0,23}`, unique, at most 20 tiers; `name` 1-40 characters; `price_credits` 1-100000; `period_weeks` 1-52.
+
+| route | result |
+|---|---|
+| `GET /api/v2/homeserver/limits` (admins) | `{ defaults: <the full object in force>, saved_defaults: <what is configured>, tiers, managed: bool, tiers_available: bool }` |
+| `PATCH /api/v2/homeserver/limits { defaults?, tiers? }` (admins) | each key that is sent replaces the stored one whole. `400 invalid_limits { field }`, `400 invalid_tiers { field, tier? }`, `403 managed_setting { setting: "limits" }` |
+| `GET /api/v2/homeserver/servers/:sid/limits` (admins) | `{ sid, overrides, note, updated_by, updated_at, ...<the member view below> }` |
+| `PATCH /api/v2/homeserver/servers/:sid/limits { overrides?, note? }` (admins) | `overrides` is a partial limits object and replaces the stored one; `null` or `{}` removes it. `note` at most 300 characters. Table `server_limits (community_id PK, overrides JSON, note, updated_by, updated_at)` |
+| `GET /api/v1/servers/:sid/limits` (members) | `{ limits: <effective>, usage: { member_cap, emojis, sounds, bots, storage_mb }, tier: "<id>" \| null, until: <ms> \| null, overridden: bool, tiers: [ { id, name, price_credits, period_weeks, limits } ], tiers_available: bool }` |
+
+- `GET /api/v1/servers/:sid/settings` carries the same member view as `settings.limits` (where `plan` was; `plan` stays `null` outside managed mode).
+- When a server's limits change (an override, a tier bought), its sockets get `{ type: "chat_server_limits", server, limits, tier, until }`.
+- Discovery (§3) has `limits: { defaults, tiers: [ { id, name, price_credits, period_weeks } ] }`.
+
+**What is refused**, in that server only (the codes of §19.2, unchanged; `plan` is the server's tier id, or the managed plan, and is left out when there is neither):
+- joining past `member_cap`: `403 member_cap_reached { cap, what, limit, used }` (the owner and instance admins are never blocked, bots do not count);
+- one more emoji / sound / bot than allowed: `403 plan_limit { what, limit, used }`; the lists report `max`;
+- a file over `max_upload_mb`: `403 plan_limit { what: "max_upload_mb", limit, used: null }` when that number comes from a configured default, a tier or an override (the instance's own `max_upload_mb` with nothing else set stays `413 file_too_large`); uploads past `storage_mb` or `files_per_member`: `plan_limit` / `storage_full` / `upload_quota`;
+- a bridge platform that is not on the list: `403 plan_feature { what: "bridges" }` (§16, §17).
+- Nothing is ever taken away. When a limit drops (a tier ran out, an override was removed), what is over it stays and only new additions are refused.
+
+### 19.0a Tiers
+
+A server's **owner** buys one of the homeserver's tiers with Nookara credits, through the pay requests of §12.5. Only a homeserver registered with Nookara can sell (`409 tiers_unavailable` otherwise, and `tiers_available: false`); the buyer needs a Nookara account (`402 velora_required`).
+
+- `POST /api/v2/servers/:sid/tier { tier }` -> `{ status: "pending", pay_request: { id, status, approve_url, amount, tier, expires_at }, tier, until }`. The instance asks for a pay request with `amount = price_credits`, a `reason` naming the tier and server, and `ref = "tier:<tier>:server:<sid>:<period start ms>"`. Asking again while one is open returns the same request. Errors: `owner_only` (403), `unknown_tier` (404), `tiers_unavailable` (409), and the pay-request errors of §12.5.
+- `GET /api/v2/servers/:sid/tier` (owner) -> `{ tier, until, status: "none" | "pending" | "paid" | "declined" | "expired" | "failed", pay_request, tiers_available }`. It asks Nookara about an open request right away; the instance also polls every few seconds while one is open.
+- The person approves on Nookara (`approve_url`). The receipt (`ember-receipt+jwt` / `bonfire-receipt+jwt`) is checked as in §12.5 (signature, `aud`, `sub`, `amount`, `ref`, `rcp` unused). Then `server_tiers (community_id PK, tier, until, receipt_jti, updated_at)` is set (`receipt_jti` holds the receipt's `rcp`) and the owner gets `{ type: "chat_tier_update", server, status, tier, until }`. A receipt that does not check out sets nothing (`status: "failed"`, `pay_request.error`).
+- **Periods stack.** Buying the tier a server already holds starts the new period where the running one ends (`until += period_weeks`). Another tier starts now and replaces it.
+- **Running out.** After `until` the server is back on the defaults (and its override, if any). Nothing renews by itself. A tier that the homeserver removed from its list no longer gives anything, so rename a tier rather than delete one that servers hold.
+
+### 19.0b Nookara-hosted instances (the old managed mode)
+
+`EMBER_MANAGED=1` still works, as an alias: the plan's numbers (19.1, 19.2) become the homeserver's default limits (`bridges: false` = `[]`), so the old hosted containers keep their caps until they are moved. In that mode the defaults, the tiers and the overrides cannot be changed from the instance (`403 managed_setting { setting: "limits" }`), no tier is sold, and the `managed` / `plan` objects below are still sent for old clients. Everything else on this page describes that mode.
 
 Nookara can run an Ember instance for someone: a `bonfire-server` container behind `https://<slug>-bonfire.ikelene.net`, started by **bonfire-hostd** (`bonfire-hostd/`, the Docker host agent) when the owner creates a server from Ember. The instance is an ordinary instance (Nookara accounts, registered with Nookara, one community) that was started in **managed mode**. Everything on this page is optional for self-hosters: without `EMBER_MANAGED=1` and `EMBER_READ_ONLY=1` nothing changes.
 
@@ -1404,3 +1492,33 @@ Without Pro, Plus is prepaid and **never renews automatically**. After `paid_unt
 ### 19.9 Maintenance mode (Nookara)
 
 Staff can put Nookara in maintenance: `GET /admin/maintenance` -> `{ on, message, env_forced }`, `PUT /admin/maintenance { on, message? }` (rank `admin` / `owner`). Env `VELORA_MAINTENANCE=1|0` overrides the stored toggle (`env_forced: true`). While on, everyone except those staff gets `503` with `Retry-After: 600`: a page for browser navigations, `{ "error": "maintenance", "message"? }` for API calls (including `POST /bonfire/instance-token`, so instances wait), and WebSockets are closed with `4503` after auth. Always open: `/health`, `/.well-known/bonfire/jwks.json`, `/bonfire/relay/*` (instances keep working), `/login`, `/auth/*` except registration, `/assets/*`. Signed-in staff pass with their bearer token; the maintenance page offers them "Continue as staff" (`POST /admin/maintenance/bypass` sets a 12 hour cookie).
+
+---
+
+## 20. Push
+
+A client that wants notifications while it is not connected registers a **pusher** with each homeserver it uses: the key its push provider gave it, and the **push gateway** that can reach that provider. Nookara runs one; its address is `push_gateway` in `https://nookara.cc/.well-known/ember`, and it is this server's default. Discovery (§3) says where pushers go: `push: { pushers_url }`.
+
+**Pushers** (any signed-in account that is not a bot: local, Nookara, or another homeserver's):
+
+| route | result |
+|---|---|
+| `POST /api/v2/pushers { app_id, pushkey, gateway_url?, device_name?, show_preview? }` | `{ pusher }`. `pushkey`: 1-512 printable ASCII characters. `app_id`: 1-64 of `A-Z a-z 0-9 . _ -`. `gateway_url`: `https`, no credentials, at most 500 characters; left out = the `push.default_gateway` setting (default `https://nookara.cc/_ember/push/v1/notify`). `show_preview` defaults to `true`. The same `pushkey` again updates it; a key another account here had moves to the caller. Errors: `invalid_pushkey`, `invalid_app_id`, `invalid_gateway_url`, `invalid_device_name`, `invalid_show_preview`, `409 too_many_pushers { limit: 20 }` |
+| `GET /api/v2/pushers` | `{ pushers: [ { pushkey, app_id, gateway_url, device_name, show_preview, created_at, last_ok_at } ] }`, the caller's own |
+| `DELETE /api/v2/pushers/:pushkey` (URL-encoded) | the list again; `404 pusher_not_found`. A client removes its pusher when it signs out |
+
+Table `pushers (user_id, pushkey, app_id, gateway_url, device_name, show_preview, created_at, last_ok_at, PRIMARY KEY (user_id, pushkey))`, at most 20 per account.
+
+**Sending.** Whenever a message pings someone who has no gateway connection here (the rules of §12.3's offline push: a mention, a reply, a role, `@everyone`, or their "all messages" setting; never a muted channel or server, never with `push` switched off for it), each of their pushers gets:
+```
+POST <gateway_url>
+X-Ember-Homeserver: <this homeserver's domain>
+{ "notification": { "pushkey": "…", "app_id": "…", "kind": "mention" | "reply", "title": "nat mentioned you", "preview": "…", "url": "https://chat.example/#/s/<sid>/<cid>", "homeserver": "chat.example", "counts": { "unread": 3 } } }
+-> { "rejected": ["<pushkey>", …] }
+```
+- `title` is at most 100 characters, `preview` at most 300 and only sent to a pusher with `show_preview: true`. `url` is only sent when `public_url` is `https`. `counts.unread` is the number of channels the person has something unread in.
+- `kind` is `mention` or `reply` today; `dm`, `call` and `other` are the gateway's other kinds and are not sent yet.
+- Quiet the way §12.3 is: nobody who is connected is pushed, and per person and channel the first ping goes out at once while the ones in the next 30 seconds become one summary (`"3 new mentions in #general"`).
+- A pushkey the gateway lists in `rejected` is deleted. Any other 2xx sets `last_ok_at`.
+- One request per pusher, in order per gateway, 5 seconds each at most, off the message path: a slow or dead gateway never delays a message (more than 500 waiting for one gateway are dropped). Requests only go to public addresses and follow no redirects (the rule of §4a's outside logins; `EMBER_DEV=1` lifts it).
+- This is separate from §12.3 (`relay/notify`, Nookara accounts on a registered instance): both are sent, and a client that has a pusher here should switch the relay push off for this instance on Nookara, or it is told twice.
