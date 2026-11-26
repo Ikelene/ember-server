@@ -1,5 +1,5 @@
 // relay/push.js: the push body names the author and gives their picture as an absolute https link (Nookara's phone notifications
-// show who wrote it, not the community). The rest of the relay is covered by relay.test.js (needs the Velora checkout).
+// show who wrote it, not the community). The rest of the relay is covered by relay.test.js (needs the Nookara checkout).
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
@@ -12,7 +12,7 @@ stub('notify', { setOfflineHandler: () => {} });
 stub('relay/client', { registered: () => true, call: async (m, p, body) => { sent.push(body); return {}; } });
 const push = require('../src/relay/push');
 const pkt = (over = {}) => ({ id: 1, sid: 's1', cid: 'c1', server: 'Pals', channel: 'general', from: 'alice', pfp: '/uploads/avatars/a.png', body: '@bob hi', ...over });
-const u = { id: 7, velora_id: 3 };
+const u = { id: 7, nookara_id: 3 };
 
 test('author name + absolute picture', async () => {
   push._setWindow(10);

@@ -8,8 +8,8 @@ const path = require('path');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 // a 1x1 png
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -35,7 +35,7 @@ const memberRow = async who => (await owner.a.get(`/api/v1/servers/${sid}/member
 const stored = url => path.join(dir, 'uploads', new URL(url).pathname.slice('/uploads/'.length));
 
 test('a server with its own accounts says so, and a new account has an empty profile', async () => {
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.account_profiles, true);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.account_profiles, true);
   const r = await member.a.get('/api/v1/me/profile');
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.profile, { display_name: null, pfp: null, banner: null, color: null, bio: null, pronouns: null });

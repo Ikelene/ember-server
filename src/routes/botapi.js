@@ -1,6 +1,7 @@
 'use strict';
-// Bot REST API, Discord's dialect: INSTANCE/bot/v1/... with "Authorization: Bot <token>" (PROTOCOL §13). Velora serves the same
+// Bot REST API, Discord's dialect: INSTANCE/bot/v1/... with "Authorization: Bot <token>" (PROTOCOL §13). Nookara serves the same
 // API at /chat/api/v1; here the prefix is /bot/v1 and the gateway is /bot/gateway. See bots.js for ids and events.
+const { BOT_API } = require('../compat');
 const db = require('../db');
 const C = require('../communities');
 const M = require('../messages');
@@ -73,7 +74,7 @@ function register(app) {
   get('/users/@me', (req, bot) => B.userObj(bot));
   get('/oauth2/applications/@me', (req, bot) => ({ id: String(bot.id), name: bot.username, bot: B.userObj(bot), bot_public: true }));
   get('/users/@me/guilds', (req, bot) => db.all('SELECT c.* FROM communities c JOIN members m ON m.community_id = c.id WHERE m.user_id = ? ORDER BY c.id', bot.id)
-    .map(c => ({ id: String(c.id), name: c.name, icon: c.icon_url ? 'bonfire' : null, icon_url: c.icon_url || null, owner: false })));
+    .map(c => ({ id: String(c.id), name: c.name, icon: c.icon_url ? BOT_API.avatar : null, icon_url: c.icon_url || null, owner: false })));
   del('/users/@me/guilds/:gid', (req, bot) => { C.removeMember(guild(bot, req.params.gid).c, bot.id, 'left'); });
   // DMs aren't on Ember servers: they're Nookara's. A bot linked to a Nookara bot (gallery) opens them there with the same token:
   // POST https://nookara.cc/chat/api/v1/users/@me/channels and the gateway wss://nookara.cc/chat/gateway (MESSAGE_CREATE without guild_id)

@@ -9,10 +9,10 @@ const http = require('http');
 const { startServer } = require('../src/index');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
-delete process.env.BONFIRE_MATRIX_TOKEN;
-delete process.env.BONFIRE_MATRIX_HOMESERVER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
+delete process.env.EMBER_MATRIX_TOKEN;
+delete process.env.EMBER_MATRIX_HOMESERVER;
 const dir = tmpDir();
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const TOKEN = 'syt_import_token_QRST', BOT = '@porter:fake.test';

@@ -6,8 +6,8 @@ const fs = require('fs');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, bob, carol, sid, general, wsA, wsB, wsC;
 const clients = [];
@@ -39,16 +39,16 @@ test('the member list shows last login to Manage users only', async () => {
 
 test('messages carry the client they came from for everyone who sees them', async () => {
   wsB = await wsClient(base).login(bob.session); clients.push(wsB);
-  const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'hello' }, { Origin: 'https://velora.example' });
+  const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'hello' }, { Origin: 'https://nookara.example' });
   assert.equal(r.status, 200);
   const live = await wsB.waitFor(f => f.type === 'chat_message' && f.message.id === r.body.message.id);
-  assert.deepEqual(live.message.via, { url: 'https://velora.example' });
+  assert.deepEqual(live.message.via, { url: 'https://nookara.example' });
   const plain = await wsC.waitFor(f => f.type === 'chat_message' && f.message.id === r.body.message.id);
-  assert.deepEqual(plain.message.via, { url: 'https://velora.example' });
+  assert.deepEqual(plain.message.via, { url: 'https://nookara.example' });
   assert.equal(plain.__via, undefined);
   const h = id => m => m.id === id;
-  assert.deepEqual((await bob.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://velora.example' });
-  assert.deepEqual((await carol.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://velora.example' });
+  assert.deepEqual((await bob.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://nookara.example' });
+  assert.deepEqual((await carol.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(h(r.body.message.id)).via, { url: 'https://nookara.example' });
   assert.equal(r.body.message.via, undefined);
 });
 
@@ -63,10 +63,10 @@ test('the official apps are told apart by their User-Agent marker (kind), for of
   assert.equal(appKind('Mozilla/5.0 (Windows NT 10.0) Chrome/130 Electron/33 BonfireDesktop/1.4.2'), 'desktop');
   assert.equal(appKind('Mozilla/5.0 (Linux; Android 15; wv) Chrome/130 BonfireAndroid/0.9'), 'android');
   assert.equal(appKind('Mozilla/5.0 Firefox/131'), null);
-  assert.deepEqual(viaOf('https://velora.example', 'x NotBonfireDesktop/1'), { url: 'https://velora.example' });
+  assert.deepEqual(viaOf('https://nookara.example', 'x NotBonfireDesktop/1'), { url: 'https://nookara.example' });
   assert.equal(viaOf('http://10.0.0.2', 'BonfireDesktop/1'), null);
-  const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'from the app' }, { Origin: 'https://velora.example', 'User-Agent': 'Mozilla/5.0 Electron/33 BonfireDesktop/1.4.2' });
+  const r = await carol.a.raw('POST', `/api/v1/channels/${general}/messages`, { message: 'from the app' }, { Origin: 'https://nookara.example', 'User-Agent': 'Mozilla/5.0 Electron/33 BonfireDesktop/1.4.2' });
   assert.equal(r.status, 200);
   const m = (await alice.a.get(`/api/v1/channels/${general}/messages`)).body.messages.find(x => x.id === r.body.message.id);
-  assert.deepEqual(m.via, { url: 'https://velora.example', kind: 'desktop' });
+  assert.deepEqual(m.via, { url: 'https://nookara.example', kind: 'desktop' });
 });

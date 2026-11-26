@@ -1,5 +1,6 @@
 'use strict';
-// bonfire-export-v1 (PROTOCOL §9): export a community to a zip, import one back as a new community.
+// The export format (PROTOCOL §9, compat EXPORT_FORMAT): export a community to a zip, import one back as a new community.
+const { EXPORT_FORMAT, env, KIND_NOOKARA, NOOKARA_ID_FIELD } = require('./compat');
 const fs = require('fs');
 const path = require('path');
 const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');
@@ -11,7 +12,7 @@ const uploads = require('./uploads');
 const { ALL_PERMS, CHANNEL_BITS } = require('./perms');
 const { err, normalizeOrigin, randHex, sha256, now, clean } = require('./util');
 
-const FORMAT = 'bonfire-export-v1';
+const FORMAT = EXPORT_FORMAT;
 const MAX_UNZIPPED = 2 * 1024 * 1024 * 1024;
 const origin = () => normalizeOrigin(config.publicUrl());
 
@@ -65,7 +66,7 @@ function exportCommunity(sid, me) {
     const lines = [];
     let last = 0;
     for (;;) {
-      const rows = db.all(`SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.username AS u_username, u.display_name AS u_dn, u.pfp AS u_pfp, u.velora_id AS u_vid
+      const rows = db.all(`SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.username AS u_username, u.display_name AS u_dn, u.pfp AS u_pfp, u.nookara_id AS u_vid
         FROM messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.channel_id = ? AND m.id > ? ORDER BY m.id LIMIT 1000`, ch.id, last);
       if (!rows.length) break;
       last = rows[rows.length - 1].id;
@@ -81,7 +82,7 @@ function exportCommunity(sid, me) {
         let atts = []; try { atts = r.attachments ? JSON.parse(r.attachments) : []; } catch { atts = []; }
         const o = {
           id: String(r.id),
-          author: r.u_principal ? { id: r.u_principal, kind: r.u_kind, username: r.u_username, display_name: r.u_dn, pfp: r.u_pfp || null, velora_id: r.u_vid || null } : null,
+          author: r.u_principal ? { id: r.u_principal, kind: r.u_kind, username: r.u_username, display_name: r.u_dn, pfp: r.u_pfp || null, [NOOKARA_ID_FIELD]: r.u_vid || null } : null,
           ...(!r.u_principal && r.author_name ? { author_name: r.author_name, author_avatar: r.author_avatar || null } : {}),
           body: r.body, attachments: atts.map(a => ({ ...a, url: localFile(a.url) })),
           ...(r.embeds ? { embeds: JSON.parse(r.embeds) } : {}),
@@ -116,7 +117,7 @@ function importCommunity(me, buffer, parsed) {
   C.assertMayCreate(me);
   const { entries, manifest, cj } = parsed || readExport(buffer);
   const sameInstance = normalizeOrigin(manifest.source) === origin();
-  const velora = config.mode() === 'velora';
+  const nookara = config.mode() === 'nookara';
   const sidTag = randHex(4);
   const storeFile = (ref, kind) => { // files/<path> inside the zip -> a file under uploads/, returning its URL
     const data = typeof ref === 'string' && ref.startsWith('files/') ? entries[ref] : null;
@@ -131,7 +132,7 @@ function importCommunity(me, buffer, parsed) {
   const resolve = u => {
     const principal = typeof u === 'string' ? u : u?.id;
     if (typeof principal !== 'string') return null;
-    if (principal.startsWith('v:') && /^v:[1-9]\d{0,19}$/.test(principal)) return auth.ensureVeloraPlaceholder(principal.slice(2), u?.username, u?.pfp);
+    if (principal.startsWith('v:') && /^v:[1-9]\d{0,19}$/.test(principal)) return auth.ensureNookaraPlaceholder(principal.slice(2), u?.username, u?.pfp);
     if (principal.startsWith('l:') && sameInstance) return auth.userByPrincipal(principal) || null;
     return null;
   };
@@ -279,7 +280,7 @@ function importCommunity(me, buffer, parsed) {
     const toAnnounce = [];
     for (const m of entries['members.jsonl'] ? jsonl(entries['members.jsonl']) : []) {
       const u = resolve(m.user);
-      if (!u || u.id === me.id || u.kind !== (velora ? 'velora' : 'local') || (!velora && !sameInstance)) continue;
+      if (!u || u.id === me.id || u.kind !== (nookara ? KIND_NOOKARA : 'local') || (!nookara && !sameInstance)) continue;
       if (db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)) continue;
       if (C.memberCount(c.id) >= C.LIMITS.members) break;
       C.addMember(c, u.id, { quiet: true, announce: false });
@@ -295,10 +296,10 @@ function importCommunity(me, buffer, parsed) {
   return result;
 }
 
-// BONFIRE_IMPORT_ON_BOOT=<zip>: a restored backup (PROTOCOL §19.6). Imported once, on a boot where the instance has no community yet,
+// EMBER_IMPORT_ON_BOOT=<zip>: a restored backup (PROTOCOL §19.6). Imported once, on a boot where the instance has no community yet,
 // owned by the instance owner; the file is deleted afterwards.
 function importOnBoot() {
-  const file = process.env.BONFIRE_IMPORT_ON_BOOT;
+  const file = env('IMPORT_ON_BOOT');
   if (!file) return null;
   const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[import]', ...a);
   try {
@@ -312,7 +313,7 @@ function importOnBoot() {
     return c;
   } catch (e) { console.error('[import] boot import failed:', e.code || e.message); return null; }
 }
-// the owner's community as a bonfire-export-v1 zip, for the host's backups (src/cli.js). null = nothing to back up
+// the owner's community as an export zip, for the host's backups (src/cli.js). null = nothing to back up
 function exportForBackup() {
   const c = db.get('SELECT * FROM communities ORDER BY id LIMIT 1');
   if (!c) return null;

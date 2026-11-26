@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
-// Local administrator tool: filesystem access to BONFIRE_DATA is the authority.
+// Local administrator tool: filesystem access to EMBER_DATA is the authority.
 // Never starts the server, relays, bridges, or a gateway connection.
+const { env, DB_FILE, LEGACY_DB_FILE } = require('./compat');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -12,7 +13,7 @@ const HELP = `Usage: node src/cli.js export <out.zip>
   token <bot-id>
   add <bot-id> <community-sid> [--role <role-rid>]...
   role <bot-id> <community-sid> <role-rid> [--remove]
-Uses BONFIRE_DATA (default ./data). The owner defaults to the instance owner.
+Uses EMBER_DATA (default ./data). The owner defaults to the instance owner.
 Creates a private SQLite backup before every mutation. Tokens appear once on stdout.
 Restart the server after mutations to refresh connected clients and revoke old gateways.
 `;
@@ -46,15 +47,15 @@ function parse(args) {
 
 async function run(args, { out = s => process.stdout.write(s + '\n'), log = s => process.stderr.write(s + '\n') } = {}) {
   const { command, positional: p, options: o } = parse(args);
-  const dir = path.resolve(process.env.BONFIRE_DATA || './data');
-  const file = path.join(dir, 'bonfire.db');
-  // Refuse a typo in BONFIRE_DATA instead of creating a new empty instance.
+  const dir = path.resolve(env('DATA') || './data');
+  const file = [DB_FILE, LEGACY_DB_FILE].map(f => path.join(dir, f)).find(f => fs.existsSync(f)) || path.join(dir, DB_FILE); // db.open() renames an old one
+  // Refuse a typo in EMBER_DATA instead of creating a new empty instance.
   if (!fs.existsSync(file) || !fs.existsSync(path.join(dir, 'config.json'))) throw new Error('Existing instance database and config.json required');
   const { DatabaseSync, backup } = require('node:sqlite');
   const backupDir = path.join(dir, 'cli-backups');
   fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(backupDir, 0o700);
-  const destination = path.join(backupDir, `bonfire.db.bak-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(4).toString('hex')}`);
+  const destination = path.join(backupDir, `${DB_FILE}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(4).toString('hex')}`);
   // Reserve privately before SQLite opens it; backup includes committed WAL data.
   fs.closeSync(fs.openSync(destination, 'wx', 0o600));
   const source = new DatabaseSync(file, { readOnly: true });
@@ -101,7 +102,7 @@ async function run(args, { out = s => process.stdout.write(s + '\n'), log = s =>
   } finally { db.close(); }
 }
 
-// Keep the existing bonfire-hostd export command and its exit codes intact.
+// Keep the existing hostd export command and its exit codes intact.
 function main(argv) {
   const [cmd, out] = argv;
   if (cmd !== 'export' || !out) { console.error(HELP); return 2; }

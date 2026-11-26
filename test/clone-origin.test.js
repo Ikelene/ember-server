@@ -10,8 +10,8 @@ const crypto = require('crypto');
 const { startServer } = require('../src/index');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, sid, general, peer, peerUrl;
 const reg = async n => { const r = await api(base).post('/api/v1/auth/register', { username: n, password: 'correct horse battery' }); assert.equal(r.status, 200); return { ...r.body, a: api(base, r.body.session) }; };

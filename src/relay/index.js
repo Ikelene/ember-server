@@ -1,5 +1,5 @@
 'use strict';
-// Velora relays, instance side (PROTOCOL §12, "Instance behaviour"): started by index.js once the HTTP server listens.
+// Nookara relays, instance side (PROTOCOL §12, "Instance behaviour"): started by index.js once the HTTP server listens.
 const client = require('./client');
 const parts = () => [require('./push'), require('./daily'), require('./shop'), require('./broker'), require('./directory'), require('./gallery'), require('./identity')];
 

@@ -1,5 +1,5 @@
 'use strict';
-// Voice over Cloudflare Realtime (PROTOCOL §10): ported from Velora's cf-realtime.js + the chat_rtc_* handlers in chat.js.
+// Voice over Cloudflare Realtime (PROTOCOL §10): ported from Nookara's cf-realtime.js + the chat_rtc_* handlers in chat.js.
 // The client never sees the SFU app secret, only expiring ICE credentials and SDP. Rooms are named bf_<cid>.
 const crypto = require('crypto');
 const config = require('./config');
@@ -48,7 +48,7 @@ async function iceServers(ttl = 14400) { // credentials live 4h; hand out one se
   return iceCache.servers;
 }
 
-// ---------- backend: own Cloudflare keys, else Velora's voice broker (PROTOCOL §12.7), else none ----------
+// ---------- backend: own Cloudflare keys, else Nookara's voice broker (PROTOCOL §12.7), else none ----------
 const broker = () => require('./relay/broker');
 const backendName = () => (configured() ? 'direct' : broker().usable() ? 'broker' : null);
 const backendOf = p => (p?.backend === 'broker' ? broker().R : R);

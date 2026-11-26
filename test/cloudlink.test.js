@@ -1,5 +1,5 @@
 'use strict';
-// CloudLink bridge: a logs channel in CloudLink mode joins a local CL4-style WebSocket server (BONFIRE_DEV=1 allows it):
+// CloudLink bridge: a logs channel in CloudLink mode joins a local CL4-style WebSocket server (EMBER_DEV=1 allows it):
 // gmsg in and out, echo suppression, !online, SSRF refusal outside dev mode, the 3-per-community cap, export / import.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,9 +9,9 @@ const { unzipSync, strFromU8 } = require('fflate');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-process.env.BONFIRE_DEV = '1';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+process.env.EMBER_DEV = '1';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, CL, cl, clUrl;
 const clients = [];
@@ -110,7 +110,7 @@ test('three CloudLink bridges per community at most', async () => {
 });
 
 test('SSRF: private, loopback, link-local and odd ports are refused outside dev mode', async () => {
-  process.env.BONFIRE_DEV = '0';
+  process.env.EMBER_DEV = '0';
   try {
     const set = url => alice.a.patch(`/api/v1/channels/${ch.cid}`, { config: { mode: 'cloudlink', url } });
     for (const url of ['ws://10.0.0.1/', 'ws://169.254.169.254/', 'ws://[::1]/', 'ws://127.0.0.1/', 'ws://localhost/', 'wss://[::ffff:10.0.0.1]/', 'ws://2130706433/', 'ws://printer.lan/']) {
@@ -135,7 +135,7 @@ test('SSRF: private, loopback, link-local and odd ports are refused outside dev 
     await alice.a.post(`/api/v1/channels/${cl2.cid}/cloudlink/reconnect`); // ...and connects again right away
     const after = await until(async () => { const s = (await alice.a.get(`/api/v1/channels/${cl2.cid}/cloudlink`)).body.status; return s.state === 'waiting' && s; });
     assert.ok(['cl_bad_port', 'cl_private_address'].includes(after.error), after.error); // ws://127.0.0.1:<port>/ fails the port rule first
-  } finally { process.env.BONFIRE_DEV = '1'; }
+  } finally { process.env.EMBER_DEV = '1'; }
 });
 
 test('export / import keeps CloudLink and game channel settings', async () => {

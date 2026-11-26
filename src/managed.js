@@ -1,24 +1,25 @@
 'use strict';
-// Velora-hosted ("managed") instances (PROTOCOL §19): the host (bonfire-hostd) starts the container with BONFIRE_MANAGED=1,
-// BONFIRE_PLAN and BONFIRE_LIMITS (JSON), and this module turns them into limits the rest of the server asks about.
-// Everything reads the environment lazily, so a test can flip it between runs. Without BONFIRE_MANAGED nothing here limits anything.
+// Nookara-hosted ("managed") instances (PROTOCOL §19): the host (hostd) starts the container with EMBER_MANAGED=1,
+// EMBER_PLAN and EMBER_LIMITS (JSON), and this module turns them into limits the rest of the server asks about.
+// Everything reads the environment lazily, so a test can flip it between runs. Without EMBER_MANAGED nothing here limits anything.
+const { env, WIRE_HOST, renameLegacySettings } = require('./compat');
 const { err, normalizeOrigin } = require('./util');
 
-// the plan numbers Velora ships (bonfire-plans.js); BONFIRE_LIMITS overrides field by field. null = unlimited.
+// the plan numbers Nookara ships (its plans module); EMBER_LIMITS overrides field by field. null = unlimited.
 const PLAN_DEFAULTS = {
   // files_per_member: uploads each person keeps; upload_expiry_days: the longest an upload is kept; storage_mb: all uploads together
   starter: { member_cap: 30, max_upload_mb: 10, emojis: 50, sounds: 10, bots: 2, bridges: false, custom_voice_keys: false, files_per_member: 500, upload_expiry_days: null, storage_mb: 2048 },
   plus: { member_cap: null, max_upload_mb: 250, emojis: null, sounds: null, bots: null, bridges: true, custom_voice_keys: true, files_per_member: null, upload_expiry_days: null, storage_mb: null },
 };
-const LOCKED = ['accounts_mode', 'public_url', 'velora_url', 'velora_registration'];
+const LOCKED = ['accounts_mode', 'public_url', 'nookara_url', 'nookara_registration'];
 
-const active = () => process.env.BONFIRE_MANAGED === '1';
-const plan = () => { const p = String(process.env.BONFIRE_PLAN || 'starter').toLowerCase(); return /^[a-z0-9_-]{1,24}$/.test(p) ? p : 'starter'; };
+const active = () => env('MANAGED') === '1';
+const plan = () => { const p = String(env('PLAN') || 'starter').toLowerCase(); return /^[a-z0-9_-]{1,24}$/.test(p) ? p : 'starter'; };
 const num = (v, d, max) => (v === null ? null : (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.min(Math.trunc(Number(v)), max) : d);
 
 let cache = { raw: null, plan: null, v: null };
 function limits() {
-  const raw = process.env.BONFIRE_LIMITS || '', p = plan();
+  const raw = env('LIMITS') || '', p = plan();
   if (cache.raw === raw && cache.plan === p) return cache.v;
   const d = PLAN_DEFAULTS[p] || PLAN_DEFAULTS.starter;
   let o = {};
@@ -39,15 +40,15 @@ function limits() {
   return v;
 }
 
-// the `managed` object of /.well-known/bonfire and GET /api/v1/instance/settings; null on a normal instance
-const view = () => (active() ? { plan: plan(), limits: { ...limits() }, host: 'velora' } : null);
+// the `managed` object of the discovery document and GET /api/v1/instance/settings; null on a normal instance
+const view = () => (active() ? { plan: plan(), limits: { ...limits() }, host: WIRE_HOST } : null);
 
 // numeric limit for emojis / sounds / bots / member_cap / max_upload_mb / files_per_member / upload_expiry_days / storage_mb: a number, or null (none)
 const limit = what => (active() ? limits()[what] ?? null : null);
 const allows = what => !active() || limits()[what] !== false;
 
-// read-only mode (BONFIRE_READ_ONLY=1, set by the host when a hosted server's paid time ran out): every write is refused, reading and the export still work
-const readOnly = () => process.env.BONFIRE_READ_ONLY === '1';
+// read-only mode (EMBER_READ_ONLY=1, set by the host when a hosted server's paid time ran out): every write is refused, reading and the export still work
+const readOnly = () => env('READ_ONLY') === '1';
 function assertWritable() { if (readOnly()) throw err('read_only', 403); }
 
 const planLimit = (what, lim, used = null) => err('plan_limit', 403, { what, limit: lim, used, ...(active() ? { plan: plan() } : {}) });
@@ -71,11 +72,12 @@ function assertCanJoin(humanCount, isAdminOrOwner) {
 // (the admin UI sends whole forms back); a different value is refused.
 function guardSettings(body, current) {
   if (!active() || !body || typeof body !== 'object') return;
+  body = renameLegacySettings(body);
   const same = {
-    accounts_mode: v => v === 'velora',
-    velora_registration: v => v === 'auto',
+    accounts_mode: v => v === 'nookara',
+    nookara_registration: v => v === 'auto',
     public_url: v => typeof v === 'string' && normalizeOrigin(v) === current.public_url,
-    velora_url: v => typeof v === 'string' && normalizeOrigin(v) === current.velora_url,
+    nookara_url: v => typeof v === 'string' && normalizeOrigin(v) === current.nookara_url,
   };
   for (const k of LOCKED) if (body[k] !== undefined && !same[k](body[k])) throw err('managed_setting', 403, { setting: k });
   if (body.voice && typeof body.voice === 'object' && !limits().custom_voice_keys && Object.values(body.voice).some(v => typeof v === 'string' && v.trim())) throw planFeature('custom_voice_keys');
@@ -93,7 +95,7 @@ function usage() {
   const used = { bots: botCount(c?.id ?? null), emojis: count('emojis'), sounds: count('sounds'), member_cap: c ? db.get("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND u.kind <> 'bot'", c.id).n : 0, max_upload_mb: null,
     files_per_member: null, upload_expiry_days: null, storage_mb: Math.ceil(db.get('SELECT COALESCE(SUM(size), 0) AS n FROM uploads').n / (1024 * 1024)) };
   const numeric = Object.fromEntries(Object.entries(used).map(([key, n]) => [key, { limit: limit(key), used: n }]));
-  return { name: plan(), limits: numeric, features: { bridges: allows('bridges'), custom_voice_keys: allows('custom_voice_keys'), ...Object.fromEntries(['bots', 'emojis', 'sounds'].map(k => [k, limit(k) !== 0])), uploads: limit('max_upload_mb') !== 0, backups: true, game_servers: true, bonfire_link: true, webhooks: true } };
+  return { name: plan(), limits: numeric, features: { bridges: allows('bridges'), custom_voice_keys: allows('custom_voice_keys'), ...Object.fromEntries(['bots', 'emojis', 'sounds'].map(k => [k, limit(k) !== 0])), uploads: limit('max_upload_mb') !== 0, backups: true, game_servers: true, ember_link: true, webhooks: true } };
 }
 
 module.exports = { readOnly, assertWritable, active, plan, limits, view, limit, allows, assertRoom, assertAllows, assertCanJoin, guardSettings, planLimit, planFeature, botCount, usage, PLAN_DEFAULTS, LOCKED };

@@ -58,7 +58,7 @@ class App {
           const s = auth.resolveSession(auth.bearer(req));
           if (!s) throw err('invalid_session', 401);
           if (s.user.banned) throw err('banned', 403);
-          // Ember switched off for the Velora account: nothing but signing out / back in (which Velora refuses too)
+          // Ember switched off for the Nookara account: nothing but signing out / back in (which Nookara refuses too)
           if (!pathname.startsWith('/api/v1/auth/') && await require('./profiles').gate(s.user)) throw err('account_restricted', 403, { message: RESTRICTED_MSG });
           req.user = s.user; req.session = s; req.scopes = s.scopes;
           if (r.opts.admin && !auth.isAdmin(s.user)) throw err('not_allowed', 403);

@@ -1,9 +1,10 @@
 'use strict';
-// A Matrix space as this instance's community (PROTOCOL §16.6): the same thing Velora's import bundles do for Discord / Fluxer
+// A Matrix space as this instance's community (PROTOCOL §16.6): the same thing Nookara's import bundles do for Discord / Fluxer
 // (§12.6), done here with a Matrix bot account the admin brings (its homeserver address + an access token).
 // Structure only: rooms become channels, sub-spaces become categories, plus the space's picture and its custom emoji.
 // Members and messages stay on Matrix. The bot's token is kept in memory for half an hour and only saved when the admin
 // asks for the imported rooms to be bridged (it then becomes the bridge's bot, matrix.js).
+const { EXPORT_FORMAT } = require('../compat');
 const crypto = require('crypto');
 const db = require('../db');
 const C = require('../communities');
@@ -180,7 +181,7 @@ function emojisOf(room) {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// ---------------------------------------------------------------- the picker (same shapes as Velora's /bonfire/import/*)
+// ---------------------------------------------------------------- the picker (same shapes as Nookara's import picker)
 async function guilds(me, fresh) {
   C.assertMayCreate(me);
   const s = need(me);
@@ -209,7 +210,7 @@ function fail(e) {
   throw err('platform_unreachable', 502, { platform: 'matrix' });
 }
 
-// ---------------------------------------------------------------- the import: a bonfire-export-v1 zip, fed to the normal importer
+// ---------------------------------------------------------------- the import: an export zip (compat EXPORT_FORMAT), fed to the normal importer
 const running = new Set();
 async function run(me, body) {
   C.assertMayCreate(me);
@@ -261,7 +262,7 @@ async function run(me, body) {
     };
     files['community.json'] = strToU8(JSON.stringify(community));
     files['members.jsonl'] = strToU8('');
-    files['manifest.json'] = strToU8(JSON.stringify({ format: 'bonfire-export-v1', source: normalizeOrigin(config.publicUrl()), source_kind: 'matrix-import', exported_at: Date.now(), community: `matrix_${g.guild.id}` }));
+    files['manifest.json'] = strToU8(JSON.stringify({ format: EXPORT_FORMAT, source: normalizeOrigin(config.publicUrl()), source_kind: 'matrix-import', exported_at: Date.now(), community: `matrix_${g.guild.id}` }));
     C.assertMayCreate(me); // someone may have set the community up meanwhile
     const c = require('../export').importCommunity(me, Buffer.from(zipSync(files, { level: 6 })));
     let bridged = 0;

@@ -1,4 +1,5 @@
 'use strict';
+const { env, LEGACY_NOOKARA_ORIGINS } = require('./compat');
 const crypto = require('crypto');
 
 const err = (code, status = 400, extra) => Object.assign(new Error(code), { code, status, extra });
@@ -54,12 +55,12 @@ function limiter(max, ms) {
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-// Nookara (nookara.cc) was Velora (velora.ikelene.net): both names are the same identity provider, so an issuer check
-// accepts either spelling. Instances that saved the old velora_url in config.json keep working when tokens say nookara.cc.
-const VELORA_ALIASES = new Set(['https://velora.ikelene.net', 'https://velora.ikelene.dev', 'https://nookara.cc', 'https://www.nookara.cc', 'https://ember.nookara.cc']);
-const canonVelora = o => { const n = normalizeOrigin(o); return n && VELORA_ALIASES.has(n) ? 'https://nookara.cc' : n; };
-const sameVelora = (a, b) => { const x = canonVelora(a); return !!x && x === canonVelora(b); };
-// where Ember (the web client) lives: BONFIRE_EMBER_URL, else ember.nookara.cc for Nookara, else <velora_url>/chat/
-const emberBase = veloraUrl => process.env.BONFIRE_EMBER_URL ? process.env.BONFIRE_EMBER_URL.replace(/\/+$/, '') + '/' : (canonVelora(veloraUrl) === 'https://nookara.cc' ? 'https://ember.nookara.cc/' : String(veloraUrl).replace(/\/+$/, '') + '/chat');
+// Nookara (nookara.cc) used to live at the LEGACY_NOOKARA_ORIGINS in compat.js: both names are the same identity provider, so an issuer check
+// accepts either spelling. Instances whose nookara_url is still the old address keep working when tokens say nookara.cc.
+const NOOKARA_ALIASES = new Set([...LEGACY_NOOKARA_ORIGINS, 'https://nookara.cc', 'https://www.nookara.cc', 'https://ember.nookara.cc']);
+const canonNookara = o => { const n = normalizeOrigin(o); return n && NOOKARA_ALIASES.has(n) ? 'https://nookara.cc' : n; };
+const sameNookara = (a, b) => { const x = canonNookara(a); return !!x && x === canonNookara(b); };
+// where Ember (the web client) lives: EMBER_CLIENT_URL, else ember.nookara.cc for Nookara, else <nookara_url>/chat/
+const emberBase = nookaraUrl => env('CLIENT_URL') ? env('CLIENT_URL').replace(/\/+$/, '') + '/' : (canonNookara(nookaraUrl) === 'https://nookara.cc' ? 'https://ember.nookara.cc/' : String(nookaraUrl).replace(/\/+$/, '') + '/chat');
 
-module.exports = { err, normalizeOrigin, sameVelora, canonVelora, emberBase, b64url, fromB64url, sha256, randHex, randId, now, clean, setupCode, normCode, safeEqual, limiter, log, CROCKFORD };
+module.exports = { err, normalizeOrigin, sameNookara, canonNookara, emberBase, b64url, fromB64url, sha256, randHex, randId, now, clean, setupCode, normCode, safeEqual, limiter, log, CROCKFORD };

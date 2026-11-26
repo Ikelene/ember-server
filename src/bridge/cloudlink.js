@@ -1,5 +1,5 @@
 'use strict';
-// CloudLink bridge (ported from Velora's cloudlink-bridge.js; PROTOCOL §17): a `logs` channel with config.mode = 'cloudlink'
+// CloudLink bridge (ported from Nookara's cloudlink-bridge.js; PROTOCOL §17): a `logs` channel with config.mode = 'cloudlink'
 // is joined to a CloudLink 4 WebSocket server's chat. The instance holds one socket per bridge channel (reconnects with
 // backoff) and relays both ways:
 //   - handshake = {"cmd":"handshake"}; then setid (when a username is set) and link (when a room is set)
@@ -9,7 +9,8 @@
 //   - the gmsg a server replays right after the handshake is skipped
 // Nothing from CloudLink can ping anyone: every @ gets a zero-width space after it.
 // The URL is user-supplied: ws: / wss: only, ports 80 / 443, no private / LAN / loopback addresses (checked again after
-// DNS, on every connect). BONFIRE_DEV=1 allows ws://localhost, private addresses and other ports (development only).
+// DNS, on every connect). EMBER_DEV=1 allows ws://localhost, private addresses and other ports (development only).
+const { env, LEGACY_NOOKARA_HOSTS } = require('../compat');
 const WebSocket = require('ws');
 const dns = require('dns');
 const net = require('net');
@@ -22,7 +23,7 @@ const C = () => require('../communities');
 const M = () => require('../messages');
 
 const DEFAULT_URL = 'wss://ikelene.net/cl/';
-const OFFICIAL_HOSTS = new Set(['ikelene.net', 'www.ikelene.net', 'velora.ikelene.net', 'nookara.cc', 'www.nookara.cc', 'ember.nookara.cc']);
+const OFFICIAL_HOSTS = new Set(['ikelene.net', 'www.ikelene.net', ...LEGACY_NOOKARA_HOSTS, 'nookara.cc', 'www.nookara.cc', 'ember.nookara.cc']);
 const MAX_PER_COMMUNITY = 3;
 const PREFIX = 'Ember | ';
 const OUT_MAX = 1000;          // characters per message sent to CloudLink
@@ -31,7 +32,7 @@ const IN_BURST = [8, 10e3];    // at most 8 inbound messages per 10 s per channe
 const IN_MINUTE = [40, 60e3];  // ...and 40 per minute
 const OUT_BURST = [15, 10e3];  // here -> CloudLink per channel
 const ZW = '\u200b';
-const dev = () => process.env.BONFIRE_DEV === '1';
+const dev = () => env('DEV') === '1';
 
 // ---- config ----
 const cfgOf = ch => { const c = ch?.config; if (c && typeof c === 'object') return c; try { return JSON.parse(c || '{}') || {}; } catch { return {}; } };
@@ -150,8 +151,8 @@ class Conn {
     clearTimeout(this.retry);
     this.ready = false;
     this.steps = [];
-    if (this.username) this.steps.push({ cmd: 'setid', val: this.username, listener: 'bonfire_setid' });
-    if (this.room) this.steps.push({ cmd: 'link', val: this.room, listener: 'bonfire_link' });
+    if (this.username) this.steps.push({ cmd: 'setid', val: this.username, listener: 'ember_setid' });
+    if (this.room) this.steps.push({ cmd: 'link', val: this.room, listener: 'ember_link' });
     let target;
     try { target = cleanUrl(this.url); } catch (e) { return this.fail(e.code || 'cl_bad_url', true); } // re-checked on every connect (dev mode may be off now)
     this.setState('connecting');
@@ -159,7 +160,7 @@ class Conn {
     try {
       ws = new WebSocket(target, {
         handshakeTimeout: 10e3, maxPayload: 512 * 1024, followRedirects: false, perMessageDeflate: false,
-        headers: { 'User-Agent': 'Bonfire-CloudLink/1.0' }, lookup: safeLookup,
+        headers: { 'User-Agent': 'Ember-CloudLink/1.0' }, lookup: safeLookup,
       });
     } catch { return this.fail('cl_bad_url', true); }
     this.ws = ws;

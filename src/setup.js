@@ -1,5 +1,6 @@
 'use strict';
 // First-boot claiming: setup code (Crockford base32 XXXX-XXXX) printed to stdout and DATA_DIR/setup-code.txt.
+const { env } = require('./compat');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -16,29 +17,29 @@ function boot() {
   terms.boot(); // hosted: Nookara's acceptance; headless: EMBER_ACCEPT_OPERATOR_TERMS
   const stranded = auth.ownerStranded(); // switched accounts mode: the owner's account can't sign in any more
   if (auth.claimed() && !stranded) { try { fs.unlinkSync(file()); } catch { /* none */ } return; }
-  // BONFIRE_OWNER (a Velora account) claims the instance, or takes over from a stranded owner, only on Velora accounts:
+  // EMBER_OWNER (a Nookara account) claims the instance, or takes over from a stranded owner, only on Nookara accounts:
   // on local accounts that owner could never sign in
-  let pre = process.env.BONFIRE_OWNER;
-  if (pre && config.mode() !== 'velora') { console.error(`[setup] ignoring BONFIRE_OWNER="${pre}": this instance uses local accounts, so claim it with the setup code`); pre = null; }
+  let pre = env('OWNER');
+  if (pre && config.mode() !== 'nookara') { console.error(`[setup] ignoring EMBER_OWNER="${pre}": this instance uses local accounts, so claim it with the setup code`); pre = null; }
   if (pre && !terms.accepted()) {
     // headless setup must accept the Ember Server Operator Terms explicitly (--accept-operator-terms / EMBER_ACCEPT_OPERATOR_TERMS=1)
-    console.error(`[setup] ignoring BONFIRE_OWNER="${pre}": accept the Ember Server Operator Terms (${terms.URL}) with --accept-operator-terms or EMBER_ACCEPT_OPERATOR_TERMS=1, or claim with the setup code and tick the box`);
+    console.error(`[setup] ignoring EMBER_OWNER="${pre}": accept the Ember Server Operator Terms (${terms.URL}) with --accept-operator-terms or EMBER_ACCEPT_OPERATOR_TERMS=1, or claim with the setup code and tick the box`);
   } else if (pre) {
     const m = /^v:([1-9]\d{0,19})$/.exec(pre.trim());
     if (m) {
-      const u = auth.ensureVeloraPlaceholder(m[1]);
+      const u = auth.ensureNookaraPlaceholder(m[1]);
       takeOver(u);
-      log(`[setup] instance claimed by ${pre} (BONFIRE_OWNER)`);
+      log(`[setup] instance claimed by ${pre} (EMBER_OWNER)`);
       try { fs.unlinkSync(file()); } catch { /* none */ }
       return;
     }
-    console.error(`[setup] ignoring BONFIRE_OWNER="${pre}" (expected v:<velora user id>)`);
+    console.error(`[setup] ignoring EMBER_OWNER="${pre}" (expected v:<nookara user id>)`);
   }
   code = savedCode();
   log('');
   if (stranded) {
     const o = auth.ownerRow();
-    log(`  This instance's owner (${o.principal} ${o.username}) is a ${o.kind === 'local' ? 'local' : 'Velora'} account, which can't sign in with ${config.mode() === 'local' ? 'local' : 'Velora'} accounts.`);
+    log(`  This instance's owner (${o.principal} ${o.username}) is a ${o.kind === 'local' ? 'local' : 'Nookara'} account, which can't sign in with ${config.mode() === 'local' ? 'local' : 'Nookara'} accounts.`);
     log('  Log in, then claim it with the setup code to become the owner (the community comes with it):');
   } else log('  This instance is not claimed yet. Log in, then claim it with the setup code:');
   log(`      ${code}`);

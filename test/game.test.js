@@ -11,8 +11,8 @@ const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 const { SimServer } = require('../scripts/game-gateway-sim');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, GW, G;
 const clients = [], sims = [];
@@ -41,7 +41,7 @@ test('setup + discovery advertises minecraft', async () => {
   sid = (await alice.a.post('/api/v1/servers', { name: 'Craft', join_policy: 'open' })).body.server.sid;
   await bob.a.post(S('/join'));
   wa = await wsClient(base).login(alice.session); clients.push(wa);
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.minecraft, true);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.minecraft, true);
 });
 
 test('the simulator identifies (Ed25519) and shows up in Connected game servers', async () => {
@@ -59,7 +59,7 @@ test('the simulator identifies (Ed25519) and shows up in Connected game servers'
   assert.equal(me.platform, 'paper');
   assert.equal(me.motd.map(x => x.text).join(''), 'Ember Link simulator');
   assert.match(me.icon, /\/uploads\/game-icons\/g[0-9a-f]{16}-[0-9a-f]{8}\.png$/); // the icon frame was stored
-  assert.equal((await alice.a.get(`/api/v1/game/unclaimed?sid=${sid}&tag=${s1.tag.toLowerCase()}`)).body.instances[0].iid, s1.iid); // tag search, Velora's path
+  assert.equal((await alice.a.get(`/api/v1/game/unclaimed?sid=${sid}&tag=${s1.tag.toLowerCase()}`)).body.instances[0].iid, s1.iid); // tag search, Nookara's path
   assert.equal((await bob.a.get(`/api/v1/game/connected?sid=${sid}`)).status, 403); // Manage server only
 });
 

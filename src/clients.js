@@ -1,7 +1,7 @@
 'use strict';
 // Which clients a member is connected with right now (PROTOCOL §7.1): one entry per live gateway connection (Ember, a third-party
 // app or a bot), each with a `via` like the one messages carry. Only the person themselves and members holding Manage users in a
-// server they share see it (the same rule as Velora's presence `sessions`), checked again on every reply and every live update.
+// server they share see it (the same rule as Nookara's presence `sessions`), checked again on every reply and every live update.
 const db = require('./db');
 const { err, normalizeOrigin } = require('./util');
 const { P } = require('./perms');

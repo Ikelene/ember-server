@@ -7,8 +7,8 @@ const fs = require('fs');
 const { startServer } = require('../src/index');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, bob, carol, sid, general;
 const S = p => `/api/v1/servers/${sid}${p}`;

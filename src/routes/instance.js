@@ -1,5 +1,6 @@
 'use strict';
 // Discovery, instance auth, claiming, instance settings + admins.
+const { KIND_NOOKARA, ERR, SOFTWARE, NOOKARA_PATHS, WELL_KNOWN, LEGACY_WELL_KNOWN, LEGACY_ROUTES, wireMode, withLegacy } = require('../compat');
 const config = require('../config');
 const db = require('../db');
 const auth = require('../auth');
@@ -13,41 +14,42 @@ const V = require('../version');
 
 const registerLimit = limiter(10, 3600 * 1000);
 const loginLimit = limiter(20, 600 * 1000);
-const veloraLimit = limiter(60, 60 * 1000);
+const nookaraLimit = limiter(60, 60 * 1000);
 const claimLimit = limiter(10, 600 * 1000);
 
 function discovery() {
   const cfg = config.get();
   const mode = config.mode();
-  return {
-    software: 'bonfire-server', version: pkg.version, protocol: 1,
+  // withLegacy: the `nookara` object also goes out as `velora` (older clients read that)
+  return withLegacy({
+    software: SOFTWARE, version: pkg.version, protocol: 1,
     open_protocol: true, protocol_name: 'Ember Instance Protocol', protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md',
-    about: "Ember is an open chat protocol, not a Velora-only product: anyone can write an Ember client and use or run Ember servers. Velora's web, desktop and Android apps are just the clients the Velora ecosystem uses.",
+    about: "Ember is an open chat protocol, not a Nookara-only product: anyone can write an Ember client and use or run Ember servers. Nookara's web, desktop and Android apps are just the clients the Nookara ecosystem uses.",
     build: V.build(), // PROTOCOL §3: { version, commit, commit_short, commit_date, built_at, dirty, build_id }
     name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
-    accounts_mode: mode,
+    accounts_mode: wireMode(mode),
     // signing_issuers: the "iss" a message signature may name here, preferred first (clients sign with the first one they know)
-    velora: mode === 'velora' ? { issuer: cfg.velora_url, jwks_url: `${cfg.velora_url}/.well-known/bonfire/jwks.json`, signing_issuers: require('../signing').issuers() } : null,
+    nookara: mode === 'nookara' ? { issuer: cfg.nookara_url, jwks_url: `${cfg.nookara_url}${NOOKARA_PATHS.jwks}`, signing_issuers: require('../signing').issuers() } : null,
     claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
-    features: { signing: mode === 'velora', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
+    features: { signing: mode === 'nookara', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
-    managed: managed.view(), // Velora-hosted plan + limits (PROTOCOL §19), null on a normal instance
+    managed: managed.view(), // Nookara-hosted plan + limits (PROTOCOL §19), null on a normal instance
     community: C.discoveryCommunity(),
-    // the instance's relay key (PROTOCOL §12.1): Velora checks it here before binding this url to the key
+    // the instance's relay key (PROTOCOL §12.1): Nookara checks it here before binding this url to the key
     ...require('../relay/client').identity(),
-  };
+  });
 }
 
 function register(app, { restart }) {
   require('../backups').register(app);
-  require('../selfupdate').register(app); // GET/POST /api/v1/instance/update (asks bonfire-hostd to rebuild + recreate this container)
-  app.get('/.well-known/bonfire', { auth: false }, () => discovery());
+  require('../selfupdate').register(app); // GET/POST /api/v1/instance/update (asks hostd to rebuild + recreate this container)
+  for (const p of [WELL_KNOWN, LEGACY_WELL_KNOWN]) app.get(p, { auth: false }, () => discovery());
   app.get('/health', { auth: false }, () => ({ ok: true }));
   // PROTOCOL §5c: public build identity; instance admins/owner additionally get uptime, node, live stats and the update check
   app.get('/api/v1/instance/info', { auth: false }, async req => {
-    const out = { software: 'bonfire-server', protocol: 1, open_protocol: true, version: pkg.version, build: V.build(), name: config.get().name };
+    const out = { software: SOFTWARE, protocol: 1, open_protocol: true, version: pkg.version, build: V.build(), name: config.get().name };
     const s = auth.resolveSession(auth.bearer(req));
     if (s && !s.user.banned && auth.isAdmin(s.user)) {
       out.admin = true;
@@ -64,12 +66,12 @@ function register(app, { restart }) {
   app.get('/api/v1/instance/stats', { auth: false }, () => require('../landing').publicStats());
   // a browser gets the landing page (landing.js); every other client the same JSON as always
   app.get('/', { auth: false }, (req, res) => (require('../landing').wantsHtml(req) ? require('../landing').sendPage(req, res) : rootJson()));
-  const rootJson = () => ({ software: 'bonfire-server', version: pkg.version, protocol: 1, open_protocol: true, about: "Ember is an open chat protocol, not a Velora-only product: anyone can write an Ember client and use or run Ember servers. Velora's web, desktop and Android apps are just the clients the Velora ecosystem uses.", protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md', discovery: '/.well-known/bonfire' });
+  const rootJson = () => ({ software: SOFTWARE, version: pkg.version, protocol: 1, open_protocol: true, about: "Ember is an open chat protocol, not a Nookara-only product: anyone can write an Ember client and use or run Ember servers. Nookara's web, desktop and Android apps are just the clients the Nookara ecosystem uses.", protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md', discovery: WELL_KNOWN });
 
   // ---- auth ----
-  app.post('/api/v1/auth/velora', { auth: false }, async req => {
-    if (!veloraLimit.hit(req.ip)) throw err('rate_limited', 429);
-    return auth.loginVelora(req.body?.token);
+  for (const p of ['/api/v1/auth/nookara', LEGACY_ROUTES.authNookara]) app.post(p, { auth: false }, async req => {
+    if (!nookaraLimit.hit(req.ip)) throw err('rate_limited', 429);
+    return auth.loginNookara(req.body?.token);
   });
   app.post('/api/v1/auth/register', { auth: false }, async req => {
     if (!registerLimit.hit(req.ip)) throw err('rate_limited', 429);
@@ -105,16 +107,16 @@ function register(app, { restart }) {
     gateway.pushToUser(req.user.id, { type: 'instance_update', settings: config.publicView() });
     return { ok: true };
   });
-  const settingsView = () => ({ ...config.adminView(), operator_terms: require('../operator-terms').view(), managed: managed.view(), plan: managed.usage(), velora: require('../relay').status(), local_admins: auth.localAdmins().map(u => u.username) });
+  const settingsView = () => ({ ...config.adminView(), operator_terms: require('../operator-terms').view(), managed: managed.view(), plan: managed.usage(), ...withLegacy({ nookara: withLegacy(require('../relay').status()) }), local_admins: auth.localAdmins().map(u => u.username) });
   app.get('/api/v1/instance/settings', { admin: true }, settingsView);
   app.patch('/api/v1/instance/settings', { admin: true }, req => {
     managed.guardSettings(req.body, config.get());
-    // switching to local accounts: Velora sign-in stops working, so someone must be able to sign in with a password and switch back
+    // switching to local accounts: Nookara sign-in stops working, so someone must be able to sign in with a password and switch back
     if (req.body?.accounts_mode === 'local' && config.get().accounts_mode !== 'local' && !auth.localAdmins().length) throw err('local_admin_required', 409);
     config.update(req.body); if (req.body?.max_backups !== undefined) require('../backups').prune();
     // the owner switching to accounts their own account isn't: after the restart they claim it again with this code (and keep the community)
     const next = config.adminView().accounts_mode, me = req.user;
-    if (req.body?.accounts_mode !== undefined && auth.isOwner(me) && me.kind !== (next === 'local' ? 'local' : 'velora')) return { ...settingsView(), handover_code: setup.handoverCode() };
+    if (req.body?.accounts_mode !== undefined && auth.isOwner(me) && me.kind !== (next === 'local' ? 'local' : KIND_NOOKARA)) return { ...settingsView(), handover_code: setup.handoverCode() };
     return settingsView();
   });
   // Ember Server Operator Terms: an instance set up before they existed accepts from the dashboard notice (never blocks chat); anyone signed in can read the status
@@ -124,7 +126,7 @@ function register(app, { restart }) {
     return require('../operator-terms').acceptLater(req.user);
   });
   app.post('/api/v1/instance/operator-terms/dismiss', { admin: true }, () => require('../operator-terms').dismiss());
-  // (owner, like adding admins) a local (username + password) admin account, made while still on Velora accounts: instance admin, and an Administrator role on the server
+  // (owner, like adding admins) a local (username + password) admin account, made while still on Nookara accounts: instance admin, and an Administrator role on the server
   app.post('/api/v1/instance/local-admin', { owner: true }, async req => {
     const id = await auth.createLocalUser(req.body?.username, req.body?.password);
     db.run('INSERT OR IGNORE INTO instance_admins (user_id) VALUES (?)', id);
@@ -138,19 +140,19 @@ function register(app, { restart }) {
     }
     return { user: auth.userView(auth.userById(id)), settings: settingsView() };
   });
-  // Velora relays (PROTOCOL §12): register now (any `token` in the body is ignored: Velora tokens never go to an instance)
-  app.post('/api/v1/instance/velora/register', { admin: true }, async () => {
+  // Nookara relays (PROTOCOL §12): register now (any `token` in the body is ignored: Nookara tokens never go to an instance)
+  for (const p of ['/api/v1/instance/nookara/register', LEGACY_ROUTES.registerNookara]) app.post(p, { admin: true }, async () => {
     await require('../relay/client').registerNow();
     return settingsView();
   });
-  // the owner's signed proof of ownership; they present it to Velora themselves (POST VELORA/bonfire/instances/payout)
+  // the owner's signed proof of ownership; they present it to Nookara themselves (POST to its instances/payout route)
   app.get('/api/v1/instance/owner-attestation', { owner: true }, () => {
     const owner = auth.ownerRow(), rc = require('../relay/client');
-    if (!owner?.velora_id || owner.kind !== 'velora') throw err('owner_not_velora', 400);
+    if (!owner?.nookara_id || owner.kind !== KIND_NOOKARA) throw err(ERR.ownerNotNookara, 400);
     if (!rc.registered()) throw err('not_registered', 409);
-    return { attestation: rc.ownerAttestation(owner.velora_id), instance_id: rc.identity().instance_id };
+    return { attestation: rc.ownerAttestation(owner.nookara_id), instance_id: rc.identity().instance_id };
   });
-  app.post('/api/v1/import/velora', req => require('../relay/import').importFromVelora(req.user, req.body?.ticket));
+  for (const p of ['/api/v1/import/nookara', LEGACY_ROUTES.importNookara]) app.post(p, req => require('../relay/import').importFromNookara(req.user, req.body?.ticket));
   app.post('/api/v1/instance/restart', { admin: true }, (req, res) => {
     log(`[instance] restart requested by ${req.user.principal}`);
     res.writeHead(202, { 'Content-Type': 'application/json' });

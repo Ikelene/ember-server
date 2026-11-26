@@ -8,6 +8,7 @@
 // (the bot holds no keys). Loop prevention: the bot's own events are never taken back in. Edits, deletes and replies are
 // mirrored through the same bridge_msgs id map the Discord / Fluxer bridge uses.
 // The homeserver address is typed by an admin: only public addresses are ever connected to (checked on every connection).
+const { env } = require('../compat');
 const http = require('http');
 const https = require('https');
 const dns = require('dns');
@@ -25,7 +26,7 @@ const { err, now, clean, normalizeOrigin, log } = require('../util');
 const M = () => require('../messages');
 const B = () => require('./bridge');
 const P = 'matrix';
-const UA = 'Bonfire-Bridge/1.0 (+https://github.com/Ikelene/ember-server)';
+const UA = 'Ember-Bridge/1.0 (+https://github.com/Ikelene/ember-server)';
 const ZW = String.fromCharCode(0x200b);
 const V3 = '/_matrix/client/v3';
 const sleep = ms => new Promise(r => { const t = setTimeout(r, ms); t.unref?.(); });
@@ -34,15 +35,15 @@ const origin = () => normalizeOrigin(config.publicUrl());
 
 // ---------------------------------------------------------------- settings: homeserver + access token (write-only)
 const homeserver = () => store.setting('matrix.homeserver') || cleanEnvHomeserver() || '';
-const tokenOf = () => store.setting('matrix.token') || process.env.BONFIRE_MATRIX_TOKEN || '';
-const tokenSource = () => (store.setting('matrix.token') ? 'settings' : process.env.BONFIRE_MATRIX_TOKEN ? 'env' : null);
+const tokenOf = () => store.setting('matrix.token') || env('MATRIX_TOKEN') || '';
+const tokenSource = () => (store.setting('matrix.token') ? 'settings' : env('MATRIX_TOKEN') ? 'env' : null);
 const botId = () => store.setting('matrix.user_id') || null;
 const configured = () => !!(homeserver() && tokenOf());
-function cleanEnvHomeserver() { try { return process.env.BONFIRE_MATRIX_HOMESERVER ? cleanHomeserver(process.env.BONFIRE_MATRIX_HOMESERVER) : ''; } catch { return ''; } }
+function cleanEnvHomeserver() { try { return env('MATRIX_HOMESERVER') ? cleanHomeserver(env('MATRIX_HOMESERVER')) : ''; } catch { return ''; } }
 
 // development / tests: a homeserver on this machine or the LAN
 let allowLocal = false;
-const local = () => allowLocal || process.env.BONFIRE_DEV === '1';
+const local = () => allowLocal || env('DEV') === '1';
 // "matrix.org" / "https://matrix.example.org/" -> "https://matrix.example.org" (https only, no user:pass@, a public host)
 function cleanHomeserver(raw) {
   const bad = () => err('invalid_homeserver', 400, { platform: P });

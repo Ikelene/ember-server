@@ -21,12 +21,12 @@ test('CLI rejects malformed commands and unsafe avatar URLs', () => {
 
 test('CLI lifecycle: WAL-safe backup, hashed tokens, quiet membership, roles, REST and gateway authentication', async () => {
   const dir = tmpDir();
-  process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-  process.env.BONFIRE_OWNER = 'v:1';
+  process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+  process.env.EMBER_OWNER = 'v:1';
   const inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' });
   let ws;
   const cli = async (...args) => {
-    const r = await execFile(process.execPath, [path.resolve(__dirname, '../src/cli.js'), 'bot', ...args], { env: { ...process.env, BONFIRE_DATA: dir } });
+    const r = await execFile(process.execPath, [path.resolve(__dirname, '../src/cli.js'), 'bot', ...args], { env: { ...process.env, EMBER_DATA: dir } });
     assert.match(r.stderr, /Database backup:/);
     return JSON.parse(r.stdout);
   };

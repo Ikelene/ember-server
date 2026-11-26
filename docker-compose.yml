@@ -1,19 +1,20 @@
 services:
-  bonfire:
+  ember:
     build: .
-    image: bonfire-server
+    image: ember-server
     restart: unless-stopped   # required: the admin "restart" button exits with code 75 and relies on this
     ports:
       - "4100:4100"
     volumes:
-      - ./data:/data          # database, uploads, config.json, setup-code.txt
+      - ./data:/data          # database, uploads, config.json, setup-code.txt (an old bonfire.db here is renamed to ember.db on boot)
     environment:
-      # the public https origin people (and Velora) reach this instance at; it is the JWT audience
-      BONFIRE_PUBLIC_URL: "http://localhost:4100"
-      # local = accounts live on this instance; velora = sign in with a Nookara account
+      # the public https origin people (and Nookara) reach this instance at; it is the JWT audience
+      EMBER_PUBLIC_URL: "http://localhost:4100"
+      # local = accounts live on this instance; nookara = sign in with a Nookara account
       # left unset, the admin panel decides (default local); setting it locks the choice there
-      # BONFIRE_ACCOUNTS_MODE: "local"
-      # BONFIRE_VELORA_URL: "https://nookara.cc"
-      # BONFIRE_OWNER: "v:123"        # pre-claim for a Velora user instead of using the setup code
-      # EMBER_ACCEPT_OPERATOR_TERMS: "1"   # you accept the Ember Server Operator Terms (https://nookara.cc/operator-terms); needed for BONFIRE_OWNER setups
-      # BONFIRE_TRUST_PROXY: "1"      # behind a reverse proxy: use X-Forwarded-For for rate limits
+      # EMBER_ACCOUNTS_MODE: "local"
+      # EMBER_NOOKARA_URL: "https://nookara.cc"
+      # EMBER_OWNER: "v:123"        # pre-claim for a Nookara user instead of using the setup code
+      # EMBER_ACCEPT_OPERATOR_TERMS: "1"   # you accept the Ember Server Operator Terms (https://nookara.cc/operator-terms); needed for EMBER_OWNER setups
+      # EMBER_TRUST_PROXY: "1"      # behind a reverse proxy: use X-Forwarded-For for rate limits
+      # the old BONFIRE_* / BONFIRE_VELORA_* names still work (a warning is logged once)

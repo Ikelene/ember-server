@@ -6,8 +6,8 @@ const fs = require('fs');
 const WebSocket = require('ws');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const { startServer } = require('../src/index');
 const voice = require('../src/voice');
 

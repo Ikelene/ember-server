@@ -1,10 +1,11 @@
 'use strict';
-// Message signing (PROTOCOL §8): canonical JSON, payload build, verification against Velora device keys.
+// Message signing (PROTOCOL §8): canonical JSON, payload build, verification against Nookara device keys.
+const { LEGACY_NOOKARA_ORIGINS, SIGN_CONTEXT, NOOKARA_PATHS } = require('./compat');
 const crypto = require('crypto');
 const config = require('./config');
-const { fromB64url, normalizeOrigin, canonVelora } = require('./util');
+const { fromB64url, normalizeOrigin, canonNookara } = require('./util');
 
-const PREFIX = 'bonfire-msg-v1\n';
+const PREFIX = SIGN_CONTEXT.message;
 const KEY_TTL = 10 * 60 * 1000;
 const SKEW = 5 * 60 * 1000;
 
@@ -40,7 +41,7 @@ const signingBytes = payload => Buffer.from(PREFIX + canonical(payload), 'utf8')
 
 // ---- key lookup (injectable for tests) ----
 const defaultFetchKey = async kid => {
-  const url = `${config.get().velora_url}/bonfire/keys/kid/${encodeURIComponent(kid)}`;
+  const url = `${config.get().nookara_url}${NOOKARA_PATHS.keys}${encodeURIComponent(kid)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error('key lookup ' + r.status);
@@ -66,13 +67,13 @@ function publicKeyOf(b64) {
 }
 
 // -> { ok: true } | { ok: false, reason }
-async function verify({ payload, signature, veloraId, now = Date.now() }) {
+async function verify({ payload, signature, nookaraId, now = Date.now() }) {
   if (!signature || typeof signature !== 'object' || typeof signature.kid !== 'string' || typeof signature.sig !== 'string') return { ok: false, reason: 'malformed' };
   if (Number(signature.ts) !== payload.ts || String(signature.nonce) !== payload.nonce) return { ok: false, reason: 'mismatch' };
   if (!Number.isFinite(payload.ts) || Math.abs(payload.ts - now) > SKEW) return { ok: false, reason: 'timestamp' };
   const key = await lookupKey(signature.kid, now);
   if (!key) return { ok: false, reason: key === undefined ? 'key_unavailable' : 'unknown_key' };
-  if (String(key.user_id) !== String(veloraId)) return { ok: false, reason: 'wrong_user' };
+  if (String(key.user_id) !== String(nookaraId)) return { ok: false, reason: 'wrong_user' };
   if (key.revoked_at != null && Number(key.revoked_at) < payload.ts) return { ok: false, reason: 'revoked' };
   const pub = publicKeyOf(key.public_key);
   if (!pub) return { ok: false, reason: 'bad_key' };
@@ -83,11 +84,11 @@ async function verify({ payload, signature, veloraId, now = Date.now() }) {
   return ok ? { ok: true } : { ok: false, reason: 'bad_signature' };
 }
 
-// the "iss" values a signed message may carry, preferred first (discovery lists them as velora.signing_issuers).
-// On any Nookara address: https://nookara.cc, and Velora's original https://velora.ikelene.net, which every client signed
-// with until clients learned this list (and older app builds still do). Anyone else: their velora_url.
-const NOOKARA_ISS = ['https://nookara.cc', 'https://velora.ikelene.net'];
-const issuers = () => (canonVelora(config.get().velora_url) === 'https://nookara.cc' ? NOOKARA_ISS : [normalizeOrigin(config.get().velora_url)]);
+// the "iss" values a signed message may carry, preferred first (discovery lists them as nookara.signing_issuers).
+// On any Nookara address: https://nookara.cc, and its original address (compat LEGACY_NOOKARA_ORIGINS), which every client signed
+// with until clients learned this list (and older app builds still do). Anyone else: their nookara_url.
+const NOOKARA_ISS = ['https://nookara.cc', LEGACY_NOOKARA_ORIGINS[0]];
+const issuers = () => (canonNookara(config.get().nookara_url) === 'https://nookara.cc' ? NOOKARA_ISS : [normalizeOrigin(config.get().nookara_url)]);
 const issuer = () => issuers()[0];
 
 module.exports = { canonical, buildPayload, attachmentRefs, signingBytes, verify, setKeyFetcher, issuer, issuers, PREFIX };

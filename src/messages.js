@@ -1,5 +1,6 @@
 'use strict';
 // Messages: post / edit / delete / reactions / pins / read state / search, plus signature handling (PROTOCOL §8).
+const { KIND_NOOKARA, NOOKARA_ID_FIELD, APP_UA } = require('./compat');
 const config = require('./config');
 const db = require('./db');
 const auth = require('./auth');
@@ -21,10 +22,10 @@ const KLIPY = /^https:\/\/([a-z0-9-]+\.)*klipy\.com\//i;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 // ---------- views ----------
-const SELECT_MSG = `SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.username AS u_username, u.display_name AS u_dn, u.pfp AS u_pfp, u.velora_id AS u_vid,
+const SELECT_MSG = `SELECT m.*, u.principal AS u_principal, u.kind AS u_kind, u.username AS u_username, u.display_name AS u_dn, u.pfp AS u_pfp, u.nookara_id AS u_vid,
   su.username AS subject_username, su.principal AS subject_principal,
   r.id AS r_id, r.body AS r_body, r.system AS r_system, r.user_id AS r_user_id, r.author_name AS r_author_name, r.subject_user_id AS r_subject_user_id, r.subject_parts AS r_subject_parts, r.alias_name AS r_alias_name, r.alias_avatar AS r_alias_avatar,
-  ru.principal AS r_principal, ru.kind AS r_kind, ru.username AS r_username, ru.display_name AS r_dn, ru.pfp AS r_pfp, ru.velora_id AS r_vid, rsu.username AS r_subject_username, rsu.principal AS r_subject_principal
+  ru.principal AS r_principal, ru.kind AS r_kind, ru.username AS r_username, ru.display_name AS r_dn, ru.pfp AS r_pfp, ru.nookara_id AS r_vid, rsu.username AS r_subject_username, rsu.principal AS r_subject_principal
   FROM messages m LEFT JOIN users u ON u.id = m.user_id
   LEFT JOIN messages r ON r.id = m.reply_to LEFT JOIN users ru ON ru.id = r.user_id
   LEFT JOIN users su ON su.id = m.subject_user_id LEFT JOIN users rsu ON rsu.id = r.subject_user_id`;
@@ -44,11 +45,11 @@ function identityView(subjectId, subjectParts, subjectName, subjectPrincipal, fa
   if (subjectId != null && parts) return { body: parts.map(p => (p === null ? (subjectName ? '@' + subjectName : 'Deleted account') : p)).join(''), subject: { id: subjectPrincipal, username: subjectName || null }, body_parts: parts };
   return { body: fallback };
 }
-const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, velora_id: vid || null, ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
+const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, [NOOKARA_ID_FIELD]: vid || null, ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
 // the same person with their nickname on snap's server (display_name = the nick, global_display_name = their own name)
 const nicked = (p, snap, userId) => { const n = p && userId != null && snap?.nick ? snap.nick(userId) : null; return n ? { ...p, display_name: n, global_display_name: p.display_name, nick: n } : p; };
 // webhook / bridged posts: a name and picture, no account
-const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, velora_id: null, name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
+const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, [NOOKARA_ID_FIELD]: null, name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
 // author.bridge_from (where a bridged post was relayed from: a Velocity backend, "Discord" via CloudLink...) lives in bridge/store.js
 const bridgeFrom = id => { try { return require('./bridge/store').fromOf(id); } catch { return null; } };
 // alias: a bot posting under another name and picture ({ name, avatar_url }). author stays the real bot everywhere
@@ -66,7 +67,7 @@ function unmarkedOn(snap) {
 }
 // the one member of snap's server the alias name points at, or null (none, or ambiguous). Only ever this server's members.
 function aliasMember(snap, name) {
-  if (!snap._aliasMembers) snap._aliasMembers = db.all('SELECT u.id, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM members mb JOIN users u ON u.id = mb.user_id WHERE mb.community_id = ?', snap.c.id);
+  if (!snap._aliasMembers) snap._aliasMembers = db.all('SELECT u.id, u.principal, u.kind, u.username, u.display_name, u.pfp, u.nookara_id FROM members mb JOIN users u ON u.id = mb.user_id WHERE mb.community_id = ?', snap.c.id);
   const n = aliasKeyOf(name);
   if (!n) return null;
   const byName = snap._aliasMembers.filter(u => aliasKeyOf(u.username) === n);
@@ -83,7 +84,7 @@ function aliasView(name, avatar, { snap, userId, kind, channelId } = {}) {
   if (!snap.isMember(userId) || !snap.can(userId, P.UNMARKED_ALIASES)) return out;
   out.unmarked = true;
   const m = aliasMember(snap, name);
-  if (m) { out.member_id = m.principal; out.member = nicked(person(m.principal, m.kind, m.username, m.display_name, m.pfp, m.velora_id), snap, m.id); }
+  if (m) { out.member_id = m.principal; out.member = nicked(person(m.principal, m.kind, m.username, m.display_name, m.pfp, m.nookara_id), snap, m.id); }
   return out;
 }
 const ALIAS_MAX = 32, ALIAS_AVATAR_MAX = 500;
@@ -116,10 +117,10 @@ function messageView(r, snap) {
   const author = r.system ? null
     : r.u_principal ? nicked(person(r.u_principal, r.u_kind, r.u_username, r.u_dn, r.u_pfp, r.u_vid), snap, r.user_id)
     : (r.webhook_id || r.bridge) ? outsider(r.author_name || 'Webhook', r.author_avatar, r.bridge, r.bridge ? bridgeFrom(r.id) : null)
-    : r.author_name ? { id: null, kind: null, username: r.author_name, display_name: r.author_name, pfp: r.author_avatar || null, velora_id: null, name_only: true } : null;
+    : r.author_name ? { id: null, kind: null, username: r.author_name, display_name: r.author_name, pfp: r.author_avatar || null, [NOOKARA_ID_FIELD]: null, name_only: true } : null;
   const replyAuthor = r.r_system ? null
     : r.r_principal ? nicked(person(r.r_principal, r.r_kind, r.r_username, r.r_dn, r.r_pfp, r.r_vid), snap, r.r_user_id)
-    : r.r_author_name ? { id: null, kind: null, username: r.r_author_name, display_name: r.r_author_name, pfp: null, velora_id: null, name_only: true } : null;
+    : r.r_author_name ? { id: null, kind: null, username: r.r_author_name, display_name: r.r_author_name, pfp: null, [NOOKARA_ID_FIELD]: null, name_only: true } : null;
   const rid = id => snap.roles.find(x => x.id === Number(id))?.rid;
   const rep = r.r_id ? identityView(r.r_subject_user_id, r.r_subject_parts, r.r_subject_username, r.r_subject_principal, r.r_body || '') : null;
   return {
@@ -177,7 +178,7 @@ function reactionsFor(ids) {
 const REACTORS_MAX = 1000;
 function reactors(id, me) {
   const { r, snap } = messageCtx(id, me);
-  const rows = db.raw().prepare('SELECT r.emoji, u.id AS uid, u.principal, u.kind, u.username, u.display_name, u.pfp, u.velora_id FROM reactions r JOIN users u ON u.id = r.user_id WHERE r.message_id = ? ORDER BY r.created_at, r.rowid').all(r.id);
+  const rows = db.raw().prepare('SELECT r.emoji, u.id AS uid, u.principal, u.kind, u.username, u.display_name, u.pfp, u.nookara_id FROM reactions r JOIN users u ON u.id = r.user_id WHERE r.message_id = ? ORDER BY r.created_at, r.rowid').all(r.id);
   const emojiIds = [...new Set(rows.map(x => customReaction(x.emoji)).filter(Boolean))];
   const emojis = new Map(emojiIds.length ? db.all(`SELECT * FROM emojis WHERE eid IN (${db.inList(emojiIds)})`, ...emojiIds).map(e => [e.eid, e]) : []);
   const out = [], seen = new Set();
@@ -188,7 +189,7 @@ function reactors(id, me) {
     let e = out.find(y => y.emoji === key);
     if (!e) { e = { emoji: key, ...reactionImage(x.emoji, emojis), count: 0, users: [] }; out.push(e); }
     e.count++;
-    if (e.users.length < REACTORS_MAX) e.users.push(nicked(person(x.principal, x.kind, x.username, x.display_name, x.pfp, x.velora_id), snap, x.uid));
+    if (e.users.length < REACTORS_MAX) e.users.push(nicked(person(x.principal, x.kind, x.username, x.display_name, x.pfp, x.nookara_id), snap, x.uid));
   }
   return { reactions: out };
 }
@@ -234,9 +235,9 @@ function cleanAttachments(list) {
 // ---------- signing ----------
 // -> signature row fields to store, or null when unsigned. Throws API errors.
 async function checkSignature({ me, c, ch, signature, scopes, body, attachments, replyTo, editOf, sticker = null, system = false }) {
-  const velora = me && me.kind === 'velora';
+  const nookara = me && me.kind === KIND_NOOKARA;
   if (!signature) return null; // signing is optional, never required
-  if (config.mode() !== 'velora' || !velora) throw err('signing_unavailable', 400);
+  if (config.mode() !== 'nookara' || !nookara) throw err('signing_unavailable', 400);
   if (!scopes?.includes('sign')) throw err('insufficient_scope', 403);
   let hashes;
   try { hashes = signing.attachmentRefs(attachments); } catch { throw err('bad_signature', 400); }
@@ -244,10 +245,10 @@ async function checkSignature({ me, c, ch, signature, scopes, body, attachments,
   let res = null;
   for (const iss of signing.issuers()) {
     const payload = signing.buildPayload({
-      iss, instance: normalizeOrigin(config.publicUrl()), community: c.sid, channel: ch.cid, author: me.velora_id,
+      iss, instance: normalizeOrigin(config.publicUrl()), community: c.sid, channel: ch.cid, author: me.nookara_id,
       ts: signature.ts, nonce: signature.nonce, body, attachments: hashes, reply_to: replyTo, edit_of: editOf, sticker,
     });
-    res = await signing.verify({ payload, signature, veloraId: me.velora_id });
+    res = await signing.verify({ payload, signature, nookaraId: me.nookara_id });
     if (res.ok || res.reason !== 'bad_signature') break; // only a signature over different bytes is worth another issuer
   }
   if (!res.ok) throw err('bad_signature', 400, { reason: res.reason });
@@ -456,14 +457,14 @@ function react(id, me, emojiRaw, on) {
 
 // ---------- which client a message was sent from (everyone who can see the message) ----------
 // Stored with the message as { url, kind? }: url = the Origin of the request (never an IP address), kind = 'desktop' /
-// 'android' when the official Ember apps' User-Agent marker (BonfireDesktop/, BonfireAndroid/) says so. Ember turns it
-// into a name with Velora's official clients list (GET /api/clients/official, matched by url host + kind).
+// 'android' when the official Ember apps' User-Agent marker (EmberDesktop/, EmberAndroid/) says so. Ember turns it
+// into a name with Nookara's official clients list (GET /api/clients/official, matched by url host + kind).
 // Every member who gets the message gets it too (chat_message / chat_message_update, history, search, pins), as
 // { url, kind?, app? } only: the token's name and icon stay in the database (clients name an app from Nookara's registry).
 // messageView never carries it, so bots, bridges and exports see nothing.
-const appKind = ua => (/\bBonfireDesktop\//.test(String(ua || '')) ? 'desktop' : /\bBonfireAndroid\//.test(String(ua || '')) ? 'android' : null);
+const appKind = ua => (APP_UA.desktop.test(String(ua || '')) ? 'desktop' : APP_UA.android.test(String(ua || '')) ? 'android' : null);
 // app: the registered Nookara app the session signed in through (auth.js appClaim): { app: id, token: name, icon }, the same
-// fields Velora's own messages carry for an app, so Ember names it the same way
+// fields Nookara's own messages carry for an app, so Ember names it the same way
 const viaOf = (origin, ua, app = null) => {
   const url = origin ? normalizeOrigin(origin) : null;
   if (!url || /^https?:\/\/([\d.]+|\[.*\])(:|$)/.test(url)) return null;

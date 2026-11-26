@@ -1,6 +1,6 @@
 'use strict';
 // Community features beyond core chat: roles shop, starboard, webhook management, soundboard, link previews, bot management,
-// emoji info, YouTube player. Same paths and shapes as Velora's routes/chat.js under /api/v1 (PROTOCOL §6).
+// emoji info, YouTube player. Same paths and shapes as Nookara's routes/chat.js under /api/v1 (PROTOCOL §6).
 const C = require('../communities');
 const uploads = require('../uploads');
 const starboard = require('../starboard');
@@ -23,7 +23,7 @@ function register(app) {
   app.get(v1('/link-info/:sid/:cid'), req => C.linkInfo(req.params.sid, req.params.cid, req.user));
 
   // ---- roles shop ----
-  // priced roles are paid through Velora (relay/shop.js, PROTOCOL §6.1 / §12.5)
+  // priced roles are paid through Nookara (relay/shop.js, PROTOCOL §6.1 / §12.5)
   const shop = require('../relay/shop');
   app.get(v1('/channels/:cid/shop'), req => shop.shopView(req.params.cid, req.user));
   app.post(v1('/channels/:cid/shop/:rid'), req => shop.buy(req.params.cid, req.user, req.params.rid, req.body || {}));
@@ -66,7 +66,7 @@ function register(app) {
   // ---- bot accounts: managed by people with Manage server (and instance admins) ----
   app.get(v1('/bots'), req => bots.mine(req.user));
   app.post(v1('/bots'), req => bots.create(req.user, req.body));
-  // bot gallery: add a bot Velora approved (or the person owns) with the ticket Velora handed them: POST { ticket, sid } (PROTOCOL §14.1)
+  // bot gallery: add a bot Nookara approved (or the person owns) with the ticket Nookara handed them: POST { ticket, sid } (PROTOCOL §14.1)
   app.post(v1('/bots/gallery/add'), async req => { scope(req, 'chat'); return require('../relay/gallery').add(req.user, req.body || {}); });
   app.get(v1('/bots/by-name/:username'), req => bots.info(req.user, req.params.username));
   app.post(v1('/bots/by-name/:username/add'), req => { bots.addToServer(req.user, req.params.username, String(req.body?.sid || '')); });

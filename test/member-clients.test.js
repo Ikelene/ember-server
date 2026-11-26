@@ -8,8 +8,8 @@ const { startServer } = require('../src/index');
 const CL = require('../src/clients');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 const sockets = [];
 let inst, base, alice, bob, carol, sid, role, wsB;

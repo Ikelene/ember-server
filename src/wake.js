@@ -2,9 +2,10 @@
 // Sleep mode (PROTOCOL §7.2). A client that lets this server's socket go to save data (Ember's sleep mode) signs up first:
 // POST /api/v1/wake, renewed every few minutes (a sign-up lasts TTL). While it's fresh:
 //   - the person still counts as connected here (member lists, chat_presence), so sleeping doesn't look like leaving
-//   - the first new message they can see sends one "activity" ping for them through Velora (§12.12); their client marks the server
+//   - the first new message they can see sends one "activity" ping for them through Nookara (§12.12); their client marks the server
 //     unread and connects when they open it. One ping per sign-up: nothing more until they connect again.
-// Connecting again ends the sign-up (gateway), so does DELETE /api/v1/wake. Velora principals only (the ping goes through Velora).
+// Connecting again ends the sign-up (gateway), so does DELETE /api/v1/wake. Nookara principals only (the ping goes through Nookara).
+const { ERR, relayPath } = require('./compat');
 const auth = require('./auth');
 
 const TTL = 5 * 60e3;
@@ -17,7 +18,7 @@ function subscribe(user) {
   const live = !!had && had.until > Date.now();
   subs.set(id, { until: Date.now() + TTL, pinged: live && had.pinged });
   if (!live) G().peopleChanged(id); // (new, or one that had run out but wasn't swept yet)
-  return { ok: true, ttl_ms: TTL, pings: !!user.velora_id && available() };
+  return { ok: true, ttl_ms: TTL, pings: !!user.nookara_id && available() };
 }
 function end(userId) {
   if (subs.delete(Number(userId))) G().peopleChanged(Number(userId));
@@ -35,21 +36,21 @@ function onMessage(communityId, msg) {
   for (const [uid, s] of subs) {
     if (s.pinged || s.until <= now || G().isOnline(uid) || !snap.isMember(uid) || !snap.canView(ch, uid)) continue; // (connected: they see it anyway)
     const u = auth.userById(uid);
-    if (!u?.velora_id || String(msg.author?.id) === String(u.principal)) continue;
+    if (!u?.nookara_id || String(msg.author?.id) === String(u.principal)) continue;
     s.pinged = true;
     marked.push(uid);
-    ids.push(String(u.velora_id));
+    ids.push(String(u.nookara_id));
   }
   if (!ids.length) return;
-  // only the people Velora actually reached count as pinged: anyone whose Ember wasn't reachable just then gets the next message's ping
+  // only the people Nookara actually reached count as pinged: anyone whose Ember wasn't reachable just then gets the next message's ping
   const unmark = uids => { for (const uid of uids) { const s = subs.get(uid); if (s) s.pinged = false; } };
-  require('./relay/client').call('POST', '/bonfire/relay/wake', { user_ids: ids }).then(r => {
-    if (!Array.isArray(r?.delivered_ids)) return; // (an older Velora: trust it)
+  require('./relay/client').call('POST', relayPath('/wake'), { user_ids: ids }).then(r => {
+    if (!Array.isArray(r?.delivered_ids)) return; // (an older Nookara: trust it)
     const got = new Set(r.delivered_ids.map(String));
     unmark(marked.filter((uid, i) => !got.has(ids[i])));
   }).catch(e => {
     unmark(marked);
-    if (e.status !== 429 && e.code !== 'velora_unreachable') console.error('[wake] relay', e.code || e.message);
+    if (e.status !== 429 && e.code !== ERR.unreachable) console.error('[wake] relay', e.code || e.message);
   });
 }
 

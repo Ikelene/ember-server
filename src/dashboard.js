@@ -1,6 +1,7 @@
 'use strict';
 // Server settings > Dashboard: members / bans / messages / disk at a glance, the server's health, where the storage goes and
 // which channels hold the conversation. GET /api/v1/servers/:sid/dashboard (Manage server). Cached for 30 s: it adds up tables.
+const { DB_FILE } = require('./compat');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -46,7 +47,7 @@ function view(c) {
   if (hit && Date.now() - hit.at < 30000) return hit.v;
   const n = (sql, ...p) => Number(db.get(sql, ...p)?.n || 0);
   const dir = config.dir();
-  const dbTotal = ['bonfire.db', 'bonfire.db-wal', 'bonfire.db-shm'].reduce((t, f) => t + size(path.join(dir, f)), 0);
+  const dbTotal = [DB_FILE, DB_FILE + '-wal', DB_FILE + '-shm'].reduce((t, f) => t + size(path.join(dir, f)), 0);
   const tables = tableBytes();
   const groups = { messages: 0, uploads: 0, members: 0, roles: 0, media: 0, previews: 0, moderation: 0, backups: 0, config: 0, other: 0 };
   let counted = 0;

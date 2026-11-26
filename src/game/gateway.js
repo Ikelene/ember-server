@@ -1,8 +1,9 @@
 'use strict';
-// Ember Link game gateway: ws(s)://INSTANCE/game-gateway?v=1 (ported from Velora's game-gateway.js; PROTOCOL §18).
+// Ember Link game gateway: ws(s)://INSTANCE/game-gateway?v=1 (ported from Nookara's game-gateway.js; PROTOCOL §18).
 // One outbound socket per Minecraft "root" (a Velocity proxy, or a standalone Paper / Fabric server). The plugin is pointed
-// at this instance with the console command `bonfire server <url>`.
+// at this instance with the console command `ember server <url>`.
 // Handshake = Ed25519 identity (trust on first use), then status / chat / events / console over JSON frames { op, d, id? }.
+const { SIGN_CONTEXT, env, GAME_CMD } = require('../compat');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const db = require('../db');
@@ -50,7 +51,7 @@ function ipSalt() {
 }
 const hashIp = ip => crypto.createHash('sha256').update(`${ipSalt()}|${ip}`).digest('hex');
 function realIp(req) {
-  if (process.env.BONFIRE_TRUST_PROXY === '1') { const x = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim(); if (x) return x; }
+  if (env('TRUST_PROXY') === '1') { const x = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim(); if (x) return x; }
   return String(req.socket?.remoteAddress || '');
 }
 function frame(sock, op, d, id) {
@@ -155,7 +156,7 @@ function createClaim({ c, user, cid, hint }) {
     for (let i = 0; i < 8; i++) { code = CROCK[Number(n & 31n)] + code; n >>= 5n; }
   } while (claims.has(code));
   claims.set(code, { code, communityId: c.id, sid: c.sid, userId: Number(user.id), username: user.username, cid: cid || null, hintIid: hint || null, exp: now() + 10 * 60 * 1000, state: 'pending', iid: null });
-  return { code: showCode(code), command: `bonfire link ${showCode(code)}`, expires_at: claims.get(code).exp };
+  return { code: showCode(code), command: `${GAME_CMD} link ${showCode(code)}`, expires_at: claims.get(code).exp };
 }
 function claimState(code, user) {
   const c = claims.get(normCode(code));
@@ -213,7 +214,7 @@ function afterLink(s, res, who, claimCode) {
   pushConfig(s.iid);
   G.broadcastStatus(s.iid);
 }
-// the new flow: `bonfire server <url>` connects the plugin here, it shows up as connected + unclaimed, an admin picks it
+// the new flow: `ember server <url>` connects the plugin here, it shows up as connected + unclaimed, an admin picks it
 function linkConnected(c, user, iid, cid) {
   const s = sessions.get(String(iid || ''));
   if (!s || !s.ready || !s.inst) throw Object.assign(new Error('not_connected'), { code: 'not_connected', status: 404 });
@@ -249,7 +250,7 @@ function linkFrom(s, d, id) {
 async function exec(iid, command, user, communityId) {
   const s = sessions.get(iid);
   const auditId = G.audit(communityId, iid, user.id, 'command', command, 'sent', null);
-  const line = addLine(iid, { kind: 'command', source: 'bonfire', by: user.username, pfp: user.pfp || undefined, command, status: 'sent' });
+  const line = addLine(iid, { kind: 'command', source: GAME_CMD, by: user.username, pfp: user.pfp || undefined, command, status: 'sent' });
   G.broadcastConsole(iid, [line]);
   const finish = (status, output, extra) => {
     const l = updateLine(iid, line.seq, { status });
@@ -331,7 +332,7 @@ function identify(s, d) {
   } catch { close(s.sock, 4003, 'bad key'); return; }
   const id = G.identityOf(der);
   let ok = false;
-  try { ok = crypto.verify(null, Buffer.from(`bonfire-gw-v1|${s.nonce}|${id.iid}`, 'utf8'), key, Buffer.from(String(d.sig || ''), 'base64')); } catch { ok = false; }
+  try { ok = crypto.verify(null, Buffer.from(`${SIGN_CONTEXT.game}|${s.nonce}|${id.iid}`, 'utf8'), key, Buffer.from(String(d.sig || ''), 'base64')); } catch { ok = false; }
   if (!ok) { close(s.sock, 4003, 'bad signature'); return; }
   const pub = der.toString('base64');
   let inst = G.instanceRow(id.iid);
@@ -466,7 +467,7 @@ function handle(s, op, d, id) {
   }
 }
 
-// the server icon: a PNG (<= 48 KB, <= 1024 px). Velora resizes it to 64x64; without an image library we keep it as sent.
+// the server icon: a PNG (<= 48 KB, <= 1024 px). Nookara resizes it to 64x64; without an image library we keep it as sent.
 function saveIcon(s, d) {
   const fail = () => { db.run('UPDATE game_instances SET icon_url = NULL, icon_sha256 = NULL WHERE iid = ?', s.iid); s.inst.icon_url = null; s.inst.icon_sha256 = null; };
   try {

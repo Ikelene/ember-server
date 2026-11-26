@@ -1,6 +1,6 @@
 'use strict';
 // Communities: snapshot-based permission checks, views, servers, members, invites, join requests, channels, roles, emojis,
-// per-user settings. Response shapes follow Velora's chat.js (PROTOCOL §6).
+// per-user settings. Response shapes follow Nookara's chat.js (PROTOCOL §6).
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
@@ -102,7 +102,7 @@ const userByPrincipalOrThrow = p => { const u = auth.userByPrincipal(decodeURICo
 const memberCount = id => db.get('SELECT COUNT(*) AS n FROM members WHERE community_id = ?', id).n;
 // the plan's member cap (managed instances, PROTOCOL §19) counts people, not bots; the owner and instance admins can always join
 const humanCount = id => db.get("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND u.kind <> 'bot'", id).n;
-// Server settings > Joining > Member limit (people, not bots); on a Velora-hosted server the plan's cap is the most it can be
+// Server settings > Joining > Member limit (people, not bots); on a Nookara-hosted server the plan's cap is the most it can be
 const memberLimit = c => S().get(c).join.max_members;
 const assertRoomToJoin = (c, user) => {
   const free = user.kind === 'bot' || auth.isAdmin(user) || Number(c.owner_id) === Number(user.id);
@@ -143,7 +143,7 @@ function serverView(c, snap, me) {
     ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id), unmarked_aliases: !!S().get(c).advanced?.unmarked_aliases } : {}),
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
     invite: role ? c.invite_code : undefined, // every member can invite people
-    join_policy: c.join_policy, allow_signing: config.mode() === 'velora', // signing: always allowed in velora mode, never required
+    join_policy: c.join_policy, allow_signing: config.mode() === 'nookara', // signing: always allowed in nookara mode, never required
     upload_ceiling_mb: uploadCeiling(), ...(me ? { my_upload_max_mb: effectiveUploadMax(c, snap, me) } : {}),
     allow_uploads: !!c.allow_uploads, upload_max_mb: Math.min(validUploadMax(c.upload_max_mb) ?? uploadCeiling(), uploadCeiling()), listed: !!c.listed, instance: instanceOrigin(),
   };
@@ -290,7 +290,7 @@ function mirrorToConfig(c) {
   if (v.name !== c.name) patch.name = c.name;
   if (v.description !== c.description) patch.description = c.description;
   if ((v.icon_url || null) !== (c.icon_url || null)) patch.icon_url = c.icon_url || null;
-  if (!!v.listed !== !!c.listed) patch.listed = !!c.listed; // the Velora directory toggle (relay/directory.js)
+  if (!!v.listed !== !!c.listed) patch.listed = !!c.listed; // the Nookara directory toggle (relay/directory.js)
   if (Object.keys(patch).length) config.update(patch);
 }
 // config.json -> community (boot, hand edits, PATCH /instance/settings)
@@ -1031,7 +1031,7 @@ function linkInfo(sid, cid, me) {
   return { server, channel: open ? chView : null, joined: false };
 }
 
-// ---------- roles shop (self-assign roles; priced ones are paid through Velora, see relay/shop.js) ----------
+// ---------- roles shop (self-assign roles; priced ones are paid through Nookara, see relay/shop.js) ----------
 function shopChannel(cid, me) {
   const r = findChannel(cid, me);
   if (r.ch.type !== 'roles') throw err('not_a_shop');
@@ -1040,7 +1040,7 @@ function shopChannel(cid, me) {
 function shopView(cid, me) {
   const { ch, snap } = shopChannel(cid, me);
   const mine = snap.roleIds(me.id);
-  const bought = new Set(db.all('SELECT role_id FROM role_purchases WHERE community_id = ? AND user_id = ?', snap.c.id, me.id).map(b => b.role_id)); // paid through Velora (relay/shop.js)
+  const bought = new Set(db.all('SELECT role_id FROM role_purchases WHERE community_id = ? AND user_id = ?', snap.c.id, me.id).map(b => b.role_id)); // paid through Nookara (relay/shop.js)
   const items = (cfgOf(ch).items || []).map(it => {
     const r = snap.roles.find(x => x.rid === it.rid);
     return r && { role: roleView(r), price: it.price || 0, desc: it.desc || '', has: mine.has(r.id), owned: !it.price || snap.isOwner(me.id) || bought.has(r.id), cat: it.cat || null, color: it.color || null };
@@ -1055,7 +1055,7 @@ function shopRole(cid, me, rid, on) {
   if (on) {
     if (Number(r.permissions) & P.ADMIN) throw err('shop_admin_role');
     if (!snap.roleIds(me.id).has(r.id)) {
-      // priced roles are paid through Velora first (relay/shop.js buy); once bought they go on and off for free
+      // priced roles are paid through Nookara first (relay/shop.js buy); once bought they go on and off for free
       if ((Number(item.price) || 0) > 0 && !snap.isOwner(me.id) && !db.get('SELECT 1 FROM role_purchases WHERE community_id = ? AND user_id = ? AND role_id = ?', c.id, me.id, r.id)) throw err('payment_unavailable', 402);
       db.run('INSERT OR IGNORE INTO member_roles (community_id, user_id, role_id) VALUES (?, ?, ?)', c.id, me.id, r.id);
     }

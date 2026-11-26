@@ -1,5 +1,5 @@
 'use strict';
-// Discord / Fluxer <-> this instance's community (ported from Velora's bridge.js; PROTOCOL §16).
+// Discord / Fluxer <-> this instance's community (ported from Nookara's bridge.js; PROTOCOL §16).
 //   Discord/Fluxer -> here: the owner's bot reads its gateway; messages from linked channels are posted with
 //                           messages.postBridged as the person (name + picture), tagged with the platform
 //   here -> Discord/Fluxer: a webhook ("Ember bridge") in each linked channel posts as the Ember person
@@ -483,7 +483,7 @@ async function platforms() {
     const x = PL.platform(p);
     if (!configured(p)) { out.push({ id: p, name: x.name, ready: false, bot: null, invite: null, linked: true }); continue; }
     const bot = await botUser(p).catch(() => null);
-    // `linked` is always true: it's the instance owner's own bot, there is no account to link (Velora checks a linked account)
+    // `linked` is always true: it's the instance owner's own bot, there is no account to link (Nookara checks a linked account)
     out.push({ id: p, name: x.name, ready: !!bot, bot: bot ? bot.username : null, invite: bot ? x.invite(bot.id) : null, linked: true });
   }
   // Matrix has no add-to-server link: the bot is invited to a room like anyone else (`rooms: true`), and accepts

@@ -4,12 +4,12 @@ const os = require('os');
 const path = require('path');
 const WebSocket = require('ws');
 
-// tests never contact a real Velora unless they ask for it (relay.test.js runs its own stub Velora)
-process.env.BONFIRE_VELORA_REGISTRATION ??= 'off';
+// tests never contact a real Nookara unless they ask for it (relay.test.js runs its own stub Nookara)
+process.env.EMBER_NOOKARA_REGISTRATION ??= 'off';
 // tests set up instances headlessly; operator-terms.test.js removes this to test the real setup gate
 process.env.EMBER_ACCEPT_OPERATOR_TERMS ??= '1';
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'bonfire-test-'));
+const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ember-test-'));
 
 // tiny JSON client: const a = api(base, token); await a.post('/servers', {...}) -> { status, body }
 function api(base, token) {
@@ -63,9 +63,9 @@ function wsClient(url) {
 }
 module.exports = { tmpDir, api, wsClient };
 
-// a stand-in for Velora's identity provider: Ed25519 key, JWKS, instance-token minting
+// a stand-in for Nookara's identity provider: Ed25519 key, JWKS, instance-token minting
 const crypto = require('crypto');
-function fakeIdp({ kid = 'testkid1', iss = 'http://velora.test', aud = 'https://chat.test' } = {}) {
+function fakeIdp({ kid = 'testkid1', iss = 'http://nookara.test', aud = 'https://chat.test' } = {}) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const jwk = { ...publicKey.export({ format: 'jwk' }), kid, alg: 'EdDSA', use: 'sig' };
   const b64 = o => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o)).toString('base64url');

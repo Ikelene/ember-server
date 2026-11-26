@@ -1,8 +1,9 @@
 'use strict';
-// Paid roles in the roles shop (PROTOCOL §6.1, §12.5): a priced role becomes a Velora pay request, the person approves it
-// on Velora, and the instance grants the role once it holds a valid EdDSA receipt (checked offline against Velora's JWKS).
-// Purchases follow Velora's chat_role_purchases: once bought the role stays yours - take it off and put it back on for free;
+// Paid roles in the roles shop (PROTOCOL §6.1, §12.5): a priced role becomes a Nookara pay request, the person approves it
+// on Nookara, and the instance grants the role once it holds a valid EdDSA receipt (checked offline against Nookara's JWKS).
+// Purchases follow Nookara's chat_role_purchases: once bought the role stays yours - take it off and put it back on for free;
 // no refunds; deleting the role deletes the purchase.
+const { KIND_NOOKARA, ERR, relayPath, WIRE_HOST, TYP, RECEIPT_TYPS } = require('../compat');
 const crypto = require('crypto');
 const db = require('../db');
 const config = require('../config');
@@ -10,10 +11,10 @@ const auth = require('../auth');
 const gateway = require('../gateway');
 const C = require('../communities');
 const { P } = require('../perms');
-const { err, normalizeOrigin, sameVelora } = require('../util');
+const { err, normalizeOrigin, sameNookara } = require('../util');
 const client = require('./client');
 
-const RECEIPT_TYP = 'bonfire-receipt+jwt';
+const RECEIPT_TYP = TYP.receipt;
 const OPEN = "('creating','pending')";
 let POLL_MS = 4000;
 
@@ -42,7 +43,7 @@ function shopView(cid, me) {
     const pr = role && openAttempt(me.id, role.id);
     if (pr && pr.status === 'pending') it.pending = view(pr);
   }
-  out.payments = me.kind !== 'velora' ? 'velora_required' : client.registered() ? 'velora' : 'unavailable';
+  out.payments = me.kind !== KIND_NOOKARA ? ERR.required : client.registered() ? WIRE_HOST : 'unavailable';
   return out;
 }
 
@@ -52,7 +53,7 @@ async function buy(cid, me, rid, body = {}) {
   if (!price || snap.isOwner(me.id) || snap.roleIds(me.id).has(r.id) || purchased(c.id, me.id, r.id)) { C.shopRole(cid, me, rid, true); return shopView(cid, me); }
   if (Number(r.permissions) & P.ADMIN) throw err('shop_admin_role');
   if (body?.price != null && Number(body.price) !== price) throw err('price_changed', 409);
-  if (me.kind !== 'velora' || !me.velora_id) throw err('velora_required', 402);
+  if (me.kind !== KIND_NOOKARA || !me.nookara_id) throw err(ERR.required, 402);
   if (!client.registered()) throw err('payment_unavailable', 402);
   const shopCh = db.get('SELECT id FROM channels WHERE cid = ?', String(cid).replace(/^#/, ''));
   // one open request per person + role (+ price): asking again hands back the same one
@@ -63,19 +64,19 @@ async function buy(cid, me, rid, body = {}) {
     const n = db.get('SELECT COUNT(*) AS n FROM role_payments WHERE user_id = ? AND role_id = ?', me.id, r.id).n + 1;
     const t = Date.now();
     const id = db.run("INSERT INTO role_payments (community_id, channel_id, user_id, role_id, amount, ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?)",
-      c.id, shopCh?.id ?? null, me.id, r.id, price, `role:${r.rid}:v${me.velora_id}:${n}:${crypto.randomBytes(3).toString('hex')}`, t, t).lastInsertRowid;
+      c.id, shopCh?.id ?? null, me.id, r.id, price, `role:${r.rid}:v${me.nookara_id}:${n}:${crypto.randomBytes(3).toString('hex')}`, t, t).lastInsertRowid;
     return db.get('SELECT * FROM role_payments WHERE id = ?', Number(id));
   });
   if (pr.status === 'creating') {
     let out;
     try {
-      out = await client.call('POST', '/bonfire/relay/pay-request', { user_id: String(me.velora_id), amount: price, reason: `The ${r.name} role in ${c.name}`.slice(0, 200), ref: pr.ref });
+      out = await client.call('POST', relayPath('/pay-request'), { user_id: String(me.nookara_id), amount: price, reason: `The ${r.name} role in ${c.name}`.slice(0, 200), ref: pr.ref });
     } catch (e) {
       // network trouble / rate limits keep the attempt (and its ref) for a retry; a refusal ends it
-      if (!(e.code === 'velora_unreachable' || e.status === 429 || e.status >= 500)) setAttempt(pr.id, { status: 'failed', error: e.code || 'payment_failed' });
-      throw err(e.code === 'velora_not_registered' || e.code === 'velora_off' ? 'payment_unavailable' : e.code || 'payment_failed', e.status === 503 ? 402 : e.status || 502, e.extra);
+      if (!(e.code === ERR.unreachable || e.status === 429 || e.status >= 500)) setAttempt(pr.id, { status: 'failed', error: e.code || 'payment_failed' });
+      throw err(e.code === ERR.notRegistered || e.code === ERR.off ? 'payment_unavailable' : e.code || 'payment_failed', e.status === 503 ? 402 : e.status || 502, e.extra);
     }
-    if (typeof out?.id !== 'string' || typeof out.approve_url !== 'string') { setAttempt(pr.id, { status: 'failed', error: 'velora_bad_response' }); throw err('payment_failed', 502); }
+    if (typeof out?.id !== 'string' || typeof out.approve_url !== 'string') { setAttempt(pr.id, { status: 'failed', error: ERR.badResponse }); throw err('payment_failed', 502); }
     setAttempt(pr.id, { status: 'pending', pay_id: out.id, approve_url: out.approve_url, expires_at: Number(out.expires_at) || Date.now() + 30 * 60 * 1000 });
     pr = db.get('SELECT * FROM role_payments WHERE id = ?', pr.id);
   }
@@ -99,17 +100,17 @@ async function verifyReceipt(token, pr, user) {
   if (parts.length !== 3 || token.length > 4096) throw err('receipt_invalid');
   let head, claims;
   try { head = JSON.parse(Buffer.from(parts[0], 'base64url')); claims = JSON.parse(Buffer.from(parts[1], 'base64url')); } catch { throw err('receipt_invalid'); }
-  if (head?.alg !== 'EdDSA' || head.typ !== RECEIPT_TYP || typeof head.kid !== 'string' || !claims || typeof claims !== 'object') throw err('receipt_invalid');
+  if (head?.alg !== 'EdDSA' || !RECEIPT_TYPS.includes(head.typ) || typeof head.kid !== 'string' || !claims || typeof claims !== 'object') throw err('receipt_invalid');
   let key;
-  try { key = await auth.keyFor(head.kid); } catch { throw err('velora_unreachable', 502); }
+  try { key = await auth.keyFor(head.kid); } catch { throw err(ERR.unreachable, 502); }
   if (!key) throw err('receipt_unknown_kid');
   let ok = false;
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, Buffer.from(parts[2], 'base64url')); } catch { ok = false; }
   if (!ok) throw err('receipt_bad_signature');
   const cfg = config.get();
-  if (!sameVelora(claims.iss, cfg.velora_url)) throw err('receipt_wrong_issuer');
+  if (!sameNookara(claims.iss, cfg.nookara_url)) throw err('receipt_wrong_issuer');
   if (normalizeOrigin(claims.aud) !== cfg.public_url) throw err('receipt_wrong_audience');
-  if (String(claims.sub) !== String(user.velora_id)) throw err('receipt_wrong_user');
+  if (String(claims.sub) !== String(user.nookara_id)) throw err('receipt_wrong_user');
   if (claims.amount !== pr.amount) throw err('receipt_wrong_amount');
   if (claims.ref !== pr.ref) throw err('receipt_wrong_ref');
   if (String(claims.rcp) !== String(pr.pay_id)) throw err('receipt_wrong_request');
@@ -133,11 +134,11 @@ function grant(pr, claims) {
   gateway.pushToUser(pr.user_id, { type: 'chat_shop_update', server: c.sid, channel: ch?.cid || null, rid: role.rid, status: 'paid' });
 }
 
-// ask Velora about one pending request and act on the answer
+// ask Nookara about one pending request and act on the answer
 async function check(pr) {
   if (!client.registered()) return;
   let out;
-  try { out = await client.call('GET', `/bonfire/relay/pay-request/${encodeURIComponent(pr.pay_id)}`); } catch (e) {
+  try { out = await client.call('GET', relayPath(`/pay-request/${encodeURIComponent(pr.pay_id)}`)); } catch (e) {
     if (e.status === 404) setAttempt(pr.id, { status: 'failed', error: 'not_found' });
     return;
   }
@@ -146,9 +147,9 @@ async function check(pr) {
   const user = auth.userById(fresh.user_id);
   if (out.status === 'paid') {
     try { grant(fresh, await verifyReceipt(out.receipt, fresh, user)); } catch (e) {
-      if (e.code === 'velora_unreachable') return; // JWKS not reachable: try again next round
+      if (e.code === ERR.unreachable) return; // JWKS not reachable: try again next round
       setAttempt(fresh.id, { status: 'failed', error: e.code || 'receipt_invalid' });
-      console.error(`[velora] rejected a pay receipt for request ${fresh.pay_id}: ${e.code || e.message}`);
+      console.error(`[nookara] rejected a pay receipt for request ${fresh.pay_id}: ${e.code || e.message}`);
     }
   } else if (out.status === 'declined' || out.status === 'expired') {
     setAttempt(fresh.id, { status: out.status, error: out.error ? String(out.error).slice(0, 60) : null });
@@ -169,12 +170,12 @@ function poll() {
     polling = true;
     let more = false;
     try {
-      // requests stay readable on Velora after they end; give up on ones a day past their expiry
+      // requests stay readable on Nookara after they end; give up on ones a day past their expiry
       db.run("UPDATE role_payments SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at < ?", Date.now(), Date.now() - 24 * 3600 * 1000);
       db.run("UPDATE role_payments SET status = 'failed', error = 'not_sent', updated_at = ? WHERE status = 'creating' AND created_at < ?", Date.now(), Date.now() - 3600 * 1000);
       for (const pr of db.all("SELECT * FROM role_payments WHERE status = 'pending' ORDER BY id LIMIT 50")) await check(pr);
       more = !!db.get("SELECT 1 FROM role_payments WHERE status = 'pending' LIMIT 1");
-    } catch (e) { if (!/closed|not open/i.test(e.message)) console.error('[velora] pay poll', e.message); } finally { polling = false; }
+    } catch (e) { if (!/closed|not open/i.test(e.message)) console.error('[nookara] pay poll', e.message); } finally { polling = false; }
     if (more && running) poll();
   }, POLL_MS);
   timer.unref?.();

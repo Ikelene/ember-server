@@ -9,8 +9,8 @@ const M = require('../src/messages');
 const db = require('../src/db');
 const I = require('../src/insights');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_MANAGED;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_MANAGED;
 const dir = tmpDir();
 let inst, owner, bob, cat, sid, cid, S, c, chId, botId;
 

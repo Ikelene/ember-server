@@ -12,11 +12,11 @@ const unfurl = require('../src/unfurl');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const file = () => { const f = new FormData(); f.append('file', new Blob([PNG]), 'pixel.png'); return f; };
 
-for (const mode of ['local', 'velora']) test(`${mode}: ordinary member uploads, remote imports and stable custom reactions`, async t => {
-  process.env.BONFIRE_ACCOUNTS_MODE = mode;
-  process.env.BONFIRE_VELORA_URL = 'http://velora.test';
-  process.env.BONFIRE_PUBLIC_URL = 'https://chat.test';
-  delete process.env.BONFIRE_OWNER;
+for (const mode of ['local', 'nookara']) test(`${mode}: ordinary member uploads, remote imports and stable custom reactions`, async t => {
+  process.env.EMBER_ACCOUNTS_MODE = mode;
+  process.env.EMBER_NOOKARA_URL = 'http://nookara.test';
+  process.env.EMBER_PUBLIC_URL = 'https://chat.test';
+  delete process.env.EMBER_OWNER;
   const dir = tmpDir(), inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' });
   let socket;
   t.after(async () => { socket?.close(); await inst.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -24,7 +24,7 @@ for (const mode of ['local', 'velora']) test(`${mode}: ordinary member uploads, 
   async function login(username, sub, scp) {
     const r = mode === 'local'
       ? await api(inst.url).post('/api/v1/auth/register', { username, password: 'correct horse battery' })
-      : await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ username, sub, ...(scp ? { scp } : {}) }) });
+      : await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ username, sub, ...(scp ? { scp } : {}) }) });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     return { ...r.body, a: api(inst.url, r.body.session) };
   }
@@ -96,7 +96,7 @@ for (const mode of ['local', 'velora']) test(`${mode}: ordinary member uploads, 
   assert.equal((await member.a.raw('POST', uploadPath, file())).body.error, 'uploads_disabled');
   assert.equal((await member.a.post(importPath, { url: 'https://cdn.example/media.png' })).body.error, 'uploads_disabled');
   await owner.a.patch(S, { allow_uploads: true });
-  if (mode === 'velora') {
+  if (mode === 'nookara') {
     const limited = await login('limited', '102', ['chat']); await limited.a.post(S + '/join');
     assert.equal((await limited.a.raw('POST', uploadPath, file())).body.error, 'insufficient_scope');
     assert.equal((await limited.a.post(importPath, { url: 'https://cdn.example/media.png' })).body.error, 'insufficient_scope');

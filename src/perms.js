@@ -1,5 +1,5 @@
 'use strict';
-// Permission bits + the permission algorithm (ported from Velora chat.js permsOf / channelPermsOf / canView / canPost / topPosition).
+// Permission bits + the permission algorithm (ported from Nookara chat.js permsOf / channelPermsOf / canView / canPost / topPosition).
 // Everything here is a pure function of plain data, so it can be unit-tested without a database.
 //
 //   roles       [{ id, permissions, is_default, position }]
@@ -8,7 +8,7 @@
 const P = {
   SEND: 1, MANAGE_CHANNELS: 2, MANAGE_SERVER: 4, MANAGE_ROLES: 8, KICK: 16, BAN: 32,
   MANAGE_MESSAGES: 64, MENTION_EVERYONE: 128, ATTACH: 256, ADMIN: 512,
-  MANAGE_USERS: 2048, // last login of members and the page each message was sent from (Velora's own chat also shows invisible people and devices)
+  MANAGE_USERS: 2048, // last login of members and the page each message was sent from (Nookara's own chat also shows invisible people and devices)
   VIEW: 1024, // channel-level only
   UNMARKED_ALIASES: 4096, // a bot's alias messages show with no alias mark, when the server's Danger zone turns unmarked aliases on (messages.js)
   CHANGE_NICKNAME: 8192, // set your own server nickname (@everyone has it by default)

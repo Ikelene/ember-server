@@ -6,8 +6,8 @@ const WebSocket = require('ws');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, bob, sid, general, bot, token, guild, gw;
 const clients = [];

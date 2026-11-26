@@ -1,21 +1,22 @@
 'use strict';
-// Velora's voice broker (PROTOCOL §12.7): the Cloudflare Realtime calls of voice.js, made through signed relay routes when
-// the instance has no Cloudflare keys of its own. Open sessions get a heartbeat every minute (Velora closes sessions that
+// Nookara's voice broker (PROTOCOL §12.7): the Cloudflare Realtime calls of voice.js, made through signed relay routes when
+// the instance has no Cloudflare keys of its own. Open sessions get a heartbeat every minute (Nookara closes sessions that
 // stay silent for 10 minutes and meters per instance per month).
+const { ERR, relayPath } = require('../compat');
 const client = require('./client');
 const config = require('../config');
 const { err } = require('../util');
 
 const live = new Set(); // broker session ids this process opened and has not closed
 let hb = null, reprobe = null, HB_MS = 60 * 1000;
-let state = { ok: null, capped: false, at: 0 }; // ok: null = not probed yet, false = Velora has no voice set up
+let state = { ok: null, capped: false, at: 0 }; // ok: null = not probed yet, false = Nookara has no voice set up
 let ice = null; // { at, servers }
 
 async function rc(method, sub, body) {
   let out;
-  try { out = await client.call(method, '/bonfire/relay/rtc' + sub, body, { timeout: 15000 }); } catch (e) {
+  try { out = await client.call(method, relayPath('/rtc') + sub, body, { timeout: 15000 }); } catch (e) {
     if (e.code === 'voice_cap_reached') { state.capped = true; client.setVoice({ cap_minutes: e.extra?.cap_minutes, used_minutes: e.extra?.used_minutes }); throw err('voice_cap_reached', 402, { cap_minutes: e.extra?.cap_minutes ?? null, used_minutes: e.extra?.used_minutes ?? null }); }
-    if (e.code === 'voice_unavailable' || e.code === 'velora_not_registered' || e.code === 'velora_off') { if (e.code === 'voice_unavailable') state.ok = false; throw err('voice_unavailable', 503); }
+    if (e.code === 'voice_unavailable' || e.code === ERR.notRegistered || e.code === ERR.off) { if (e.code === 'voice_unavailable') state.ok = false; throw err('voice_unavailable', 503); }
     if (e.code === 'session_not_found') throw err('voice_session_lost', 410);
     throw err('voice_upstream', 502);
   }
@@ -65,11 +66,11 @@ async function probe() {
   try { await R.iceServers(); } catch { /* state updated by rc */ }
   state.at = Date.now();
 }
-// voice quota for instance admins (PROTOCOL §19.4): refreshed from Velora every 10 minutes while registered, pushed to admins on every change
+// voice quota for instance admins (PROTOCOL §19.4): refreshed from Nookara every 10 minutes while registered, pushed to admins on every change
 let quotaTimer = null, QUOTA_MS = 10 * 60 * 1000;
 async function refreshQuota() {
   if (!client.registered()) return null;
-  try { client.setVoice(await client.call('GET', '/bonfire/relay/rtc/usage')); } catch { /* next round */ }
+  try { client.setVoice(await client.call('GET', relayPath('/rtc/usage'))); } catch { /* next round */ }
   return client.voiceQuota();
 }
 let lastQuota = '';

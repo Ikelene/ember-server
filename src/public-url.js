@@ -1,7 +1,7 @@
 'use strict';
-// The instance's public address changed (e.g. a Nookara-hosted server moved from <slug>-bonfire.ikelene.net to e_<slug>.nookara.cc):
+// The instance's public address changed (e.g. a Nookara-hosted server moved from its old <slug>.ikelene.net address to e_<slug>.nookara.cc):
 // uploads, icons, emojis, embeds and attachments are stored as absolute urls on the old origin. The host keeps redirecting the old
-// origin only for a while, so on the first boot with a new BONFIRE_PUBLIC_URL every stored copy of the old origin is rewritten
+// origin only for a while, so on the first boot with a new EMBER_PUBLIC_URL every stored copy of the old origin is rewritten
 // (plain, as a JSON string and percent-encoded), in the database and in config.json. meta.public_url remembers the last origin;
 // meta.public_url_history keeps the earlier ones.
 const config = require('./config');

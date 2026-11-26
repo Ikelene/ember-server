@@ -1,15 +1,15 @@
 'use strict';
-// Message signing: canonical JSON, payload build, verification rules, and the HTTP/WS paths in a velora-mode instance.
+// Message signing: canonical JSON, payload build, verification rules, and the HTTP/WS paths in a nookara-mode instance.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const crypto = require('crypto');
 const { tmpDir, api, wsClient, fakeIdp } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test';
-process.env.BONFIRE_PUBLIC_URL = 'https://chat.test';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test';
+process.env.EMBER_PUBLIC_URL = 'https://chat.test';
+delete process.env.EMBER_OWNER;
 const { startServer } = require('../src/index');
 const auth = require('../src/auth');
 const signing = require('../src/signing');
@@ -23,7 +23,7 @@ let keyLookups = 0;
 const fetcher = async kid => { keyLookups++; return kid === KID ? { ...keyRecord } : null; };
 
 const sign = (payload, key = dev.privateKey) => crypto.sign(null, signing.signingBytes(payload), key).toString('base64url');
-const mk = (over = {}) => signing.buildPayload({ iss: 'http://velora.test', instance: 'https://chat.test', community: 's0123456789', channel: 'c0123456789', author: '123', ts: Date.now(), nonce: 'AAAAAAAAAAAAAAAAAAAAAA', body: 'hi', attachments: [], reply_to: null, edit_of: null, ...over });
+const mk = (over = {}) => signing.buildPayload({ iss: 'http://nookara.test', instance: 'https://chat.test', community: 's0123456789', channel: 'c0123456789', author: '123', ts: Date.now(), nonce: 'AAAAAAAAAAAAAAAAAAAAAA', body: 'hi', attachments: [], reply_to: null, edit_of: null, ...over });
 const sigOf = p => ({ kid: KID, sig: sign(p), ts: p.ts, nonce: p.nonce });
 
 test('canonical JSON: sorted keys, no whitespace, integers; fixed vector', () => {
@@ -37,30 +37,30 @@ test('verify: good signature, tampering, wrong user, revoked-before-ts, skew, un
   signing.setKeyFetcher(fetcher);
   keyRecord.revoked_at = null;
   const p = mk();
-  assert.deepEqual(await signing.verify({ payload: p, signature: sigOf(p), veloraId: '123' }), { ok: true });
+  assert.deepEqual(await signing.verify({ payload: p, signature: sigOf(p), nookaraId: '123' }), { ok: true });
   // a different body => the signature no longer matches
   const q = { ...p, body: 'tampered' };
-  assert.equal((await signing.verify({ payload: q, signature: sigOf(p), veloraId: '123' })).reason, 'bad_signature');
+  assert.equal((await signing.verify({ payload: q, signature: sigOf(p), nookaraId: '123' })).reason, 'bad_signature');
   // same key, other account
-  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), veloraId: '999' })).reason, 'wrong_user');
+  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), nookaraId: '999' })).reason, 'wrong_user');
   // a garbage signature
-  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), sig: 'AAAA' }, veloraId: '123' })).reason, 'bad_signature');
+  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), sig: 'AAAA' }, nookaraId: '123' })).reason, 'bad_signature');
   // unknown key
-  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), kid: 'k_nope' }, veloraId: '123' })).reason, 'unknown_key');
+  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), kid: 'k_nope' }, nookaraId: '123' })).reason, 'unknown_key');
   // ts / nonce in the envelope must match the payload
-  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), nonce: 'other' }, veloraId: '123' })).reason, 'mismatch');
+  assert.equal((await signing.verify({ payload: p, signature: { ...sigOf(p), nonce: 'other' }, nookaraId: '123' })).reason, 'mismatch');
   // clock window: +-5 minutes
   const old = mk({ ts: Date.now() - 6 * 60 * 1000 });
-  assert.equal((await signing.verify({ payload: old, signature: sigOf(old), veloraId: '123' })).reason, 'timestamp');
+  assert.equal((await signing.verify({ payload: old, signature: sigOf(old), nookaraId: '123' })).reason, 'timestamp');
   const edge = mk({ ts: Date.now() - 4 * 60 * 1000 });
-  assert.equal((await signing.verify({ payload: edge, signature: sigOf(edge), veloraId: '123' })).ok, true);
+  assert.equal((await signing.verify({ payload: edge, signature: sigOf(edge), nookaraId: '123' })).ok, true);
   // revoked: before the message's ts => refused; after it => the message predates the revocation and is fine
   signing.setKeyFetcher(fetcher);
   keyRecord.revoked_at = p.ts - 1;
-  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), veloraId: '123' })).reason, 'revoked');
+  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), nookaraId: '123' })).reason, 'revoked');
   signing.setKeyFetcher(fetcher);
   keyRecord.revoked_at = p.ts + 1000;
-  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), veloraId: '123' })).ok, true);
+  assert.equal((await signing.verify({ payload: p, signature: sigOf(p), nookaraId: '123' })).ok, true);
   keyRecord.revoked_at = null;
 });
 
@@ -68,7 +68,7 @@ test('key lookups are cached for ten minutes', async () => {
   signing.setKeyFetcher(fetcher);
   keyLookups = 0;
   const p = mk();
-  for (let i = 0; i < 3; i++) await signing.verify({ payload: p, signature: sigOf(p), veloraId: '123' });
+  for (let i = 0; i < 3; i++) await signing.verify({ payload: p, signature: sigOf(p), nookaraId: '123' });
   assert.equal(keyLookups, 1);
 });
 
@@ -81,8 +81,8 @@ test.after(async () => { wsA?.close(); await inst.close(); fs.rmSync(dir, { recu
 
 test('signed messages end to end', async () => {
   keyRecord.revoked_at = null; signing.setKeyFetcher(fetcher);
-  const la = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat' }) });
-  const lb = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '124', username: 'sam', scp: ['chat'] }) });
+  const la = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '123', username: 'nat' }) });
+  const lb = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '124', username: 'sam', scp: ['chat'] }) });
   a = api(inst.url, la.body.session); b = api(inst.url, lb.body.session);
   assert.equal((await a.post('/api/v1/instance/claim', { code: inst.setup.current() })).status, 200); // the owner sets the community up
   const d = (await a.post('/api/v1/servers', { name: 'Signed', join_policy: 'open' })).body;
@@ -90,7 +90,7 @@ test('signed messages end to end', async () => {
   assert.equal((await b.post(`/api/v1/servers/${sid}/join`)).status, 200);
   const payload = over => mk({ community: sid, channel: cid, ...over });
 
-  // signing is always allowed in velora mode (no community switch), and can never be required: old fields are ignored
+  // signing is always allowed in nookara mode (no community switch), and can never be required: old fields are ignored
   let p = payload();
   let r;
   assert.equal(d.server.allow_signing, true);
@@ -147,7 +147,7 @@ test('signed messages end to end', async () => {
   assert.equal((await a.post(`/api/v1/channels/${cid}/messages`, { message: 'hi', signature: sigOf(p) })).body.error, 'bad_signature');
   keyRecord.revoked_at = null; signing.setKeyFetcher(fetcher);
 
-  // unsigned velora messages are always accepted (unverified)
+  // unsigned nookara messages are always accepted (unverified)
   r = await a.post(`/api/v1/channels/${cid}/messages`, { message: 'unsigned' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.message.signature, null);
@@ -157,7 +157,7 @@ test('signed messages end to end', async () => {
   // and over the websocket
   // (a third account, so the 8-messages-per-5-seconds limit of the first one doesn't get in the way)
   keyRecord.user_id = '125';
-  const ld = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '125', username: 'kit' }) });
+  const ld = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '125', username: 'kit' }) });
   assert.equal((await api(inst.url, ld.body.session).post(`/api/v1/servers/${sid}/join`)).status, 200);
   signing.setKeyFetcher(fetcher);
   wsA = await wsClient(inst.url).login(ld.body.session);
@@ -184,16 +184,16 @@ test('attachment references bind hashes and link-only GIF URLs in order', async 
   for (const body of ['', 'caption']) {
     const p = mk({ body, attachments: refs, reply_to: '42', edit_of: '43' });
     const signature = sigOf(p);
-    assert.equal((await signing.verify({ payload: p, signature, veloraId: '123' })).ok, true);
+    assert.equal((await signing.verify({ payload: p, signature, nookaraId: '123' })).ok, true);
     for (const attachments of [[...refs].reverse(), [upload.sha256], [upload.sha256, 'url:' + gif.url + '?changed=1'], ['b'.repeat(64), refs[1]]]) {
-      assert.equal((await signing.verify({ payload: { ...p, attachments }, signature, veloraId: '123' })).reason, 'bad_signature');
+      assert.equal((await signing.verify({ payload: { ...p, attachments }, signature, nookaraId: '123' })).reason, 'bad_signature');
     }
   }
 });
 
 test('signed GIFs and saved uploads: HTTP, gateway, replies, edits and history', async () => {
   keyRecord.user_id = '126'; keyRecord.revoked_at = null; signing.setKeyFetcher(fetcher);
-  const login = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '126', username: 'media' }) });
+  const login = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '126', username: 'media' }) });
   const client = api(inst.url, login.body.session);
   assert.equal((await client.post(`/api/v1/servers/${sid}/join`)).status, 200);
   const payload = over => mk({ author: '126', community: sid, channel: cid, ...over });
@@ -221,7 +221,7 @@ test('signed GIFs and saved uploads: HTTP, gateway, replies, edits and history',
     const { receivedPayload, canonical } = await import('../../dashboard-src/src/chat/signing-payload.js');
     const checkClient = m => {
       const incoming = { ...m, inst: 'https://chat.test', server: `https://chat.test|${m.server}`, channel: `https://chat.test|${m.channel}` };
-      const bytes = Buffer.from('bonfire-msg-v1\n' + canonical(receivedPayload(incoming, 'http://velora.test')));
+      const bytes = Buffer.from('bonfire-msg-v1\n' + canonical(receivedPayload(incoming, 'http://nookara.test')));
       assert.equal(crypto.verify(null, bytes, dev.publicKey, Buffer.from(m.signature.sig, 'base64url')), true);
     };
     checkClient(ack.message);
@@ -256,7 +256,7 @@ test('signed stickers: the signature covers the sticker id, other payloads keep 
   const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   const add = async name => { const f = new FormData(); f.append('name', name); f.append('file', new Blob([PNG]), name + '.png'); const r = await a.raw('POST', `/api/v1/servers/${sid}/stickers`, f); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.sticker.tid; };
   const one = await add('wave'), two = await add('wink');
-  const login = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '127', username: 'stickers' }) });
+  const login = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '127', username: 'stickers' }) });
   const c = api(inst.url, login.body.session); // (its own sender: the earlier tests used up the owner's send rate)
   assert.equal((await c.post(`/api/v1/servers/${sid}/join`)).status, 200);
   const payload = over => mk({ author: '127', community: sid, channel: cid, body: '', ...over });
@@ -276,13 +276,13 @@ test('signed stickers: the signature covers the sticker id, other payloads keep 
 });
 
 test('an instance on any Nookara address accepts nookara.cc and velora.ikelene.net, nookara.cc first', () => {
-  const was = process.env.BONFIRE_VELORA_URL;
+  const was = process.env.EMBER_NOOKARA_URL;
   try {
     for (const u of ['https://nookara.cc', 'https://velora.ikelene.net', 'https://ember.nookara.cc/']) {
-      process.env.BONFIRE_VELORA_URL = u;
+      process.env.EMBER_NOOKARA_URL = u;
       assert.deepEqual(signing.issuers(), ['https://nookara.cc', 'https://velora.ikelene.net'], u);
       assert.equal(signing.issuer(), 'https://nookara.cc');
     }
-    process.env.BONFIRE_VELORA_URL = 'https://id.example.org'; assert.deepEqual(signing.issuers(), ['https://id.example.org']);
-  } finally { process.env.BONFIRE_VELORA_URL = was; }
+    process.env.EMBER_NOOKARA_URL = 'https://id.example.org'; assert.deepEqual(signing.issuers(), ['https://id.example.org']);
+  } finally { process.env.EMBER_NOOKARA_URL = was; }
 });

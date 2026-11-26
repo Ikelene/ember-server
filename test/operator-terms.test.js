@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 delete process.env.EMBER_ACCEPT_OPERATOR_TERMS; // helpers turned it on for the other tests; this file tests the real gate
 const { startServer } = require('../src/index');
 const terms = require('../src/operator-terms');
@@ -32,7 +32,7 @@ test('setup cannot complete without accepting the operator terms', async () => {
       assert.equal(r.status, 400);
       assert.equal(JSON.stringify(r.body).includes('operator_terms_required'), true);
     }
-    assert.equal((await api(inst.url).get('/.well-known/bonfire')).body.claimed, false);
+    assert.equal((await api(inst.url).get('/.well-known/ember')).body.claimed, false);
     // a wrong code is still a wrong code, and nothing was recorded
     assert.equal((await alice.a.post('/api/v1/instance/claim', { code: 'AAAA-AAAA', accept_operator_terms: true })).status, 403);
     assert.equal(terms.accepted(), false);
@@ -49,22 +49,22 @@ test('setup cannot complete without accepting the operator terms', async () => {
   } finally { await inst.close(); }
 });
 
-test('headless setup: BONFIRE_OWNER is ignored without the flag, and works with EMBER_ACCEPT_OPERATOR_TERMS=1', async () => {
-  process.env.BONFIRE_OWNER = 'v:77';
+test('headless setup: EMBER_OWNER is ignored without the flag, and works with EMBER_ACCEPT_OPERATOR_TERMS=1', async () => {
+  process.env.EMBER_OWNER = 'v:77';
   try {
     const a = await start(mk());
-    try { assert.equal((await api(a.url).get('/.well-known/bonfire')).body.claimed, false); assert.ok(a.setup.current()); } finally { await a.close(); }
+    try { assert.equal((await api(a.url).get('/.well-known/ember')).body.claimed, false); assert.ok(a.setup.current()); } finally { await a.close(); }
     process.env.EMBER_ACCEPT_OPERATOR_TERMS = '1';
-    const l = await start(mk()); // a Velora owner on local accounts could never sign in: still the setup code
-    try { assert.equal((await api(l.url).get('/.well-known/bonfire')).body.claimed, false); assert.ok(l.setup.current()); } finally { await l.close(); }
-    process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
+    const l = await start(mk()); // a Nookara owner on local accounts could never sign in: still the setup code
+    try { assert.equal((await api(l.url).get('/.well-known/ember')).body.claimed, false); assert.ok(l.setup.current()); } finally { await l.close(); }
+    process.env.EMBER_ACCOUNTS_MODE = 'nookara';
     const b = await start(mk());
     try {
-      assert.equal((await api(b.url).get('/.well-known/bonfire')).body.claimed, true);
+      assert.equal((await api(b.url).get('/.well-known/ember')).body.claimed, true);
       assert.equal(terms.view().via, 'headless');
       assert.equal(terms.view().accepted_by, 'env');
     } finally { await b.close(); }
-  } finally { delete process.env.BONFIRE_OWNER; delete process.env.EMBER_ACCEPT_OPERATOR_TERMS; process.env.BONFIRE_ACCOUNTS_MODE = 'local'; }
+  } finally { delete process.env.EMBER_OWNER; delete process.env.EMBER_ACCEPT_OPERATOR_TERMS; process.env.EMBER_ACCOUNTS_MODE = 'local'; }
 });
 
 // an instance whose database predates the terms: claimed, no acceptance recorded
@@ -112,10 +112,10 @@ test('dismissing the notice hides it without accepting', async () => {
 });
 
 test('a Nookara-hosted server records the host acceptance and never shows the self-host prompt', async () => {
-  Object.assign(process.env, { BONFIRE_MANAGED: '1', BONFIRE_PLAN: 'starter', BONFIRE_OWNER: 'v:9', BONFIRE_ACCOUNTS_MODE: 'velora', BONFIRE_OPERATOR_TERMS_AT: '2026-10-31T12:00:00.000Z', BONFIRE_OPERATOR_TERMS_BY: 'v:9' });
+  Object.assign(process.env, { EMBER_MANAGED: '1', EMBER_PLAN: 'starter', EMBER_OWNER: 'v:9', EMBER_ACCOUNTS_MODE: 'nookara', EMBER_OPERATOR_TERMS_AT: '2026-10-31T12:00:00.000Z', EMBER_OPERATOR_TERMS_BY: 'v:9' });
   const inst = await start(mk());
   try {
-    assert.equal((await api(inst.url).get('/.well-known/bonfire')).body.claimed, true);
+    assert.equal((await api(inst.url).get('/.well-known/ember')).body.claimed, true);
     const v = terms.view();
     assert.equal(v.accepted, true);
     assert.equal(v.via, 'hosted');
@@ -124,14 +124,14 @@ test('a Nookara-hosted server records the host acceptance and never shows the se
     assert.equal(v.notice, false);
   } finally {
     await inst.close();
-    for (const k of ['BONFIRE_MANAGED', 'BONFIRE_PLAN', 'BONFIRE_OWNER', 'BONFIRE_OPERATOR_TERMS_AT', 'BONFIRE_OPERATOR_TERMS_BY']) delete process.env[k];
-    process.env.BONFIRE_ACCOUNTS_MODE = 'local';
+    for (const k of ['EMBER_MANAGED', 'EMBER_PLAN', 'EMBER_OWNER', 'EMBER_OPERATOR_TERMS_AT', 'EMBER_OPERATOR_TERMS_BY']) delete process.env[k];
+    process.env.EMBER_ACCOUNTS_MODE = 'local';
   }
 });
 
 test('a hosted server created before the host passed any terms env still counts as accepted (managed, no notice)', async () => {
-  Object.assign(process.env, { BONFIRE_MANAGED: '1', BONFIRE_OWNER: 'v:9', BONFIRE_ACCOUNTS_MODE: 'velora' });
+  Object.assign(process.env, { EMBER_MANAGED: '1', EMBER_OWNER: 'v:9', EMBER_ACCOUNTS_MODE: 'nookara' });
   const inst = await start(mk());
   try { assert.equal(terms.view().accepted, true); assert.equal(terms.view().notice, false); }
-  finally { await inst.close(); for (const k of ['BONFIRE_MANAGED', 'BONFIRE_OWNER']) delete process.env[k]; process.env.BONFIRE_ACCOUNTS_MODE = 'local'; }
+  finally { await inst.close(); for (const k of ['EMBER_MANAGED', 'EMBER_OWNER']) delete process.env[k]; process.env.EMBER_ACCOUNTS_MODE = 'local'; }
 });

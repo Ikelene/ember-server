@@ -1,7 +1,8 @@
 'use strict';
-// The public Ember directory on Velora (PROTOCOL §12.9): PUT /bonfire/relay/directory while the instance setting `listed`
+// The public Ember directory on Nookara (PROTOCOL §12.9): PUT relayPath('/directory') while the instance setting `listed`
 // (= the community's `listed`) is on; `listed: false` takes the listing down. Re-pushed (debounced) whenever what would be
 // listed changes, and every 6 hours anyway.
+const { relayPath } = require('../compat');
 const db = require('../db');
 const config = require('../config');
 const { emberBase } = require('../util');
@@ -20,11 +21,11 @@ function payload() {
   return {
     listed: true, name: c.name, description: c.description || '', icon_url: abs(c.icon_url), banner_url: abs(c.banner_url), member_count: C.memberCount(c.id),
     // the community's permanent invite, opened in Ember on the web
-    invite_url: `${emberBase(cfg.velora_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
+    invite_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
     tags: Array.isArray(cfg.tags) ? cfg.tags.slice(0, 8) : [],
   };
 }
-const last = () => { try { return JSON.parse(db.metaGet('velora_dir') || 'null'); } catch { return null; } };
+const last = () => { try { return JSON.parse(db.metaGet('nookara_dir') || 'null'); } catch { return null; } };
 
 async function push(force = false) {
   if (busy || !client.registered()) return null;
@@ -34,15 +35,15 @@ async function push(force = false) {
   busy = true;
   try {
     let body = { ...p }, out;
-    for (let i = 0; i < 4; i++) { // Velora only stores https links: drop a link it refuses rather than the whole listing
-      try { out = await client.call('PUT', '/bonfire/relay/directory', body); break; } catch (e) {
+    for (let i = 0; i < 4; i++) { // Nookara only stores https links: drop a link it refuses rather than the whole listing
+      try { out = await client.call('PUT', relayPath('/directory'), body); break; } catch (e) {
         if (e.code === 'invalid_icon_url' && body.icon_url) { body.icon_url = null; continue; }
         if (e.code === 'invalid_banner_url' && body.banner_url) { body.banner_url = null; continue; }
         if (e.code === 'invalid_invite_url' && body.invite_url) { body.invite_url = null; continue; }
         throw e;
       }
     }
-    db.metaSet('velora_dir', JSON.stringify({ fp, at: Date.now(), listed: p.listed }));
+    db.metaSet('nookara_dir', JSON.stringify({ fp, at: Date.now(), listed: p.listed }));
     info = { listed: !!out?.listed, hidden_by_staff: !!out?.hidden_by_staff, pushed_at: Date.now(), last_error: null };
     return out;
   } catch (e) { info.last_error = e.code || e.message; return null; } finally { busy = false; }

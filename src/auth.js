@@ -1,22 +1,23 @@
 'use strict';
-// Instance sessions, Velora instance-JWT login (PROTOCOL §2.2/§4), local accounts, principals, admin/owner helpers.
+// Instance sessions, Nookara instance-JWT login (PROTOCOL §2.2/§4), local accounts, principals, admin/owner helpers.
+const { KIND_NOOKARA, ERR, NOOKARA_ID_FIELD, NOOKARA_PATHS } = require('./compat');
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
-const { err, normalizeOrigin, sameVelora, b64url, fromB64url, sha256, now, clean } = require('./util');
+const { err, normalizeOrigin, sameNookara, b64url, fromB64url, sha256, now, clean } = require('./util');
 
 const SESSION_TTL = 30 * 24 * 3600 * 1000;
 const SKEW_S = 60;
 
 // ---------- users / principals ----------
 // bots (principal b:<n>) carry bot: true so clients show the BOT tag
-// gallery-approved bots (added from Velora's bot gallery) also carry verified: true (checkmark on the BOT tag)
+// gallery-approved bots (added from Nookara's bot gallery) also carry verified: true (checkmark on the BOT tag)
 const botVerified = principal => { try { return !!db.get('SELECT b.gallery_verified AS v FROM bots b JOIN users u ON u.id = b.user_id WHERE u.principal = ?', String(principal))?.v; } catch { return false; } };
-const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, velora_id: u.velora_id || null, ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
+const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, [NOOKARA_ID_FIELD]: u.nookara_id || null, ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
 const userById = id => db.get('SELECT * FROM users WHERE id = ?', id);
 const userByPrincipal = p => db.get('SELECT * FROM users WHERE principal = ?', String(p));
 
-function upsertVeloraUser({ id, username, display_name, pfp }) {
+function upsertNookaraUser({ id, username, display_name, pfp }) {
   const principal = 'v:' + id;
   const un = clean(username, 64) || 'user' + id, dn = clean(display_name, 64) || un;
   const row = userByPrincipal(principal);
@@ -25,33 +26,33 @@ function upsertVeloraUser({ id, username, display_name, pfp }) {
     if (row.username !== un || row.display_name !== dn || (row.pfp || null) !== (pfp || null)) identityChanged(userById(row.id), row.username);
     return userById(row.id);
   }
-  const r = db.run('INSERT INTO users (principal, kind, username, display_name, pfp, velora_id, created_at, last_login) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', principal, 'velora', un, dn, pfp || null, String(id), now(), now());
+  const r = db.run('INSERT INTO users (principal, kind, username, display_name, pfp, nookara_id, created_at, last_login) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', principal, KIND_NOOKARA, un, dn, pfp || null, String(id), now(), now());
   return userById(r.lastInsertRowid);
 }
-// a profile fetched from Velora (src/profiles.js): update an existing account, never create one, never touch last_login
-function refreshVeloraProfile({ id, username, display_name, pfp }) {
+// a profile fetched from Nookara (src/profiles.js): update an existing account, never create one, never touch last_login
+function refreshNookaraProfile({ id, username, display_name, pfp }) {
   const row = userByPrincipal('v:' + id);
-  if (!row || row.kind !== 'velora') return false;
+  if (!row || row.kind !== KIND_NOOKARA) return false;
   const un = clean(username, 64) || row.username, dn = clean(display_name, 64) || un;
   if (row.username === un && row.display_name === dn && (row.pfp || null) === (pfp || null)) return false;
   db.run('UPDATE users SET username = ?, display_name = ?, pfp = ? WHERE id = ?', un, dn, pfp || null, row.id);
   identityChanged(userById(row.id), row.username);
   return true;
 }
-// Velora switched Ember off (or back on) for this account. -> true when it changed; open sockets are told right away
-function setRestricted(veloraId, flag) {
-  const row = userByPrincipal('v:' + veloraId);
-  if (!row || row.kind !== 'velora' || !!row.restricted === !!flag) return false;
+// Nookara switched Ember off (or back on) for this account. -> true when it changed; open sockets are told right away
+function setRestricted(nookaraId, flag) {
+  const row = userByPrincipal('v:' + nookaraId);
+  if (!row || row.kind !== KIND_NOOKARA || !!row.restricted === !!flag) return false;
   db.run('UPDATE users SET restricted = ? WHERE id = ?', flag ? 1 : 0, row.id);
   require('./gateway').restrictionChanged(row.id, !!flag);
   return true;
 }
-// placeholder for a Velora user we've only heard of (import, BONFIRE_OWNER) - refreshed on their first login
-function ensureVeloraPlaceholder(id, username, pfp) {
+// placeholder for a Nookara user we've only heard of (import, EMBER_OWNER) - refreshed on their first login
+function ensureNookaraPlaceholder(id, username, pfp) {
   const row = userByPrincipal('v:' + id);
   if (row) return row;
   const un = clean(username, 64) || 'user' + id;
-  const r = db.run('INSERT INTO users (principal, kind, username, display_name, pfp, velora_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 'v:' + id, 'velora', un, un, pfp || null, String(id), now());
+  const r = db.run('INSERT INTO users (principal, kind, username, display_name, pfp, nookara_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 'v:' + id, KIND_NOOKARA, un, un, pfp || null, String(id), now());
   return userById(r.lastInsertRowid);
 }
 
@@ -78,7 +79,7 @@ function resolveSession(token) {
   const user = userById(s.user_id);
   if (!user) return null;
   // principals of the other account mode can no longer use the instance
-  if (user.kind !== (config.mode() === 'velora' ? 'velora' : 'local')) return null;
+  if (user.kind !== (config.mode() === 'nookara' ? KIND_NOOKARA : 'local')) return null;
   if (t - s.last_used > 3600 * 1000) db.run('UPDATE sessions SET last_used = ? WHERE hash = ?', t, hash);
   let scopes = []; try { scopes = JSON.parse(s.scopes); } catch { /* none */ }
   let app = null; try { app = s.app ? JSON.parse(s.app) : null; } catch { /* none */ }
@@ -88,9 +89,9 @@ const revokeSession = token => { if (token) db.run('DELETE FROM sessions WHERE h
 const bearer = req => { const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || ''); return m ? m[1] : null; };
 setInterval(() => { try { db.run('DELETE FROM sessions WHERE last_used < ?', now() - SESSION_TTL); db.run('DELETE FROM jti_seen WHERE exp < ?', Math.floor(now() / 1000) - 3600); } catch { /* db closed */ } }, 3600 * 1000).unref();
 
-// ---------- Velora JWT ----------
+// ---------- Nookara JWT ----------
 let jwksFetcher = async () => {
-  const url = `${config.get().velora_url}/.well-known/bonfire/jwks.json`;
+  const url = `${config.get().nookara_url}${NOOKARA_PATHS.jwks}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (!r.ok) throw new Error('jwks ' + r.status);
   return r.json();
@@ -121,21 +122,21 @@ async function keyFor(kid) {
 
 const bad = code => err(code, 401);
 // verifies signature, iss, aud, exp (60s skew) and jti replay. -> claims
-async function verifyVeloraJwt(token, nowMs = Date.now()) {
+async function verifyNookaraJwt(token, nowMs = Date.now()) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3 || token.length > 8192) throw bad('invalid_token');
   let header, claims;
   try { header = JSON.parse(fromB64url(parts[0]).toString()); claims = JSON.parse(fromB64url(parts[1]).toString()); } catch { throw bad('invalid_token'); }
   if (!header || header.alg !== 'EdDSA' || typeof header.kid !== 'string' || !claims || typeof claims !== 'object') throw bad('invalid_token');
-  if (header.typ !== undefined && header.typ !== 'JWT') throw bad('invalid_token'); // e.g. a pay receipt (bonfire-receipt+jwt) is never a login token (§12.5)
+  if (header.typ !== undefined && header.typ !== 'JWT') throw bad('invalid_token'); // e.g. a pay receipt (compat TYP.receipt) is never a login token (§12.5)
   let key;
-  try { key = await keyFor(header.kid); } catch (e) { console.error('[auth] JWKS fetch failed:', e.message); throw err('velora_unreachable', 502); }
+  try { key = await keyFor(header.kid); } catch (e) { console.error('[auth] JWKS fetch failed:', e.message); throw err(ERR.unreachable, 502); }
   if (!key) throw bad('unknown_kid');
   let ok = false;
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, fromB64url(parts[2])); } catch { ok = false; }
   if (!ok) throw bad('invalid_signature');
   const cfg = config.get();
-  if (!sameVelora(claims.iss, cfg.velora_url)) throw bad('invalid_issuer');
+  if (!sameNookara(claims.iss, cfg.nookara_url)) throw bad('invalid_issuer');
   if (normalizeOrigin(claims.aud) !== normalizeOrigin(cfg.public_url)) throw bad('invalid_audience');
   const nowS = Math.floor(nowMs / 1000);
   if (!Number.isFinite(claims.exp) || claims.exp + SKEW_S < nowS) throw bad('token_expired');
@@ -151,21 +152,21 @@ function finishLogin(user, scopes, app = null) {
   if (user.banned) throw err('banned', 403);
   return { session: createSession(user.id, scopes, app), user: userView(userById(user.id)) };
 }
-async function loginVelora(token) {
-  if (config.mode() !== 'velora') throw err('wrong_accounts_mode', 400);
-  const c = await verifyVeloraJwt(token);
+async function loginNookara(token) {
+  if (config.mode() !== 'nookara') throw err('wrong_accounts_mode', 400);
+  const c = await verifyNookaraJwt(token);
   const scp = Array.isArray(c.scp) ? c.scp.filter(x => ['chat', 'voice', 'media', 'sign'].includes(x)) : [];
   if (!scp.includes('chat')) throw err('insufficient_scope', 403);
   const existing = userByPrincipal('v:' + c.sub);
   if (existing?.banned) throw err('banned', 403);
-  const user = upsertVeloraUser({ id: c.sub, username: c.username, display_name: c.display_name, pfp: typeof c.pfp === 'string' ? c.pfp : null });
-  // their Velora plan (`tier` claim: free / pro ...): Server settings > Uploads > Plans whose files never expire
+  const user = upsertNookaraUser({ id: c.sub, username: c.username, display_name: c.display_name, pfp: typeof c.pfp === 'string' ? c.pfp : null });
+  // their Nookara plan (`tier` claim: free / pro ...): Server settings > Uploads > Plans whose files never expire
   const tier = typeof c.tier === 'string' && /^[a-z0-9_-]{1,24}$/.test(c.tier) ? c.tier : null;
   if ((user.tier ?? null) !== tier) { db.run('UPDATE users SET tier = ? WHERE id = ?', tier, user.id); user.tier = tier; }
   return finishLogin(user, scp, appClaim(c.app));
 }
-// the `app` claim of a Velora token: the registered Nookara app the person signed in through ({ id, name, icon }), kept with
-// the session so messages' `via` can name it. Velora signed it, so it is taken as given, but only in this shape.
+// the `app` claim of a Nookara token: the registered Nookara app the person signed in through ({ id, name, icon }), kept with
+// the session so messages' `via` can name it. Nookara signed it, so it is taken as given, but only in this shape.
 function appClaim(a) {
   if (!a || typeof a !== 'object' || typeof a.id !== 'string' || !/^app_[0-9a-f]{8,40}$/.test(a.id)) return null;
   const name = typeof a.name === 'string' ? a.name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 64) : '';
@@ -196,7 +197,7 @@ async function registerLocal(username, password) {
   if (config.get().registration !== 'open' && claimed()) throw err('registration_closed', 403);
   return finishLogin(userById(await createLocalUser(username, password)), LOCAL_SCOPES);
 }
-// a username + password account (also made by an admin while still on Velora accounts: the way back in after switching to local)
+// a username + password account (also made by an admin while still on Nookara accounts: the way back in after switching to local)
 async function createLocalUser(username, password) {
   const name = String(username || '').trim().toLowerCase();
   if (!USERNAME.test(name)) throw err('invalid_username');
@@ -228,9 +229,9 @@ async function loginLocal(username, password) {
 const ownerRow = () => { const id = db.metaGet('owner_user_id'); return id ? userById(Number(id)) : null; };
 const isOwner = u => !!u && String(db.metaGet('owner_user_id')) === String(u.id);
 const isAdmin = u => !!u && (isOwner(u) || !!db.get('SELECT 1 FROM instance_admins WHERE user_id = ?', u.id));
-// the owner is an account that can't sign in under the running accounts mode (a local account after switching to Velora
-// accounts, or a Velora one after switching to local): the instance takes a new owner with the setup code, like an unclaimed one
-const ownerStranded = () => { const o = ownerRow(); return !!o && o.kind !== (config.mode() === 'local' ? 'local' : 'velora'); };
+// the owner is an account that can't sign in under the running accounts mode (a local account after switching to Nookara
+// accounts, or a Nookara one after switching to local): the instance takes a new owner with the setup code, like an unclaimed one
+const ownerStranded = () => { const o = ownerRow(); return !!o && o.kind !== (config.mode() === 'local' ? 'local' : KIND_NOOKARA); };
 // returns the previous owner's id when ownership moved from someone else (their communities moved with it), else null
 function setOwner(userId) {
   const old = db.metaGet('owner_user_id');
@@ -244,8 +245,8 @@ function setOwner(userId) {
 }
 
 module.exports = {
-  userView, botVerified, userById, userByPrincipal, upsertVeloraUser, refreshVeloraProfile, setRestricted, ensureVeloraPlaceholder,
+  userView, botVerified, userById, userByPrincipal, upsertNookaraUser, refreshNookaraProfile, setRestricted, ensureNookaraPlaceholder,
   createSession, resolveSession, revokeSession, bearer,
-  verifyVeloraJwt, setJwksFetcher, keyFor, loginVelora, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
+  verifyNookaraJwt, setJwksFetcher, keyFor, loginNookara, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
   claimed, ownerRow, ownerStranded, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,
 };

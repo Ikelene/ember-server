@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const { startServer } = require('../src/index');
 const voice = require('../src/voice');
 
@@ -42,7 +42,7 @@ test('join, publish, connect, subscribe, leave; permissions and limits', async (
   await bob.a.patch('/api/v1/instance/settings', { voice: { cf_app_id: 'app', cf_app_secret: 'sec', cf_turn_key_id: 'key', cf_turn_token: 'tok' } }).then(r => assert.equal(r.status, 403)); // bob is not an admin
   const set = await alice.a.patch('/api/v1/instance/settings', { voice: { cf_app_id: 'app', cf_app_secret: 'sec', cf_turn_key_id: 'key', cf_turn_token: 'tok' } });
   assert.equal(set.status, 200);
-  assert.equal((await api(inst.url).get('/.well-known/bonfire')).body.features.voice, true);
+  assert.equal((await api(inst.url).get('/.well-known/ember')).body.features.voice, true);
 
   // outsiders are refused
   wm.send({ type: 'chat_rtc_join', nonce: 'm1', room });

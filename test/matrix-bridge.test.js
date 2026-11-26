@@ -9,10 +9,10 @@ const http = require('http');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
-delete process.env.BONFIRE_MATRIX_TOKEN;
-delete process.env.BONFIRE_MATRIX_HOMESERVER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
+delete process.env.EMBER_MATRIX_TOKEN;
+delete process.env.EMBER_MATRIX_HOMESERVER;
 const dir = tmpDir();
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const TOKEN = 'syt_good_matrix_token_WXYZ', BOT = '@emberbot:fake.test';
@@ -148,7 +148,7 @@ test('settings: checked on save, the token is write-only and masked, the bot sta
   assert.equal(m.source, 'settings');
   assert.deepEqual(m.bot, { id: BOT, username: BOT });
   assert.ok(!JSON.stringify(ok.body).includes(TOKEN));
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.bridges.matrix, true);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.bridges.matrix, true);
   await until(async () => (await alice.a.get(S)).body.bridges.matrix.state === 'ready');
   // an empty token keeps the stored one
   assert.equal((await alice.a.patch(S, { matrix: { token: '' } })).body.bridges.matrix.token, '********WXYZ');
@@ -353,7 +353,7 @@ test('a token the homeserver no longer accepts stops the bridge; removing it swi
   assert.equal(st.error, 'invalid_token');
   const off = (await alice.a.patch('/api/v1/bridge/settings', { matrix: { token: null } })).body.bridges.matrix;
   assert.deepEqual(off, { configured: false, token: null, homeserver: null, source: null, state: 'off', error: null, bot: null });
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.bridges.matrix, false);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.bridges.matrix, false);
 });
 
 test('the quoted lines of a Matrix reply are told apart from the answer', () => {

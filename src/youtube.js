@@ -1,5 +1,5 @@
 'use strict';
-// "Watch through the instance": the client's YouTube player without YouTube (ported from Velora's routes/chat-yt.js).
+// "Watch through the instance": the client's YouTube player without YouTube (ported from Nookara's routes/chat-yt.js).
 // The instance fetches the video with yt-dlp, keeps it for 24 hours (every watch pushes that back) and streams it from here.
 // OPTIONAL: needs a yt-dlp binary ("install yt-dlp to enable"). Detected at boot (`yt-dlp --version`) and whenever the
 // `youtube` settings change; features.youtube in discovery says whether it works, and every route answers

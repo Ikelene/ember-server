@@ -3,11 +3,12 @@
 // The instance owner brings their own bot token for each platform (Instance settings > Bridges). No discord.js:
 // the gateway client below speaks just enough of the protocol (hello, identify / resume, heartbeat + ack, reconnect,
 // invalid session) to receive MESSAGE_CREATE / UPDATE / DELETE / DELETE_BULK. Fluxer's API is Discord's.
+const { env } = require('../compat');
 const WebSocket = require('ws');
 const store = require('./store');
 const { err, log } = require('../util');
 
-const UA = 'Bonfire-Bridge/1.0 (+https://github.com/ikelene/velora)';
+const UA = 'Ember-Bridge/1.0 (+https://github.com/Ikelene/ember-server)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // what the bot needs in each server: see channels, read history, send, embed links, attach files, manage messages + webhooks,
 // and for voice links connect + speak
@@ -33,10 +34,10 @@ const IDS = Object.keys(DEFAULTS);
 let P = structuredCloneish(DEFAULTS);
 function structuredCloneish(o) { return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { ...v }])); }
 
-// the bot token: Instance settings (bridge_settings) first, then BONFIRE_DISCORD_TOKEN / BONFIRE_FLUXER_TOKEN
-const ENV = { discord: 'BONFIRE_DISCORD_TOKEN', fluxer: 'BONFIRE_FLUXER_TOKEN' };
-const tokenOf = p => store.setting(`${p}.token`) || process.env[ENV[p]] || '';
-const tokenSource = p => (store.setting(`${p}.token`) ? 'settings' : process.env[ENV[p]] ? 'env' : null);
+// the bot token: Instance settings (bridge_settings) first, then EMBER_DISCORD_TOKEN / EMBER_FLUXER_TOKEN
+const ENV = { discord: 'DISCORD_TOKEN', fluxer: 'FLUXER_TOKEN' };
+const tokenOf = p => store.setting(`${p}.token`) || env(ENV[p]) || '';
+const tokenSource = p => (store.setting(`${p}.token`) ? 'settings' : env(ENV[p]) ? 'env' : null);
 function platform(p) {
   const x = P[p];
   if (!x) throw err('bad_platform', 404);
@@ -139,7 +140,7 @@ class GatewayClient {
       if (this.sessionId && this.seq != null) this.send(ws, { op: 6, d: { token: this.token, session_id: this.sessionId, seq: this.seq } });
       else {
         const x = platform(this.p);
-        this.send(ws, { op: 2, d: { token: this.token, ...(x.intents != null ? { intents: x.intents } : {}), properties: { os: process.platform, browser: 'bonfire-server', device: 'bonfire-server' } } });
+        this.send(ws, { op: 2, d: { token: this.token, ...(x.intents != null ? { intents: x.intents } : {}), properties: { os: process.platform, browser: 'ember-server', device: 'ember-server' } } });
       }
     } else if (m.op === 11) this.acked = true;
     else if (m.op === 1) this.send(ws, { op: 1, d: this.seq });

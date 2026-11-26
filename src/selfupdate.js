@@ -1,19 +1,20 @@
 'use strict';
-// One-click "Update server" for an instance that runs in a Docker container which something else (bonfire-hostd) can rebuild and
+// One-click "Update server" for an instance that runs in a Docker container which something else (hostd) can rebuild and
 // recreate. The instance never touches Docker itself: it asks the host agent over HTTP.
-//   BONFIRE_UPDATE_URL     base URL of bonfire-hostd's API as seen from this container, e.g. http://172.17.0.1:8090
-//   BONFIRE_UPDATE_SECRET  bearer secret for it (HOSTD_SECRET, or the narrower HOSTD_CHAT_UPDATE_SECRET); never sent to clients
-// Not configured, or a Velora-hosted (managed) instance (those are updated by the host's update-all): reported as unsupported.
+//   EMBER_UPDATE_URL     base URL of hostd's API as seen from this container, e.g. http://172.17.0.1:8090
+//   EMBER_UPDATE_SECRET  bearer secret for it (HOSTD_SECRET, or the narrower HOSTD_CHAT_UPDATE_SECRET); never sent to clients
+// Not configured, or a Nookara-hosted (managed) instance (those are updated by the host's update-all): reported as unsupported.
+const { env } = require('./compat');
 const managed = require('./managed');
 const { err, log } = require('./util');
 
 const GET_TIMEOUT = 6000, POST_TIMEOUT = 15000;
 const url = () => {
-  const raw = String(process.env.BONFIRE_UPDATE_URL || '').trim();
+  const raw = String(env('UPDATE_URL') || '').trim();
   if (!raw) return null;
   try { const u = new URL(raw); return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin + u.pathname.replace(/\/+$/, '') : null; } catch { return null; }
 };
-const secret = () => String(process.env.BONFIRE_UPDATE_SECRET || '');
+const secret = () => String(env('UPDATE_SECRET') || '');
 function support() {
   if (managed.active()) return { supported: false, reason: 'managed' };
   if (!url() || !secret()) return { supported: false, reason: 'not_configured' };

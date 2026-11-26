@@ -33,7 +33,7 @@ test('channel overwrite on @everyone denies VIEW; a role allow brings it back', 
 test('role overwrites: @everyone applied first, then the OR of role denies, then the OR of role allows (allow wins)', () => {
   const o = ow([[1, { allow: 0, deny: P.SEND }], [2, { allow: P.SEND, deny: 0 }], [3, { allow: 0, deny: P.SEND }]]);
   const cp = channelPerms(base([2, 3]), { overwrites: o, everyoneId: 1, roleIds: new Set([2, 3]) });
-  assert.equal(cp & P.SEND, P.SEND); // a role allow re-grants what @everyone / another role denied, exactly like Velora
+  assert.equal(cp & P.SEND, P.SEND); // a role allow re-grants what @everyone / another role denied, exactly like Nookara
   const denyOnly = channelPerms(base([3]), { overwrites: o, everyoneId: 1, roleIds: new Set([3]) });
   assert.equal(denyOnly & P.SEND, 0);
   const onlyAllow = channelPerms(base([2]), { overwrites: o, everyoneId: 1, roleIds: new Set([2]) });

@@ -10,9 +10,9 @@ const { WebSocketServer } = require('ws');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
-delete process.env.BONFIRE_DISCORD_TOKEN;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
+delete process.env.EMBER_DISCORD_TOKEN;
 const dir = tmpDir();
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const TOKEN = 'good.discord.token-WXYZ', FTOKEN = 'good.fluxer.token-QRST';
@@ -138,7 +138,7 @@ test('bot tokens: checked on save, write-only, masked; the gateway identifies wi
   await until(async () => (await alice.a.get('/api/v1/bridge/settings')).body.bridges.discord.state === 'ready');
   // an empty token keeps the stored one
   assert.equal((await alice.a.patch('/api/v1/bridge/settings', { discord: { token: '' } })).body.bridges.discord.token, '********WXYZ');
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.bridges.discord, true);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.bridges.discord, true);
 });
 
 test('gateway: op 7 (reconnect) resumes the session; op 1 is answered with a heartbeat', async () => {

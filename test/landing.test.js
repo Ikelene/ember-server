@@ -6,8 +6,8 @@ const fs = require('fs');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, bob, sid;
 const reg = async n => { const r = await api(base).post('/api/v1/auth/register', { username: n, password: 'correct horse battery' }); assert.equal(r.status, 200); return { ...r.body, a: api(base, r.body.session) }; };
@@ -41,7 +41,7 @@ test('non-browser clients get exactly the old JSON at /', async () => {
     assert.match(r.headers.get('content-type'), /application\/json/);
     const j = await r.json();
     assert.equal(j.software, 'bonfire-server');
-    assert.equal(j.discovery, '/.well-known/bonfire');
+    assert.equal(j.discovery, '/.well-known/ember');
     assert.deepEqual(Object.keys(j).sort(), ['about', 'discovery', 'open_protocol', 'protocol', 'protocol_docs', 'software', 'version']);
   }
 });
@@ -118,6 +118,6 @@ test('other paths are untouched for browsers too', async () => {
   const nf = await get('/nope', BROWSER);
   assert.equal(nf.status, 404);
   assert.deepEqual(await nf.json(), { error: 'not_found' });
-  const wk = await get('/.well-known/bonfire', BROWSER);
+  const wk = await get('/.well-known/ember', BROWSER);
   assert.equal((await wk.json()).software, 'bonfire-server');
 });

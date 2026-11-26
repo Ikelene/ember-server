@@ -6,10 +6,11 @@
 //   /clone-check for its own pictures (locked when cloning is off, unless the asker is its owner / has Administrator);
 // - an upload here whose bytes are someone's locked Nookara personal emoji/sticker is refused (clone_locked) - Nookara is asked;
 // - `from` (the picture's address, sent by Ember) on another Ember server: that server is asked the same question.
-// GET /api/v1/clone-check?sha256=&velora_id= answers others (Nookara for "Add to personal", other instances).
+// GET /api/v1/clone-check?sha256=&<NOOKARA_ID_FIELD> answers others (Nookara for "Add to personal", other instances).
 // A changed file (re-saved, cropped, screenshotted) is a new picture: this stops clone buttons and exact copies, nothing more.
 // Origins (Nat 2026-11-14): a copy remembers where its bytes were first seen - { type: 'server', name, host } or
 // { type: 'user', user_id, username } (a Nookara personal one). /clone-check answers it too, so a copy of a copy keeps the first.
+const { LEGACY_NOOKARA_HOSTS, NOOKARA_ID_FIELD } = require('./compat');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -39,15 +40,15 @@ const saved = (communityId, buf, t = null, id = null) => { if (t && id != null) 
 const forget = () => { index = null; };
 
 const allowsCloning = c => require('./settings').get(c).emojis?.allow_cloning !== false;
-// the servers that would refuse a copy of these bytes for this user (velora_id: a Nookara account id, for other servers asking)
-function lockedBy(hash, { userId = null, veloraId = null, into = null } = {}) {
+// the servers that would refuse a copy of these bytes for this user (nookaraId: a Nookara account id, for other servers asking)
+function lockedBy(hash, { userId = null, nookaraId = null, into = null } = {}) {
   const C = require('./communities');
   const out = [];
   for (const cid of new Set(((index || build()).get(hash) || []).map(x => x.cid))) {
     const c = db.get('SELECT * FROM communities WHERE id = ?', cid);
     if (!c || allowsCloning(c) || Number(c.id) === Number(into)) continue; // (a copy inside the same server isn't a clone)
     let uid = userId;
-    if (uid == null && veloraId) uid = db.get("SELECT id FROM users WHERE velora_id = ?", String(veloraId))?.id ?? null;
+    if (uid == null && nookaraId) uid = db.get("SELECT id FROM users WHERE nookara_id = ?", String(nookaraId))?.id ?? null;
     if (uid != null && C.canManageClones(c, uid)) continue; // its owner / admins: their own server's pictures
     out.push(c);
   }
@@ -74,20 +75,20 @@ function originHere(hash) {
 }
 
 // GET /api/v1/clone-check: { locked, reason?, origin? } - origin: where a picture with those bytes was first seen
-function check(hash, veloraId) {
+function check(hash, nookaraId) {
   if (!/^[0-9a-f]{64}$/.test(String(hash || ''))) throw err('invalid_sha256');
-  const locked = lockedBy(String(hash), { veloraId: veloraId ? String(veloraId).slice(0, 40) : null }).length > 0;
+  const locked = lockedBy(String(hash), { nookaraId: nookaraId ? String(nookaraId).slice(0, 40) : null }).length > 0;
   const origin = originHere(String(hash));
   return { locked, ...(locked ? { reason: 'cloning_disabled' } : {}), ...(origin ? { origin } : {}) };
 }
 
 // ask another server (Nookara or an Ember server): its { locked, origin? }. Any failure = not locked, no origin (never block uploads on a slow peer)
-async function askRemote(origin, hash, veloraId) {
+async function askRemote(origin, hash, nookaraId) {
   try {
     const u = new URL(origin);
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname))) return {};
-    const pathPart = /(^|\.)nookara\.cc$|velora\.ikelene\.net$/.test(u.hostname) || origin === config.get().velora_url ? '/chat/clone-check' : '/api/v1/clone-check';
-    const q = new URLSearchParams({ sha256: hash, ...(veloraId ? { velora_id: String(veloraId) } : {}) });
+    const pathPart = (/(^|\.)nookara\.cc$/.test(u.hostname) || LEGACY_NOOKARA_HOSTS.includes(u.hostname)) || origin === config.get().nookara_url ? '/chat/clone-check' : '/api/v1/clone-check';
+    const q = new URLSearchParams({ sha256: hash, ...(nookaraId ? { [NOOKARA_ID_FIELD]: String(nookaraId) } : {}) });
     const res = await fetch(`${u.origin}${pathPart}?${q}`, { signal: AbortSignal.timeout(4000), redirect: 'error' });
     if (!res.ok) return {};
     const d = await res.json().catch(() => ({}));
@@ -102,13 +103,13 @@ async function assertCloneAllowed(buf, me, from, into = null) {
   if (!buf) return null;
   const hash = sha256(buf);
   if (lockedBy(hash, { userId: me.id, into }).length) throw err('cloning_disabled', 403);
-  const veloraId = me.velora_id || null;
+  const nookaraId = me.nookara_id || null;
   const asks = [];
-  if (config.mode() === 'velora' && config.get().velora_url) asks.push(askRemote(config.get().velora_url, hash, veloraId).then(a => ({ ...a, code: 'clone_locked' })));
+  if (config.mode() === 'nookara' && config.get().nookara_url) asks.push(askRemote(config.get().nookara_url, hash, nookaraId).then(a => ({ ...a, code: 'clone_locked' })));
   let fromOrigin = null;
   try { fromOrigin = from ? new URL(String(from).slice(0, 500)).origin : null; } catch { fromOrigin = null; }
-  if (fromOrigin && fromOrigin !== selfOrigin() && fromOrigin !== config.get().velora_url && !/(^|\.)nookara\.cc$/.test(new URL(fromOrigin).hostname)) {
-    asks.push(askRemote(fromOrigin, hash, veloraId).then(a => ({ ...a, code: 'cloning_disabled', from: true })));
+  if (fromOrigin && fromOrigin !== selfOrigin() && fromOrigin !== config.get().nookara_url && !/(^|\.)nookara\.cc$/.test(new URL(fromOrigin).hostname)) {
+    asks.push(askRemote(fromOrigin, hash, nookaraId).then(a => ({ ...a, code: 'cloning_disabled', from: true })));
   }
   const answers = await Promise.all(asks);
   for (const a of answers) if (a.locked) throw err(a.code, 403);

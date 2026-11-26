@@ -1,12 +1,13 @@
 'use strict';
-// Bot gallery on the instance (see Velora /opt/velora/BOT-GALLERY.md, PROTOCOL §14.1).
+// Bot gallery on the instance (see Nookara's BOT-GALLERY.md, PROTOCOL §14.1).
 // A gallery bot is a normal instance bot (principal b:<n>, BOT tag, member of the community) whose profile and token HASH come
-// from Velora: the person asks Velora for an add-ticket (EdDSA JWS, typ bonfire-botadd+jwt, aud = this instance, sub = the person),
+// from Nookara: the person asks Nookara for an add-ticket (EdDSA JWS, typ compat TYP.botAdd, aud = this instance, sub = the person),
 // hands it to POST /api/v1/bots/gallery/add, and the instance creates the local bot after checking the ticket offline against
-// Velora's JWKS. The bot's developer then connects to THIS instance's /bot/gateway with the same token they use everywhere
-// (the token hash is stored here, so authentication stays local). Every few minutes `sync()` tells Velora which gallery bots we
-// have (install counts, "trusted in N servers") and Velora answers with fresh profiles / token hashes, or "revoked" (banned,
+// Nookara's JWKS. The bot's developer then connects to THIS instance's /bot/gateway with the same token they use everywhere
+// (the token hash is stored here, so authentication stays local). Every few minutes `sync()` tells Nookara which gallery bots we
+// have (install counts, "trusted in N servers") and Nookara answers with fresh profiles / token hashes, or "revoked" (banned,
 // purged or deleted), which removes the bot from the community.
+const { ERR, relayPath, TYP: JWT_TYP, env } = require('../compat');
 const crypto = require('crypto');
 const config = require('../config');
 const db = require('../db');
@@ -14,9 +15,9 @@ const auth = require('../auth');
 const C = require('../communities');
 const { P } = require('../perms');
 const client = require('./client');
-const { err, normalizeOrigin, sameVelora, now } = require('../util');
+const { err, normalizeOrigin, sameNookara, now } = require('../util');
 
-const TYP = 'bonfire-botadd+jwt', SYNC_MS = 10 * 60 * 1000, NAME = /^[A-Za-z0-9_.-]{2,32}$/;
+const TYP = JWT_TYP.botAdd, SYNC_MS = 10 * 60 * 1000, NAME = /^[A-Za-z0-9_.-]{2,32}$/;
 const B = () => require('../bots');
 let tick = null, soon = null, busy = false, dirty = false;
 const trusted = new Map(); // gallery id -> "trusted in N servers" as of the last sync
@@ -30,15 +31,15 @@ async function verifyTicket(token, user) {
   try { head = JSON.parse(Buffer.from(parts[0], 'base64url')); claims = JSON.parse(Buffer.from(parts[1], 'base64url')); } catch { throw err('ticket_invalid'); }
   if (head?.alg !== 'EdDSA' || head.typ !== TYP || typeof head.kid !== 'string' || !claims || typeof claims !== 'object') throw err('ticket_invalid');
   let key;
-  try { key = await auth.keyFor(head.kid); } catch { throw err('velora_unreachable', 502); }
+  try { key = await auth.keyFor(head.kid); } catch { throw err(ERR.unreachable, 502); }
   if (!key) throw err('ticket_unknown_kid');
   let ok = false;
   try { ok = crypto.verify(null, Buffer.from(parts[0] + '.' + parts[1]), key, Buffer.from(parts[2], 'base64url')); } catch { ok = false; }
   if (!ok) throw err('ticket_bad_signature');
   const cfg = config.get();
-  if (!sameVelora(claims.iss, cfg.velora_url)) throw err('ticket_wrong_issuer');
+  if (!sameNookara(claims.iss, cfg.nookara_url)) throw err('ticket_wrong_issuer');
   if (normalizeOrigin(claims.aud) !== normalizeOrigin(cfg.public_url)) throw err('ticket_wrong_audience');
-  if (!user.velora_id || String(claims.sub) !== String(user.velora_id)) throw err('ticket_wrong_user', 403);
+  if (!user.nookara_id || String(claims.sub) !== String(user.nookara_id)) throw err('ticket_wrong_user', 403);
   if (!Number.isFinite(claims.exp) || claims.exp * 1000 < now()) throw err('ticket_expired', 410);
   const b = claims.bot;
   if (!b || !/^[1-9]\d{0,19}$/.test(String(b.id)) || typeof b.username !== 'string' || typeof claims.token_hash !== 'string' || !/^[0-9a-f]{64}$/.test(claims.token_hash) || typeof claims.jti !== 'string') throw err('ticket_invalid');
@@ -47,11 +48,11 @@ async function verifyTicket(token, user) {
 }
 
 // ---------- local bot rows ----------
-const httpsUrl = u => { try { const x = new URL(String(u)); return x.protocol === 'https:' || (x.protocol === 'http:' && process.env.BONFIRE_DEV === '1') ? x.href.slice(0, 512) : null; } catch { return null; } };
+const httpsUrl = u => { try { const x = new URL(String(u)); return x.protocol === 'https:' || (x.protocol === 'http:' && env('DEV') === '1') ? x.href.slice(0, 512) : null; } catch { return null; } };
 function freeName(want, gid, exceptId = 0) {
   const base = NAME.test(want) ? want : 'bot-' + gid;
   for (const n of [base, `${base.slice(0, 26)}-${gid}`.slice(0, 32)]) {
-    // the bot's own Velora identity (registry bot id = Velora user id, principal v:<gid>) is not a clash: it is the same name, e.g. Jarvis' old messages
+    // the bot's own Nookara identity (registry bot id = Nookara user id, principal v:<gid>) is not a clash: it is the same name, e.g. Jarvis' old messages
     if (!db.get("SELECT 1 FROM users WHERE LOWER(username) = ? AND id <> ? AND principal <> ?", n.toLowerCase(), exceptId, 'v:' + gid)) return n;
   }
   return `gb-${gid}-${crypto.randomBytes(2).toString('hex')}`.slice(0, 32);
@@ -59,7 +60,7 @@ function freeName(want, gid, exceptId = 0) {
 const byGallery = gid => db.get('SELECT b.*, u.username FROM bots b JOIN users u ON u.id = b.user_id WHERE b.gallery_id = ?', String(gid));
 
 async function add(me, body = {}) {
-  if (!me.velora_id) throw err('gallery_needs_velora_account', 400);
+  if (!me.nookara_id) throw err(ERR.galleryNeedsAccount, 400);
   const { c, snap } = C.memberCommunity(String(body.sid || ''), me);
   if (!snap.can(me.id, P.MANAGE_SERVER)) throw err('not_allowed', 403);
   const claims = await verifyTicket(body.ticket, me);
@@ -92,7 +93,7 @@ async function add(me, body = {}) {
   return { bot: B().viewOf(row.user_id) };
 }
 
-// ---------- sync with Velora ----------
+// ---------- sync with Nookara ----------
 function removeLocal(userId) {
   for (const m of db.all('SELECT community_id FROM members WHERE user_id = ?', userId)) C.removeMember(db.get('SELECT * FROM communities WHERE id = ?', m.community_id), userId, 'left');
   B().closeGatewaysOf(userId, 4004, 'removed from the gallery');
@@ -101,13 +102,13 @@ function removeLocal(userId) {
 async function sync() {
   if (busy) { dirty = true; return null; }
   if (!client.registered()) return null;
-  // only bots that are still members of the server count as installed: a kicked / banned gallery bot stops being reported (its Velora install count drops)
+  // only bots that are still members of the server count as installed: a kicked / banned gallery bot stops being reported (its Nookara install count drops)
   const rows = db.all('SELECT user_id, gallery_id, gallery_test FROM bots WHERE gallery_id IS NOT NULL AND EXISTS (SELECT 1 FROM members m WHERE m.user_id = bots.user_id)');
   const reported = db.metaGet('gallery_reported') === '1';
-  if (!rows.length && !reported) return null; // nothing local, nothing to take down on Velora
+  if (!rows.length && !reported) return null; // nothing local, nothing to take down on Nookara
   busy = true;
   try {
-    const out = await client.call('POST', '/bonfire/relay/bots/sync', { bots: rows.map(r => ({ id: r.gallery_id, test: !!r.gallery_test })) });
+    const out = await client.call('POST', relayPath('/bots/sync'), { bots: rows.map(r => ({ id: r.gallery_id, test: !!r.gallery_test })) });
     db.metaSet('gallery_reported', rows.length ? '1' : '0');
     for (const x of Array.isArray(out?.bots) ? out.bots : []) {
       const row = byGallery(x.id);

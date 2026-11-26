@@ -1,17 +1,17 @@
 'use strict';
-// An instance on nookara.cc accepts message signatures that name either Nookara issuer (https://nookara.cc, or Velora's original
-// https://velora.ikelene.net that older apps sign with), and lists them in discovery as velora.signing_issuers.
+// An instance on nookara.cc accepts message signatures that name either Nookara issuer (https://nookara.cc, or Nookara's original
+// https://velora.ikelene.net that older apps sign with), and lists them in discovery as nookara.signing_issuers.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const crypto = require('crypto');
 const { tmpDir, api, fakeIdp } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_VELORA_URL = 'https://nookara.cc';
-process.env.BONFIRE_PUBLIC_URL = 'https://chat.test';
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_NOOKARA_URL = 'https://nookara.cc';
+process.env.EMBER_PUBLIC_URL = 'https://chat.test';
 process.env.EMBER_ACCEPT_OPERATOR_TERMS = '1';
-delete process.env.BONFIRE_OWNER;
+delete process.env.EMBER_OWNER;
 const { startServer } = require('../src/index');
 const auth = require('../src/auth');
 const signing = require('../src/signing');
@@ -28,9 +28,9 @@ test.before(async () => { inst = await startServer({ dataDir: dir, port: 0, host
 test.after(async () => { await inst.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 test('both Nookara issuers verify; any other issuer does not', async () => {
-  const info = (await api(inst.url).get('/.well-known/bonfire')).body;
-  assert.deepEqual(info.velora.signing_issuers, ['https://nookara.cc', 'https://velora.ikelene.net']);
-  const a = api(inst.url, (await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: '123', username: 'nat' }) })).body.session);
+  const info = (await api(inst.url).get('/.well-known/ember')).body;
+  assert.deepEqual(info.nookara.signing_issuers, ['https://nookara.cc', 'https://velora.ikelene.net']);
+  const a = api(inst.url, (await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: '123', username: 'nat' }) })).body.session);
   assert.equal((await a.post('/api/v1/instance/claim', { code: inst.setup.current(), accept_operator_terms: true })).status, 200);
   const d = (await a.post('/api/v1/servers', { name: 'Signed' })).body;
   const sid = d.server.sid, cid = d.channels.find(c => c.type === 'text').cid;

@@ -15,19 +15,19 @@ const client = require('../src/relay/client');
 const voice = require('../src/voice');
 const { presence } = require('../src/bot-presence');
 
-Object.assign(process.env, { BONFIRE_MANAGED: '1', BONFIRE_PLAN: 'testing', BONFIRE_LIMITS: JSON.stringify({ bots: 1, custom_voice_keys: true }), BONFIRE_ACCOUNTS_MODE: 'velora', BONFIRE_OWNER: 'v:100', BONFIRE_PUBLIC_URL: 'http://chat.test', BONFIRE_VELORA_URL: 'http://velora.test' });
-const dir = tmpDir(), sockets = [], idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+Object.assign(process.env, { EMBER_MANAGED: '1', EMBER_PLAN: 'testing', EMBER_LIMITS: JSON.stringify({ bots: 1, custom_voice_keys: true }), EMBER_ACCOUNTS_MODE: 'nookara', EMBER_OWNER: 'v:100', EMBER_PUBLIC_URL: 'http://chat.test', EMBER_NOOKARA_URL: 'http://nookara.test' });
+const dir = tmpDir(), sockets = [], idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 let inst, owner, sid, c, human, watcher;
 const token = 'gallery.test-token';
 const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 function ticket(id = '80') {
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
   const h = b64({ alg: 'EdDSA', typ: gallery.TYP, kid: idp.kid });
-  const b = b64({ iss: 'http://velora.test', aud: 'http://chat.test', sub: '100', exp: Math.floor(Date.now() / 1000) + 300, jti: crypto.randomUUID(), token_hash: hash(token + id), bot: { id, username: 'gallery' + id } });
+  const b = b64({ iss: 'http://nookara.test', aud: 'http://chat.test', sub: '100', exp: Math.floor(Date.now() / 1000) + 300, jti: crypto.randomUUID(), token_hash: hash(token + id), bot: { id, username: 'gallery' + id } });
   return h + '.' + b + '.' + crypto.sign(null, Buffer.from(h + '.' + b), idp.privateKey).toString('base64url');
 }
 async function login(sub, username) {
-  const r = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub, username }) });
+  const r = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub, username }) });
   assert.equal(r.status, 200);
   return { ...r.body, a: api(inst.url, r.body.session) };
 }
@@ -220,9 +220,9 @@ test('membership removal during RTC allocation cannot recreate a voice session',
 });
 
 test('zero numeric allowances use plan_feature; unlimited counts stay available', async () => {
-  const before = process.env.BONFIRE_LIMITS;
+  const before = process.env.EMBER_LIMITS;
   try {
-    process.env.BONFIRE_LIMITS = JSON.stringify({ bots: 0, emojis: 0, sounds: 0, max_upload_mb: 0 });
+    process.env.EMBER_LIMITS = JSON.stringify({ bots: 0, emojis: 0, sounds: 0, max_upload_mb: 0 });
     for (const what of ['bots', 'emojis', 'sounds', 'max_upload_mb']) {
       assert.throws(() => managed.assertRoom(what, 0), e => e.code === 'plan_feature' && e.status === 403 && e.extra.what === what && e.extra.limit === 0 && e.extra.plan === 'testing' && !!e.extra.message);
       assert.equal(managed.usage().limits[what].limit, 0);
@@ -241,8 +241,8 @@ test('zero numeric allowances use plan_feature; unlimited counts stay available'
     assert.equal(disabledUpload.body.what, 'max_upload_mb');
     assert.equal((await api(inst.url).get('/api/v1/instance/info')).body.plan, undefined);
     assert.deepEqual((await owner.a.get('/api/v1/instance/settings')).body.plan, managed.usage());
-    process.env.BONFIRE_LIMITS = JSON.stringify({ bots: null });
+    process.env.EMBER_LIMITS = JSON.stringify({ bots: null });
     managed.assertRoom('bots', 1e9);
     assert.deepEqual(managed.usage().limits.bots, { limit: null, used: 0 });
-  } finally { process.env.BONFIRE_LIMITS = before; }
+  } finally { process.env.EMBER_LIMITS = before; }
 });

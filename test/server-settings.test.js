@@ -11,8 +11,8 @@ const M = require('../src/messages');
 const db = require('../src/db');
 const uploads = require('../src/uploads');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_MANAGED;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_MANAGED;
 const dir = tmpDir();
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const form = (buf, name, fields = {}) => { const f = new FormData(); for (const [k, v] of Object.entries(fields)) f.append(k, v); f.append('file', new Blob([buf]), name); return f; };

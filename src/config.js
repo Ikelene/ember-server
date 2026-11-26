@@ -1,5 +1,6 @@
 'use strict';
 // DATA_DIR/config.json is the source of truth for instance settings; a few env vars override it.
+const { ERR, env, LEGACY_CONFIG_KEYS, LEGACY_MODE, readMode, wireMode, withLegacy, renameLegacySettings } = require('./compat');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -7,7 +8,7 @@ const { err, normalizeOrigin } = require('./util');
 const managed = require('./managed');
 
 const events = new EventEmitter();
-let DATA_DIR = path.resolve(process.env.BONFIRE_DATA || './data');
+let DATA_DIR = path.resolve(env('DATA') || './data');
 let PORT = Number(process.env.PORT) || 4100;
 let file = null;
 let data = {};
@@ -16,13 +17,13 @@ let watcher = null, lastWritten = null, debounce = null;
 
 const DEFAULTS = {
   name: 'Ember Instance', description: '', icon_url: null, public_url: null,
-  accounts_mode: 'local', velora_url: 'https://nookara.cc',
+  accounts_mode: 'local', nookara_url: 'https://nookara.cc',
   registration: 'open', max_upload_mb: 25, max_backups: 10,
   voice: { cf_app_id: '', cf_app_secret: '', cf_turn_key_id: '', cf_turn_token: '' },
   // optional "watch through the instance" YouTube player (needs yt-dlp); cache_dir '' = DATA_DIR/cache/yt
   youtube: { enabled: true, ytdlp_path: 'yt-dlp', cache_dir: '', cache_max_gb: 5 },
-  // Velora relays (PROTOCOL §12): 'auto' registers with velora_url on boot; 'off' never contacts Velora (no push / payments / daily / voice broker / directory)
-  velora_registration: 'auto', tags: [],
+  // Nookara relays (PROTOCOL §12): 'auto' registers with nookara_url on boot; 'off' never contacts Nookara (no push / payments / daily / voice broker / directory)
+  nookara_registration: 'auto', tags: [],
 };
 
 function init({ dataDir, port } = {}) {
@@ -39,23 +40,28 @@ function init({ dataDir, port } = {}) {
 function reload(quiet) {
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { if (e.code !== 'ENOENT' && !quiet) console.error('[config] could not read config.json:', e.message); }
-  try { data = sanitize(raw, true); } catch (e) { console.error('[config] invalid config.json, keeping previous values:', e.message); }
+  try { data = sanitize(raw, true); } catch (e) { console.error('[config] invalid config.json, keeping previous values:', e.message); return; }
+  if (hasLegacy(raw)) { write(); console.log('[config] config.json: renamed the old velora settings to nookara'); }
 }
+
+// old names in config.json or a settings PATCH: velora_url / velora_registration keys, accounts_mode "velora"
+const hasLegacy = p => Object.keys(LEGACY_CONFIG_KEYS).some(k => k in p) || p.accounts_mode === LEGACY_MODE;
 
 // validate a (partial) settings object. loose = ignore unknown keys / bad values quietly (hand-edited file)
 function sanitize(p, loose = false) {
+  p = renameLegacySettings(p);
   const out = {};
   const bad = code => { if (!loose) throw err(code, 400); };
   const str = (k, n) => { if (p[k] !== undefined) { if (typeof p[k] === 'string' && p[k].length <= n) out[k] = p[k].trim(); else bad('invalid_' + k); } };
   str('name', 60); str('description', 300); // same limits as the community's (they are the same values, PROTOCOL §5a)
   if (out.name === '') { delete out.name; bad('invalid_name'); }
   if (p.icon_url !== undefined) { if (p.icon_url === null || p.icon_url === '') out.icon_url = null; else if (typeof p.icon_url === 'string' && p.icon_url.length < 512) out.icon_url = p.icon_url; else bad('invalid_icon_url'); }
-  for (const k of ['public_url', 'velora_url']) {
+  for (const k of ['public_url', 'nookara_url']) {
     if (p[k] === undefined) continue;
     const o = typeof p[k] === 'string' ? normalizeOrigin(p[k]) : null;
     if (o) out[k] = o; else if (p[k] === null && k === 'public_url') out[k] = null; else bad('invalid_' + k);
   }
-  if (p.accounts_mode !== undefined) { if (['velora', 'local'].includes(p.accounts_mode)) out.accounts_mode = p.accounts_mode; else bad('invalid_accounts_mode'); }
+  if (p.accounts_mode !== undefined) { if (['nookara', 'local'].includes(p.accounts_mode)) out.accounts_mode = p.accounts_mode; else bad('invalid_accounts_mode'); }
   if (p.registration !== undefined) { if (['open', 'closed'].includes(p.registration)) out.registration = p.registration; else bad('invalid_registration'); }
   if (p.max_upload_mb !== undefined) { const n = Number(p.max_upload_mb); if (Number.isInteger(n) && n >= 1 && n <= 500) out.max_upload_mb = n; else bad('invalid_max_upload_mb'); }
   if (p.max_backups !== undefined) { if (Number.isInteger(p.max_backups) && p.max_backups >= 1 && p.max_backups <= 50) out.max_backups = p.max_backups; else bad('invalid_max_backups'); }
@@ -75,8 +81,8 @@ function sanitize(p, loose = false) {
       out.youtube = y;
     } else bad('invalid_youtube');
   }
-  if (p.velora_registration !== undefined) { if (['auto', 'off'].includes(p.velora_registration)) out.velora_registration = p.velora_registration; else bad('invalid_velora_registration'); }
-  if (p.listed !== undefined) { if (typeof p.listed === 'boolean') out.listed = p.listed; else bad('invalid_listed'); } // the Velora directory (same value as the community's `listed`)
+  if (p.nookara_registration !== undefined) { if (['auto', 'off'].includes(p.nookara_registration)) out.nookara_registration = p.nookara_registration; else bad(ERR.badRegistration); }
+  if (p.listed !== undefined) { if (typeof p.listed === 'boolean') out.listed = p.listed; else bad('invalid_listed'); } // the Nookara directory (same value as the community's `listed`)
   if (p.tags !== undefined) {
     const ok = Array.isArray(p.tags) && p.tags.length <= 8 && p.tags.every(t => typeof t === 'string' && t.trim().length >= 1 && t.trim().length <= 24 && !t.includes(','));
     if (ok) out.tags = [...new Set(p.tags.map(t => t.trim().toLowerCase()))]; else bad('invalid_tags');
@@ -87,18 +93,20 @@ function sanitize(p, loose = false) {
 // the effective settings: defaults < file < env. (Old community_creation / auto_join keys in config.json are ignored.)
 function get() {
   const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) } };
-  if (process.env.BONFIRE_ACCOUNTS_MODE && ['velora', 'local'].includes(process.env.BONFIRE_ACCOUNTS_MODE)) v.accounts_mode = process.env.BONFIRE_ACCOUNTS_MODE;
-  if (process.env.BONFIRE_VELORA_URL) v.velora_url = normalizeOrigin(process.env.BONFIRE_VELORA_URL) || v.velora_url;
-  v.public_url = normalizeOrigin(process.env.BONFIRE_PUBLIC_URL || v.public_url || `http://localhost:${PORT}`);
-  v.velora_url = normalizeOrigin(v.velora_url);
-  if (['auto', 'off'].includes(process.env.BONFIRE_VELORA_REGISTRATION)) v.velora_registration = process.env.BONFIRE_VELORA_REGISTRATION;
-  if (managed.active()) { // Velora-hosted (PROTOCOL §19): sign-in and registration are fixed, uploads are capped by the plan
-    v.accounts_mode = 'velora'; v.velora_registration = 'auto';
+  if (envMode()) v.accounts_mode = envMode();
+  if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
+  v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
+  v.nookara_url = normalizeOrigin(v.nookara_url);
+  if (['auto', 'off'].includes(env('NOOKARA_REGISTRATION'))) v.nookara_registration = env('NOOKARA_REGISTRATION');
+  if (managed.active()) { // Nookara-hosted (PROTOCOL §19): sign-in and registration are fixed, uploads are capped by the plan
+    v.accounts_mode = 'nookara'; v.nookara_registration = 'auto';
     const cap = managed.limit('max_upload_mb');
     if (cap !== null) v.max_upload_mb = cap;
   }
   return v;
 }
+// EMBER_ACCOUNTS_MODE ("velora" still means nookara), or null
+function envMode() { const m = readMode(env('ACCOUNTS_MODE')); return ['nookara', 'local'].includes(m) ? m : null; }
 // the mode this process booted with (switching needs a restart)
 const mode = () => runningMode || get().accounts_mode;
 const publicUrl = () => get().public_url;
@@ -146,19 +154,21 @@ function unwatch() { clearTimeout(debounce); watcher?.close(); watcher = null; }
 // settings shown to admins (voice secrets are write-only)
 function adminView() {
   const v = get();
-  return {
+  const saved = managed.active() ? 'nookara' : data.accounts_mode || v.accounts_mode;
+  // accounts_mode values go out under their old wire name (compat wireMode); the renamed keys also go out under the old names
+  return withLegacy({
     name: v.name, description: v.description, icon_url: v.icon_url, public_url: v.public_url,
-    accounts_mode: managed.active() ? 'velora' : data.accounts_mode || v.accounts_mode, running_accounts_mode: mode(), restart_required: (managed.active() ? 'velora' : data.accounts_mode || v.accounts_mode) !== mode(),
-    accounts_mode_env: !!(process.env.BONFIRE_ACCOUNTS_MODE && ['velora', 'local'].includes(process.env.BONFIRE_ACCOUNTS_MODE)), // the env var wins over the saved setting
-    velora_url: v.velora_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
-    youtube: v.youtube, velora_registration: v.velora_registration, listed: !!v.listed, tags: v.tags,
+    accounts_mode: wireMode(saved), running_accounts_mode: wireMode(mode()), restart_required: saved !== mode(),
+    accounts_mode_env: !!envMode(), // the env var wins over the saved setting
+    nookara_url: v.nookara_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
+    youtube: v.youtube, nookara_registration: v.nookara_registration, listed: !!v.listed, tags: v.tags,
     voice: { cf_app_id: v.voice.cf_app_id, has_app_secret: !!v.voice.cf_app_secret, cf_turn_key_id: v.voice.cf_turn_key_id, has_turn_token: !!v.voice.cf_turn_token },
-  };
+  });
 }
 // what any connected client may see (instance_update)
 function publicView() {
   const v = get();
-  return { name: v.name, description: v.description, icon_url: v.icon_url, registration: v.registration, max_upload_mb: v.max_upload_mb, accounts_mode: mode() };
+  return { name: v.name, description: v.description, icon_url: v.icon_url, registration: v.registration, max_upload_mb: v.max_upload_mb, accounts_mode: wireMode(mode()) };
 }
 const voiceConfigured = () => { if (!managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
 

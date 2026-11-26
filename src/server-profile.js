@@ -2,7 +2,8 @@
 // Server profiles (PROTOCOL §6.7): a member's own picture, banner, name colour, bio and pronouns on this server only, shown here instead of
 // the ones their account has everywhere else. Their display name here is their server nickname (members.nick). Setting one needs
 // "Customize profile in this server" (P.CUSTOMIZE_PROFILE); Manage users can reset someone's (back to their global profile), and the
-// person is told through Velora's notification inbox (§12.13) when they have a Velora account.
+// person is told through Nookara's notification inbox (§12.13) when they have a Nookara account.
+const { ERR, relayPath } = require('./compat');
 const db = require('./db');
 const auth = require('./auth');
 const { err } = require('./util');
@@ -112,11 +113,11 @@ function reset(sid, me, targetPrincipal) {
 }
 // the notice in their Nookara inbox (a local account has no inbox to put it in)
 function tell(c, t) {
-  if (!t.velora_id) return;
+  if (!t.nookara_id) return;
   const client = require('./relay/client');
   if (!client.registered()) return;
-  client.call('POST', '/bonfire/relay/notice', { user_id: String(t.velora_id), kind: 'profile_reset', community_name: String(c.name || '').slice(0, 80) })
-    .catch(e => { if (e.status !== 429 && e.code !== 'velora_unreachable') console.error('[server profile] notice', e.code || e.message); });
+  client.call('POST', relayPath('/notice'), { user_id: String(t.nookara_id), kind: 'profile_reset', community_name: String(c.name || '').slice(0, 80) })
+    .catch(e => { if (e.status !== 429 && e.code !== ERR.unreachable) console.error('[server profile] notice', e.code || e.message); });
 }
 
 module.exports = { parse, read, get, update, setImage, clearOwn, reset, dropFiles, BIO_MAX, PRONOUNS_MAX };

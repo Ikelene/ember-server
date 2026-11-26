@@ -1,5 +1,5 @@
 'use strict';
-// Portable instance backups; deliberately independent of Velora relays and managed plans.
+// Portable instance backups; deliberately independent of Nookara relays and managed plans.
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');

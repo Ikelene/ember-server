@@ -8,14 +8,14 @@ const path = require('path');
 const { tmpDir, api } = require('./helpers');
 
 function boot(dir, port) {
-  const child = spawn(process.execPath, [path.join(__dirname, '../src/index.js')], { env: { ...process.env, BONFIRE_DATA: dir, PORT: String(port), BONFIRE_ACCOUNTS_MODE: 'local', BONFIRE_PUBLIC_URL: '', BONFIRE_OWNER: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../src/index.js')], { env: { ...process.env, EMBER_DATA: dir, PORT: String(port), EMBER_ACCOUNTS_MODE: 'local', EMBER_PUBLIC_URL: '', EMBER_OWNER: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   const exited = new Promise(res => child.on('exit', (code, signal) => res({ code, signal })));
   const ready = new Promise((res, rej) => { child.stdout.on('data', d => { out += d; if (/listening on/.test(out)) res(); }); setTimeout(() => rej(new Error('did not start: ' + out)), 8000); });
   return { child, ready, exited, out: () => out };
 }
 
-test('bonfire-server binary: setup code, restart exit code 75, SIGTERM exit 0', async () => {
+test('ember-server binary: setup code, restart exit code 75, SIGTERM exit 0', async () => {
   const dir = tmpDir();
   const port = 20000 + Math.floor(Math.random() * 20000);
   const base = `http://127.0.0.1:${port}`;

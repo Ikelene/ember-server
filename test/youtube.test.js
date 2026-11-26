@@ -9,8 +9,8 @@ const { startServer } = require('../src/index');
 const { tmpDir, api } = require('./helpers');
 const yt = require('../src/youtube');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir(), tools = tmpDir();
 const log = path.join(tools, 'calls.log');
 const fake = path.join(tools, 'yt-dlp');
@@ -40,7 +40,7 @@ const poll = async (fn, ms = 5000) => { for (let t = Date.now(); Date.now() - t 
 
 test('without yt-dlp the feature is off: discovery says so and every route is 503', async () => {
   assert.equal(yt.enabled(), false);
-  assert.equal((await api(base).get('/.well-known/bonfire')).body.features.youtube, false);
+  assert.equal((await api(base).get('/.well-known/ember')).body.features.youtube, false);
   assert.equal((await api(base).post(`/api/v1/yt/${ID}/prepare`)).status, 401); // a session is required first
   for (const [m, p] of [['post', `/yt/${ID}/prepare`], ['get', `/yt/${ID}/status`], ['post', `/yt/${ID}/save`], ['get', `/yt/stream/${ID}?e=1&s=x`]]) {
     const r = m === 'get' ? await alice.get('/api/v1' + p) : await alice.post('/api/v1' + p);
@@ -59,7 +59,7 @@ test('settings are validated; a working binary turns the feature on at runtime',
   assert.equal((await alice.patch('/api/v1/instance/settings', { youtube: { ytdlp_path: 5 } })).body.error, 'invalid_youtube');
   const s = await alice.patch('/api/v1/instance/settings', { youtube: { enabled: true, ytdlp_path: fake, cache_dir: path.join(dir, 'ytcache'), cache_max_gb: 0.1 } });
   assert.deepEqual(s.body.youtube, { enabled: true, ytdlp_path: fake, cache_dir: path.join(dir, 'ytcache'), cache_max_gb: 0.1 });
-  await poll(async () => (await api(base).get('/.well-known/bonfire')).body.features.youtube === true);
+  await poll(async () => (await api(base).get('/.well-known/ember')).body.features.youtube === true);
   assert.equal(yt.enabled(), true);
   assert.equal(yt.version(), '2099.01.01');
 });

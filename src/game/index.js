@@ -1,6 +1,7 @@
 'use strict';
-// Ember Link (Minecraft) on the instance: REST under /api/v1/game/* (same shapes as Velora's /chat/game/*), the game
+// Ember Link (Minecraft) on the instance: REST under /api/v1/game/* (same shapes as Nookara's /chat/game/*), the game
 // gateway at /game-gateway, hooks into messages / channel changes, hourly retention. PROTOCOL §18.
+const { GAME_CMD } = require('../compat');
 const G = require('./game');
 const GW = require('./gateway');
 const C = require('../communities');
@@ -57,10 +58,10 @@ function register(app) {
     const { c } = communityWith(req.params.sid, req.user, P.MANAGE_SERVER);
     const link = G.linkOfIid(String(req.params.iid));
     if (!link || link.community_id !== c.id) throw err('not_linked', 404);
-    return G.unlink(String(req.params.iid), 'bonfire', req.user);
+    return G.unlink(String(req.params.iid), GAME_CMD, req.user);
   });
   // "Connected game servers": every unclaimed game server connected to this instance right now (Manage server).
-  // /unclaimed is Velora's name for the same list.
+  // /unclaimed is Nookara's name for the same list.
   const listConnected = req => {
     if (!unclaimedLimit.hit(req.user.id)) throw err('rate_limited', 429);
     communityWith(req.query.sid, req.user, P.MANAGE_SERVER);
@@ -79,7 +80,7 @@ function register(app) {
     }
     return GW.linkConnected(c, meOf(req), String(req.params.iid), cid);
   });
-  // a claim code: run `bonfire link CODE` in the server console (Manage server; cid = the game channel it's for)
+  // a claim code: run `${GAME_CMD} link CODE` in the server console (Manage server; cid = the game channel it's for)
   app.post(v1('/claims'), req => {
     const { c } = communityWith(req.body?.sid, req.user, P.MANAGE_SERVER);
     let cid = null;

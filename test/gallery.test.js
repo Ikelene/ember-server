@@ -1,5 +1,5 @@
 'use strict';
-// Bot gallery on the instance (PROTOCOL §14.1): add a gallery bot with a Velora add-ticket, its token hash comes from Velora,
+// Bot gallery on the instance (PROTOCOL §14.1): add a gallery bot with a Nookara add-ticket, its token hash comes from Nookara,
 // verified flag, managed profile, and sync (fresh profile, revoke).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,29 +11,29 @@ const client = require('../src/relay/client');
 const gallery = require('../src/relay/gallery');
 const { tmpDir, api, fakeIdp } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test/';
-process.env.BONFIRE_PUBLIC_URL = 'http://chat.test';
-process.env.BONFIRE_OWNER = 'v:100';
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test/';
+process.env.EMBER_PUBLIC_URL = 'http://chat.test';
+process.env.EMBER_OWNER = 'v:100';
 
 const dir = tmpDir();
-const idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+const idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 let inst, base, owner, other, sid;
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
-const TOKEN = 'NzA.secret-token-from-velora';
+const TOKEN = 'NzA.secret-token-from-nookara';
 
 function ticket(over = {}, { typ = gallery.TYP } = {}) {
   const iat = Math.floor(Date.now() / 1000);
   const claims = {
-    iss: 'http://velora.test', aud: 'http://chat.test', sub: '100', iat, exp: iat + 300, jti: crypto.randomBytes(16).toString('base64url'), test: false, verified: true,
-    token_hash: sha(TOKEN), bot: { id: '70', username: 'DJ_Bot', description: 'plays music', avatar_url: 'https://velora.test/uploads/bots/dj.png' }, ...over,
+    iss: 'http://nookara.test', aud: 'http://chat.test', sub: '100', iat, exp: iat + 300, jti: crypto.randomBytes(16).toString('base64url'), test: false, verified: true,
+    token_hash: sha(TOKEN), bot: { id: '70', username: 'DJ_Bot', description: 'plays music', avatar_url: 'https://nookara.test/uploads/bots/dj.png' }, ...over,
   };
   const head = b64({ alg: 'EdDSA', typ, kid: idp.kid }), body = b64(claims);
   return `${head}.${body}.${crypto.sign(null, Buffer.from(head + '.' + body), idp.privateKey).toString('base64url')}`;
 }
 const login = async (sub, username) => {
-  const r = await api(base).post('/api/v1/auth/velora', { token: idp.mint({ sub: String(sub), username }) });
+  const r = await api(base).post('/api/v1/auth/nookara', { token: idp.mint({ sub: String(sub), username }) });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return { ...r.body, a: api(base, r.body.session) };
 };
@@ -57,7 +57,7 @@ test('a manager adds a gallery bot with a ticket: verified, managed profile, its
   const members = (await owner.a.get(`/api/v1/servers/${sid}/members`)).body;
   const m = (members.members || members).find(x => x.username === 'DJ_Bot');
   assert.ok(m && m.bot === true && m.verified === true, JSON.stringify(m));
-  // the developer's token (hash from Velora) authenticates against this instance's bot API
+  // the developer's token (hash from Nookara) authenticates against this instance's bot API
   const me = await fetch(`${base}/bot/v1/users/@me`, { headers: { Authorization: 'Bot ' + TOKEN } });
   assert.equal(me.status, 200);
   assert.equal((await me.json()).verified, true);
@@ -77,7 +77,7 @@ test('tickets are single use, for one person and one instance, and must be the r
   await bad(ticket(), owner, 'already_in_server');
 });
 
-test('gallery bots are managed by Velora: no rename / token reset, but a manager can remove them', async () => {
+test('gallery bots are managed by Nookara: no rename / token reset, but a manager can remove them', async () => {
   const bots = (await owner.a.get('/api/v1/bots')).body.bots;
   const dj = bots.find(b => b.username === 'DJ_Bot');
   assert.equal((await owner.a.patch(`/api/v1/bots/${dj.id}`, { description: 'x' })).body.error, 'gallery_bot_managed');
@@ -91,7 +91,7 @@ test('sync refreshes the profile and token hash, and a revoked bot is removed', 
   client.call = async (method, p, body) => {
     calls.push({ method, p, body });
     return { bots: [
-      { id: '70', status: 'ok', verified: false, token_hash: sha('NzA.rotated'), username: 'DJ_Bot', description: 'new text', avatar_url: 'https://velora.test/uploads/bots/new.png', trusted_in: 12 },
+      { id: '70', status: 'ok', verified: false, token_hash: sha('NzA.rotated'), username: 'DJ_Bot', description: 'new text', avatar_url: 'https://nookara.test/uploads/bots/new.png', trusted_in: 12 },
       { id: '71', status: 'revoked' },
     ] };
   };

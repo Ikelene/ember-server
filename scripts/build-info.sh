@@ -1,12 +1,12 @@
 #!/bin/bash
-# Print the build identity of bonfire-server as JSON (run inside the Velora git checkout, any cwd). Used by /root/bonfire-release.sh
+# Print the build identity of this server as JSON (run inside the Nookara git checkout, any cwd). Used by the release script
 # on the Proxmox host (ships the source to the Docker LXC 230, which runs rebuild-image.sh).
-#   commit/commit_date = last commit touching bonfire-server/;  dirty = uncommitted changes there;
+#   commit/commit_date = last commit touching this directory;  dirty = uncommitted changes there;
 #   build_id = commit, or commit+<hash of the files> when dirty, so a dirty rebuild still counts as a new build.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
-D=bonfire-server
+D=$(basename "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)") # the checkout's directory name (it was bonfire-server)
 COMMIT=$(git log -1 --format=%H -- $D); CDATE=$(git log -1 --format=%cI -- $D); MSG=$(git log -1 --format=%s -- $D | cut -c1-190)
 VER=$(node -p "require('./$D/package.json').version")
 if [ -n "$(git status --porcelain -- $D ':!*.bak-*' ':!*.pre-*' | head -1)" ]; then DIRTY=true; else DIRTY=false; fi

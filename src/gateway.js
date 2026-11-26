@@ -1,5 +1,6 @@
 'use strict';
 // WebSocket gateway (PROTOCOL §7): auth handshake, chat_* frames, per-community fan-out filtered by channel visibility.
+const { KIND_NOOKARA, NOOKARA_ID_FIELD } = require('./compat');
 const { WebSocketServer } = require('ws');
 const config = require('./config');
 const db = require('./db');
@@ -23,7 +24,7 @@ const send = (sock, obj) => { if (sock.readyState === 1) { try { sock.send(JSON.
 const authed = sock => sock.bf?.authed;
 const RESTRICTED = { error: 'account_restricted', message: 'Ember is switched off for your account.' };
 
-// Velora switched Ember off / on for this account: its open sockets stop receiving community events and leave voice at once
+// Nookara switched Ember off / on for this account: its open sockets stop receiving community events and leave voice at once
 // (or may say chat_hello again), and are told. Frames from a restricted socket are refused in onFrame.
 function restrictionChanged(userId, restricted) {
   for (const sock of byUser.get(Number(userId)) || []) setRestricted(sock, restricted);
@@ -138,7 +139,7 @@ async function onFrame(sock, msg) {
   }
   if (msg.type === 'auth') return;
   const me = st.user;
-  if (me.kind === 'velora') { // staff switched Ember off for the account: re-checked with Velora at most every 30 s
+  if (me.kind === KIND_NOOKARA) { // staff switched Ember off for the account: re-checked with Nookara at most every 30 s
     const r = await require('./profiles').gate(me).catch(() => !!st.restricted);
     if (r !== !!st.restricted) setRestricted(sock, r);
     if (r && /^(chat_|voice_)/.test(String(msg.type))) return send(sock, { type: 'chat_error', nonce: msg.nonce, request: msg.type, ...RESTRICTED });
@@ -153,7 +154,7 @@ async function onFrame(sock, msg) {
         st.ready = true;
         for (const row of db.all('SELECT community_id FROM members WHERE user_id = ?', me.id)) { if (!subs.has(row.community_id)) subs.set(row.community_id, new Set()); subs.get(row.community_id).add(sock); }
         reply({ type: 'chat_ready', you: auth.userView(me) });
-        require('./profiles').lazy(me); // picks up a rename done on Velora since the last sign-in
+        require('./profiles').lazy(me); // picks up a rename done on Nookara since the last sign-in
         break;
       }
       case 'chat_send': {
@@ -181,7 +182,7 @@ async function onFrame(sock, msg) {
         for (const s of V().socketsIn(room)) send(s, { type: 'voice_sound', by: me.username, channel: ch.cid, sound: r.sound });
         break;
       }
-      case 'chat_profile_refresh': require('./profiles').nudge(msg.velora_id).catch(() => {}); break; // Ember saw a live Velora profile change: pull it now
+      case 'chat_profile_refresh': require('./profiles').nudge(msg.nookara_id ?? msg[NOOKARA_ID_FIELD]).catch(() => {}); break; // Ember saw a live Nookara profile change: pull it now
       case 'chat_read': M().markRead(msg.channel, me, msg.message_id ?? msg.id); break;
       // which clients a member is connected with (PROTOCOL §7.1): the person themselves or Manage users holders only
       case 'chat_clients_watch': reply({ type: 'chat_clients', ...CL().watch(sock, me, msg.server, msg.user_id) }); break;
@@ -210,7 +211,7 @@ function doAuth(sock, msg) {
   peopleChanged(s.user.id);
   const admin = auth.isAdmin(s.user), quota = admin ? require('./relay/client').voiceQuota() : null;
   send(sock, { type: 'auth_success', user: auth.userView(s.user), instance_admin: admin, instance_owner: auth.isOwner(s.user), ...(quota ? { voice_quota: quota } : {}) });
-  if (s.user.restricted) setRestricted(sock, true); // told right away; stays quiet until Velora switches it back on
+  if (s.user.restricted) setRestricted(sock, true); // told right away; stays quiet until Nookara switches it back on
   CL().changed(s.user.id);
 }
 

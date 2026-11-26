@@ -1,5 +1,5 @@
 'use strict';
-// A hosted server moved (BONFIRE_PUBLIC_URL changed between boots): stored urls on the old origin follow, config.json too,
+// A hosted server moved (EMBER_PUBLIC_URL changed between boots): stored urls on the old origin follow, config.json too,
 // and the discovery document lists the earlier origins (old signed messages name them).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,12 +7,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bonfire-puburl-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ember-puburl-'));
 const OLD = 'https://camp-bonfire.ikelene.net', NEW = 'https://e_camp.nookara.cc';
-test.after(() => { require('../src/db').close(); fs.rmSync(dir, { recursive: true, force: true }); delete process.env.BONFIRE_PUBLIC_URL; });
+test.after(() => { require('../src/db').close(); fs.rmSync(dir, { recursive: true, force: true }); delete process.env.EMBER_PUBLIC_URL; });
 
 test('first boot remembers the url; a changed url rewrites stored copies (plain, JSON, encoded) once', () => {
-  process.env.BONFIRE_PUBLIC_URL = OLD;
+  process.env.EMBER_PUBLIC_URL = OLD;
   const config = require('../src/config'), db = require('../src/db'), P = require('../src/public-url');
   config.init({ dataDir: dir });
   db.open();
@@ -28,7 +28,7 @@ test('first boot remembers the url; a changed url rewrites stored copies (plain,
   db.run("INSERT INTO messages (id, channel_id, user_id, body, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified) VALUES (3, 1, 1, ?, 1, 'k', 'sig', 1, 'n', 1)", `signed ${OLD}/x`);
   assert.equal(P.checkPublicUrl(), null, 'same url: nothing to do');
 
-  process.env.BONFIRE_PUBLIC_URL = NEW;
+  process.env.EMBER_PUBLIC_URL = NEW;
   const r = P.checkPublicUrl();
   assert.equal(r.from, OLD); assert.equal(r.to, NEW); assert.ok(r.rows >= 3); assert.deepEqual(r.config, ['icon_url']);
   assert.equal(db.get('SELECT icon_url FROM communities WHERE id = 1').icon_url, `${NEW}/uploads/chat/icon.png`);

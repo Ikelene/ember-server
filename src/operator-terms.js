@@ -3,8 +3,9 @@
 // The acceptance lives in the instance database (meta key `operator_terms`): { version, accepted_at, accepted_by, via }.
 //   - self-hosted, first run: the claim (setup) is refused until the claimer accepts (checkbox in the client, or the env var / --accept-operator-terms headless)
 //   - self-hosted, already set up: never locked out. Admins see a notice (settings.operator_terms.notice) until they accept or dismiss it
-//   - Nookara-hosted (BONFIRE_MANAGED=1): Nookara collected the acceptance when the server was created, so it is recorded from the host's env
-//     (BONFIRE_OPERATOR_TERMS_VERSION / _AT / _BY) and the self-host prompt never shows
+//   - Nookara-hosted (EMBER_MANAGED=1): Nookara collected the acceptance when the server was created, so it is recorded from the host's env
+//     (EMBER_OPERATOR_TERMS_VERSION / _AT / _BY) and the self-host prompt never shows
+const { env } = require('./compat');
 const db = require('./db');
 const config = require('./config');
 const managed = require('./managed');
@@ -33,8 +34,8 @@ function record(by, via, at) {
 function boot() {
   if (accepted()) return;
   if (managed.active()) {
-    const at = Date.parse(process.env.BONFIRE_OPERATOR_TERMS_AT || '');
-    record(String(process.env.BONFIRE_OPERATOR_TERMS_BY || 'nookara-hosting').slice(0, 80), 'hosted', Number.isFinite(at) ? new Date(at).toISOString() : undefined);
+    const at = Date.parse(env('OPERATOR_TERMS_AT') || '');
+    record(String(env('OPERATOR_TERMS_BY') || 'nookara-hosting').slice(0, 80), 'hosted', Number.isFinite(at) ? new Date(at).toISOString() : undefined);
     log(`[operator-terms] hosted server: acceptance of v${VERSION} recorded from Nookara hosting`);
   } else if (envAccepted()) {
     record('env', 'headless');

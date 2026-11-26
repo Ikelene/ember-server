@@ -1,7 +1,7 @@
 'use strict';
 // Soundboard: a community keeps short sounds (Manage server uploads them); anyone in one of its voice channels can play one and
 // everyone in that voice room hears it (gateway frame `voice_sound`, see gateway.js). Files live in DATA_DIR/uploads/sounds/<id>.<ext>.
-// Velora transcodes with ffmpeg; the instance has no native tools, so it stores the file as uploaded (mp3, wav, ogg, flac, m4a - the
+// Nookara transcodes with ffmpeg; the instance has no native tools, so it stores the file as uploaded (mp3, wav, ogg, flac, m4a - the
 // type is checked by magic bytes) and reads the duration from the headers; clips must be at most 5.2 s.
 const config = require('./config');
 const managed = require('./managed');
@@ -133,7 +133,7 @@ function playable(user, soundId, communityId) {
   const error = gate(user, r.community_id);
   return error ? { error } : { sound: view(r) };
 }
-// A sound from another server (another instance, or Velora) that the player picked in their own soundboard: the client sends its
+// A sound from another server (another instance, or Nookara) that the player picked in their own soundboard: the client sends its
 // public view and the room is told to play that URL. Only the shape is checked here (an audio file under /uploads/sounds/ on an
 // http(s) origin, sane name / volume / length): this instance never fetches it, and listeners only play origins they already trust.
 const EXTERNAL_PATH = /^\/uploads\/sounds\/[A-Za-z0-9_-]{3,40}\.(mp3|wav|ogg|flac|m4a)$/;

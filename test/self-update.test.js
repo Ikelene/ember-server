@@ -1,5 +1,5 @@
 'use strict';
-// GET/POST /api/v1/instance/update: one-click self-update through bonfire-hostd (here: a fake hostd HTTP server).
+// GET/POST /api/v1/instance/update: one-click self-update through hostd (here: a fake hostd HTTP server).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -7,22 +7,22 @@ const http = require('http');
 const { startServer } = require('../src/index');
 const auth = require('../src/auth');
 const { tmpDir, api, fakeIdp } = require('./helpers');
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_PUBLIC_URL = 'http://chat.test';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test';
-process.env.BONFIRE_OWNER = 'v:100';
-delete process.env.BONFIRE_MANAGED;
-delete process.env.BONFIRE_UPDATE_URL;
-delete process.env.BONFIRE_UPDATE_SECRET;
-const dir = tmpDir(), idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_PUBLIC_URL = 'http://chat.test';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test';
+process.env.EMBER_OWNER = 'v:100';
+delete process.env.EMBER_MANAGED;
+delete process.env.EMBER_UPDATE_URL;
+delete process.env.EMBER_UPDATE_SECRET;
+const dir = tmpDir(), idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 const SECRET = 'very-secret-update-token-0123456789';
 const U = '/api/v1/instance/update';
 let inst, owner, member, fake, fakeUrl;
 const hits = [];
 let reply = { status: 200, body: {} };
-const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
-const configure = () => { process.env.BONFIRE_UPDATE_URL = fakeUrl + '/'; process.env.BONFIRE_UPDATE_SECRET = SECRET; };
-const unconfigure = () => { delete process.env.BONFIRE_UPDATE_URL; delete process.env.BONFIRE_UPDATE_SECRET; };
+const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
+const configure = () => { process.env.EMBER_UPDATE_URL = fakeUrl + '/'; process.env.EMBER_UPDATE_SECRET = SECRET; };
+const unconfigure = () => { delete process.env.EMBER_UPDATE_URL; delete process.env.EMBER_UPDATE_SECRET; };
 
 test.before(async () => {
   fake = http.createServer((req, res) => {
@@ -38,7 +38,7 @@ test.before(async () => {
   const sid = (await owner.post('/api/v1/servers', { name: 'Update test', join_policy: 'open' })).body.server.sid;
   await member.post(`/api/v1/servers/${sid}/join`);
 });
-test.after(async () => { unconfigure(); delete process.env.BONFIRE_MANAGED; await inst.close(); await new Promise(r => fake.close(r)); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(async () => { unconfigure(); delete process.env.EMBER_MANAGED; await inst.close(); await new Promise(r => fake.close(r)); fs.rmSync(dir, { recursive: true, force: true }); });
 
 test('update: admins only', async () => {
   configure();
@@ -56,29 +56,29 @@ test('update: not configured -> supported:false and 501 update_not_supported', a
   assert.equal(g.body.current.version, require('../package.json').version);
   const p = await owner.post(U);
   assert.equal(p.status, 501); assert.equal(p.body.error, 'update_not_supported');
-  process.env.BONFIRE_UPDATE_URL = fakeUrl; // a URL without a secret is still not configured
+  process.env.EMBER_UPDATE_URL = fakeUrl; // a URL without a secret is still not configured
   assert.equal((await owner.get(U)).body.supported, false);
-  process.env.BONFIRE_UPDATE_URL = 'not a url'; process.env.BONFIRE_UPDATE_SECRET = SECRET;
+  process.env.EMBER_UPDATE_URL = 'not a url'; process.env.EMBER_UPDATE_SECRET = SECRET;
   assert.equal((await owner.post(U)).status, 501);
   unconfigure();
   assert.equal(hits.length, 0);
 });
 
-test('update: managed (Velora-hosted) instances are not self-updated', async () => {
-  configure(); process.env.BONFIRE_MANAGED = '1';
+test('update: managed (Nookara-hosted) instances are not self-updated', async () => {
+  configure(); process.env.EMBER_MANAGED = '1';
   try {
     const g = await owner.get(U);
     assert.equal(g.body.supported, false); assert.equal(g.body.reason, 'managed');
     const p = await owner.post(U);
     assert.equal(p.status, 501); assert.equal(p.body.error, 'update_managed');
-  } finally { delete process.env.BONFIRE_MANAGED; unconfigure(); }
+  } finally { delete process.env.EMBER_MANAGED; unconfigure(); }
   assert.equal(hits.length, 0);
 });
 
 test('update: GET asks hostd for the latest build, POST starts the update; the secret is only sent to hostd', async () => {
   configure();
   const seen = [];
-  reply = { status: 200, body: { container: 'bonfire-chat', image_current: false, outdated: true, running: { commit: 'a'.repeat(40), commit_short: 'aaaaaaa', build_id: 'a'.repeat(40) }, latest: { version: '0.2.0', commit: 'b'.repeat(40), commit_short: 'bbbbbbb', build_id: 'b'.repeat(40), commit_date: '2026-10-20T00:00:00Z', message: 'new stuff', evil: 'dropped' }, update: { state: 'idle', output: 'tail', secret: 'dropped' } } };
+  reply = { status: 200, body: { container: 'ember-chat', image_current: false, outdated: true, running: { commit: 'a'.repeat(40), commit_short: 'aaaaaaa', build_id: 'a'.repeat(40) }, latest: { version: '0.2.0', commit: 'b'.repeat(40), commit_short: 'bbbbbbb', build_id: 'b'.repeat(40), commit_date: '2026-10-20T00:00:00Z', message: 'new stuff', evil: 'dropped' }, update: { state: 'idle', output: 'tail', secret: 'dropped' } } };
   const g = await owner.get(U); seen.push(g);
   assert.equal(g.status, 200); assert.equal(g.body.supported, true); assert.equal(g.body.reachable, true); assert.equal(g.body.outdated, true);
   assert.equal(g.body.latest.commit_short, 'bbbbbbb'); assert.equal(g.body.latest.message, 'new stuff'); assert.equal(g.body.latest.evil, undefined);

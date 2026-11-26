@@ -8,7 +8,7 @@ const managed = require('../managed');
 
 function init() {
   store.ensure();
-  if (!managed.allows('bridges')) return; // Velora-hosted starter plan (PROTOCOL §19): the bridges never connect
+  if (!managed.allows('bridges')) return; // Nookara-hosted starter plan (PROTOCOL §19): the bridges never connect
   bridge.init();
   cloudlink.init();
 }
@@ -39,7 +39,7 @@ function register(real) {
   app.get(v1('/bridge/settings'), { admin: true }, () => ({ bridges: bridge.settingsView() }));
   app.patch(v1('/bridge/settings'), { admin: true }, async req => ({ bridges: await bridge.saveSettings(req.body || {}) }));
 
-  // ---- Discord / Fluxer (same shapes as Velora's /chat/bridge/*; Manage server) ----
+  // ---- Discord / Fluxer (same shapes as Nookara's /chat/bridge/*; Manage server) ----
   app.get(v1('/bridge/platforms'), () => bridge.platforms());
   app.get(v1('/bridge/:platform/guilds'), req => bridge.guilds(req.user, req.params.platform));
   app.get(v1('/bridge/servers/:sid'), req => bridge.status(req.user, req.params.sid));

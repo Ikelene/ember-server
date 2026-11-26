@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Ember Link gateway simulator: pretends to be a Minecraft server (Paper / Fabric / Velocity) talking to a
-// bonfire-server instance's game gateway (PROTOCOL §18), the way the plugin does after `bonfire server <url>`.
-// Node 22+ (uses the built-in WebSocket), no dependencies. Copied from Velora's scripts/game-gateway-sim.js.
+// ember-server instance's game gateway (PROTOCOL §18), the way the plugin does after `bonfire server <url>`.
+// Node 22+ (uses the built-in WebSocket), no dependencies. Copied from Nookara's scripts/game-gateway-sim.js.
 //
 // As a library:   const { SimServer } = require('./game-gateway-sim');
 // As a CLI:       node game-gateway-sim.js --url http://localhost:4100 --key sim-key.pem
@@ -10,6 +10,7 @@
 //                             link <CODE> | unlink | status | log <text> | stop | quit
 //                 --vectors <file>  checks the identity math against mc-bonfire/test-vectors.json and exits
 const crypto = require('crypto');
+const { SIGN_CONTEXT } = require('../src/compat');
 const fs = require('fs');
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -88,7 +89,7 @@ class SimServer {
     this.log('<-', m.op, JSON.stringify(m.d).slice(0, 200));
     const d = m.d || {};
     if (m.op === 'hello') {
-      const sig = crypto.sign(null, Buffer.from(`bonfire-gw-v1|${d.nonce}|${this.iid}`, 'utf8'), this.key.priv).toString('base64');
+      const sig = crypto.sign(null, Buffer.from(`${SIGN_CONTEXT.game}|${d.nonce}|${this.iid}`, 'utf8'), this.key.priv).toString('base64');
       const iconSha = this.o.icon ? crypto.createHash('sha256').update(this.o.icon).digest('hex') : null;
       this.send('identify', { v: 1, key: this.key.spki.toString('base64'), sig, iid: this.iid, platform: this.o.platform, software: this.o.software, mc_version: this.o.mc_version,
         mod_version: this.o.mod_version, listing: this.o.listing, motd: this.o.motd, icon_sha256: iconSha, max_players: this.o.max_players, online_mode: true,

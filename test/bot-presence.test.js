@@ -45,8 +45,8 @@ test('registry: multiple READY connections, debounce, stale sweep and idempotent
   } finally { p.clear(); }
 });
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir(), clients = [];
 let inst, base, owner, outsider, sid, bot, token, human, other;
 test.before(async () => {

@@ -1,7 +1,8 @@
 'use strict';
-// Ember Link: Minecraft servers in this instance's community (the `game` channel type). Ported from Velora's game.js
+// Ember Link: Minecraft servers in this instance's community (the `game` channel type). Ported from Nookara's game.js
 // (PROTOCOL §18). This file is the data side: identities, links, game channel config, views, segments both ways,
 // Minecraft -> Ember posting, unlinking, the audit log and retention. The live sockets are in gateway.js.
+const { GAME_CMD } = require('../compat');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -283,7 +284,7 @@ function link(inst, who) {
   }
   return { c, view: instanceView(instanceRow(inst.iid)) };
 }
-// by = 'bonfire' (Server settings) | 'console' (`bonfire unlink confirm` on the game side)
+// by = 'ember' (Server settings) | 'console' (`ember unlink confirm` on the game side)
 function unlink(iid, by, user) {
   ensure();
   const inst = instanceRow(iid);
@@ -299,7 +300,7 @@ function unlink(iid, by, user) {
   }
   db.run('DELETE FROM game_links WHERE instance_id = ?', inst.id);
   if (c) {
-    audit(c.id, iid, user?.id || null, 'unlink', by === 'console' ? '[CONSOLE] bonfire unlink' : null, 'ok', null);
+    audit(c.id, iid, user?.id || null, 'unlink', by === 'console' ? `[CONSOLE] ${GAME_CMD} unlink` : null, 'ok', null);
     C().channelsChanged(c);
     gateway().emit(c.id, { type: 'game_unlinked', server: c.sid, instance: iid });
   }

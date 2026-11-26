@@ -10,8 +10,8 @@ const crypto = require('crypto');
 const { startServer } = require('../src/index');
 const { tmpDir, api } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base, alice, bob, sid, peer, peerUrl;
 const asked = [];
@@ -69,8 +69,8 @@ test('turning it off needs Manage server; then /clone-check says locked for its 
 
 test("its owner is not locked out (asked with her Nookara id), and copies inside the server itself are fine", async () => {
   const db = require('../src/db');
-  db.run("UPDATE users SET velora_id = '777' WHERE username = 'alice'");
-  db.run("UPDATE users SET velora_id = '888' WHERE username = 'bob'");
+  db.run("UPDATE users SET nookara_id = '777' WHERE username = 'alice'");
+  db.run("UPDATE users SET nookara_id = '888' WHERE username = 'bob'");
   assert.equal((await check(`sha256=${sha(PNG)}&velora_id=777`)).body.locked, false);
   assert.equal((await check(`sha256=${sha(PNG)}&velora_id=888`)).body.reason, 'cloning_disabled');
   assert.equal((await up(alice, 'stickers', PNG, 'again')).status, 200);

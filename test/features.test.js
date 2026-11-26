@@ -6,8 +6,8 @@ const fs = require('fs');
 const { startServer } = require('../src/index');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'local';
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_ACCOUNTS_MODE = 'local';
+delete process.env.EMBER_OWNER;
 const dir = tmpDir();
 let inst, base;
 const clients = [];
@@ -84,7 +84,7 @@ test('channel types: validation, cleaning and who can post', async () => {
   assert.equal((await alice.a.patch(`/api/v1/channels/${logs.cid}`, { type: 'link', config: { url: 'nope' } })).body.error, 'bad_link');
 });
 
-test('roles shop: free roles self-assign, priced roles need a Velora account (402)', async () => {
+test('roles shop: free roles self-assign, priced roles need a Nookara account (402)', async () => {
   const free = (await alice.a.post(S('/roles'), { name: 'Gamer', color: '#ff0000' })).body.role;
   const vip = (await alice.a.post(S('/roles'), { name: 'VIP' })).body.role;
   const adminRole = (await alice.a.post(S('/roles'), { name: 'Boss', permissions: 512 })).body.role;
@@ -102,7 +102,7 @@ test('roles shop: free roles self-assign, priced roles need a Velora account (40
   assert.ok((await alice.a.get(S('/members'))).body.members.find(m => m.username === 'bob').roles.includes(free.rid));
   const paid = await bob.a.post(`/api/v1/channels/${shop}/shop/${vip.rid}`);
   assert.equal(paid.status, 402);
-  assert.deepEqual(paid.body, { error: 'velora_required' }); // local accounts cannot pay; Velora principals get a pay request (relay.test.js)
+  assert.deepEqual(paid.body, { error: 'velora_required' }); // local accounts cannot pay; Nookara principals get a pay request (relay.test.js)
   assert.equal((await bob.a.post(`/api/v1/channels/${shop}/shop/${adminRole.rid}`)).status, 404); // not in the shop
   assert.equal((await bob.a.get(`/api/v1/channels/${general}/shop`)).body.error, 'not_a_shop');
   assert.equal((await bob.a.del(`/api/v1/channels/${shop}/shop/${free.rid}`)).body.items[0].has, false);
@@ -245,7 +245,7 @@ test('soundboard: CRUD, upload checks, playing in a voice room', async () => {
     wb.send({ type: 'voice_sound', sound: 'snd0000000000' });
     assert.equal((await wb.waitFor(f => f.type === 'voice_sound_failed' && f.reason === 'not_found')).reason, 'not_found');
     assert.equal(wc.frames.some(f => f.type === 'voice_sound'), false);
-    // a sound picked from another server (another instance / Velora) is relayed by URL after a shape check
+    // a sound picked from another server (another instance / Nookara) is relayed by URL after a shape check
     await sleep(1300);
     const ext = { name: 'Far', emoji: '<:x:e0123456789>', volume: 500, duration: 900, url: 'https://other.example/uploads/sounds/snd0123456789.mp3' };
     wb.send({ type: 'voice_sound', sound: { ...ext, url: 'https://other.example/evil.html' } });

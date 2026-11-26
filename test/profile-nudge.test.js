@@ -2,14 +2,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-// stubs: no database, no Velora, no sockets
+// stubs: no database, no Nookara, no sockets
 const stub = (rel, exports) => { const f = require.resolve(rel); require.cache[f] = { id: f, filename: f, loaded: true, exports }; };
-stub('../src/config', { mode: () => 'velora', get: () => ({ velora_url: 'https://velora.test', velora_registration: 'open' }) });
+stub('../src/config', { mode: () => 'nookara', get: () => ({ nookara_url: 'https://nookara.test', nookara_registration: 'open' }) });
 stub('../src/db', { all: () => [] });
 const refreshed = [];
-stub('../src/auth', { refreshVeloraProfile: p => { refreshed.push(p); return true; } });
+stub('../src/auth', { refreshNookaraProfile: p => { refreshed.push(p); return true; } });
 const urls = [];
-global.fetch = async url => { urls.push(String(url)); return { ok: true, json: async () => ({ profiles: [{ id: '12', username: 'ann2', display_name: 'ann2', pfp: 'https://velora.test/uploads/pfp/x.jpeg' }] }) }; };
+global.fetch = async url => { urls.push(String(url)); return { ok: true, json: async () => ({ profiles: [{ id: '12', username: 'ann2', display_name: 'ann2', pfp: 'https://nookara.test/uploads/pfp/x.jpeg' }] }) }; };
 const profiles = require('../src/profiles');
 
 test('nudge ignores bad ids', async () => {

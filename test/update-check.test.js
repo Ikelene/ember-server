@@ -5,31 +5,31 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const http = require('http');
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_PUBLIC_URL = 'http://chat.test';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test';
-process.env.BONFIRE_OWNER = 'v:100';
-process.env.BONFIRE_BUILD_COMMIT = 'a'.repeat(40);
-process.env.BONFIRE_BUILD_AT = '2026-11-13T02:11:43.000Z';
-delete process.env.BONFIRE_MANAGED;
-delete process.env.BONFIRE_UPDATE_CHECK;
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_PUBLIC_URL = 'http://chat.test';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test';
+process.env.EMBER_OWNER = 'v:100';
+process.env.EMBER_BUILD_COMMIT = 'a'.repeat(40);
+process.env.EMBER_BUILD_AT = '2026-11-13T02:11:43.000Z';
+delete process.env.EMBER_MANAGED;
+delete process.env.EMBER_UPDATE_CHECK;
 const { startServer } = require('../src/index');
 const auth = require('../src/auth');
 const V = require('../src/version');
 const { tmpDir, api, fakeIdp } = require('./helpers');
 
-const dir = tmpDir(), idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+const dir = tmpDir(), idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 const SAME = { version: '0.1.0', commit: 'a'.repeat(40), built_at: '2026-11-13T02:11:43.000Z' };
 const NEWER = { version: '0.1.0', commit: 'b'.repeat(40), built_at: '2026-11-13T02:47:15.000Z', message: 'bot dms' };
 let latest = SAME, fetches = 0, clock = 1e12, inst, owner, member, nook, hostd;
-const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
+const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
 
 test.before(async () => {
   nook = http.createServer((req, res) => { fetches++; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(latest)); });
   await new Promise(r => nook.listen(0, '127.0.0.1', r));
   hostd = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); });
   await new Promise(r => hostd.listen(0, '127.0.0.1', r));
-  process.env.BONFIRE_LATEST_URL = `http://127.0.0.1:${nook.address().port}/bonfire/server-latest.json`;
+  process.env.EMBER_LATEST_URL = `http://127.0.0.1:${nook.address().port}/bonfire/server-latest.json`;
   V._setNow(() => clock);
   V._resetLatest();
   inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' });
@@ -38,7 +38,7 @@ test.before(async () => {
 });
 test.after(async () => {
   V._setNow(null);
-  for (const k of ['BONFIRE_LATEST_URL', 'BONFIRE_BUILD_COMMIT', 'BONFIRE_BUILD_AT', 'BONFIRE_UPDATE_URL', 'BONFIRE_UPDATE_SECRET']) delete process.env[k];
+  for (const k of ['EMBER_LATEST_URL', 'EMBER_BUILD_COMMIT', 'EMBER_BUILD_AT', 'EMBER_UPDATE_URL', 'EMBER_UPDATE_SECRET']) delete process.env[k];
   await inst.close(); await new Promise(r => nook.close(r)); await new Promise(r => hostd.close(r));
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -92,9 +92,9 @@ test('only admins see the update check, and refresh=1 from anyone else asks nobo
 
 test('update.one_click says whether Ember can run the update (hostd configured, not Nookara-hosted)', async () => {
   assert.equal((await info(owner)).update.one_click, false);
-  process.env.BONFIRE_UPDATE_URL = `http://127.0.0.1:${hostd.address().port}`;
-  process.env.BONFIRE_UPDATE_SECRET = 'very-secret-update-token-0123456789';
+  process.env.EMBER_UPDATE_URL = `http://127.0.0.1:${hostd.address().port}`;
+  process.env.EMBER_UPDATE_SECRET = 'very-secret-update-token-0123456789';
   assert.equal((await info(owner)).update.one_click, true);
-  process.env.BONFIRE_MANAGED = '1';
-  try { assert.equal((await info(owner)).update.one_click, false); } finally { delete process.env.BONFIRE_MANAGED; }
+  process.env.EMBER_MANAGED = '1';
+  try { assert.equal((await info(owner)).update.one_click, false); } finally { delete process.env.EMBER_MANAGED; }
 });

@@ -1,5 +1,5 @@
 'use strict';
-// Instance-local bot accounts + the Discord-dialect bot API (ported from Velora's bonfire-bots.js).
+// Instance-local bot accounts + the Discord-dialect bot API (ported from Nookara's bot module).
 // A bot is a user row of kind 'bot' (principal b:<n>, shown with a BOT tag) plus a `bots` row (hashed token, description, public flag).
 // Community managers (MANAGE_SERVER) and instance admins create / manage them; a manager adds a bot to the community.
 //   REST     INSTANCE/bot/v1/...      Authorization: Bot <token>      (rate limit 150 requests / 10 s per bot)
@@ -8,6 +8,7 @@
 //   token    base64url(<bot n>) + '.' + random, stored as sha256
 // Ids are numbers like Discord's: guild = the community row id, channel / message / user = row ids, roles = 1000000000 + role row id,
 // @everyone = the guild id.
+const { BOT_API } = require('./compat');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const config = require('./config');
@@ -37,7 +38,7 @@ const view = r => ({
   id: r.principal, username: r.username, pfp: r.pfp || null, description: r.description, public: !!r.public,
   servers: db.get('SELECT COUNT(*) AS n FROM members WHERE user_id = ?', r.user_id).n,
   owner: auth.userView(auth.userById(r.owner_id))?.id || null, created_at: r.created_at,
-  verified: !!r.gallery_verified, ...(r.gallery_id ? { trusted_in: require('./relay/gallery').trustedIn(r.gallery_id) } : {}), gallery: r.gallery_id ? { id: r.gallery_id, test: !!r.gallery_test } : null, // added from Velora's bot gallery: its profile / token come from Velora
+  verified: !!r.gallery_verified, ...(r.gallery_id ? { trusted_in: require('./relay/gallery').trustedIn(r.gallery_id) } : {}), gallery: r.gallery_id ? { id: r.gallery_id, test: !!r.gallery_test } : null, // added from Nookara's bot gallery: its profile / token come from Nookara
 });
 const managedByGallery = r => { if (r.gallery_id) throw err('gallery_bot_managed', 403); };
 // who may manage bots: instance admins, or anyone with Manage server in the community
@@ -53,7 +54,7 @@ function own(me, ref) {
   if (!r) throw err('bot_not_found', 404);
   return r;
 }
-// the manage page lists only bots created on this server; gallery bots (gallery_id set) are managed from Velora, never here
+// the manage page lists only bots created on this server; gallery bots (gallery_id set) are managed from Nookara, never here
 const mine = me => { guard(me); return { bots: db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL ORDER BY user_id').map(r => view(botRow(r.user_id))), max: maxBots(), used: managed.botCount() }; };
 function checkName(name, exceptId = 0) {
   if (!NAME.test(name)) throw err('bad_bot_name');
@@ -106,7 +107,7 @@ function resetToken(me, ref) {
 }
 function remove(me, ref) {
   const r = own(me, ref);
-  managedByGallery(r); // remove it from the server with Kick / Ban under Members; the gallery install itself belongs to Velora
+  managedByGallery(r); // remove it from the server with Kick / Ban under Members; the gallery install itself belongs to Nookara
   for (const m of db.all('SELECT community_id FROM members WHERE user_id = ?', r.user_id)) C.removeMember(db.get('SELECT * FROM communities WHERE id = ?', m.community_id), r.user_id, 'left');
   closeGateways(r.user_id, 4004, 'deleted');
   db.run('DELETE FROM users WHERE id = ? AND kind = ?', r.user_id, 'bot');
@@ -130,7 +131,7 @@ function addToServer(me, username, sid) {
   if (!r.public && Number(r.owner_id) !== me.id && !auth.isAdmin(me)) throw err('bot_is_private', 403);
   if (db.get('SELECT 1 FROM bans WHERE community_id = ? AND user_id = ?', c.id, r.user_id)) throw err('banned_from_server', 403);
   if (snap.isMember(r.user_id)) throw err('already_in_server');
-  if (r.gallery_id) throw err('gallery_bot_managed', 403); // re-add requires a fresh Velora ticket
+  if (r.gallery_id) throw err('gallery_bot_managed', 403); // re-add requires a fresh Nookara ticket
   C.addMember(c, r.user_id);
 }
 
@@ -140,7 +141,7 @@ function fromHeader(h) {
   const m = /^Bot\s+(\S+)$/i.exec(String(h || ''));
   if (!m || m[1].length > 200) return null;
   const r = db.get('SELECT user_id, gallery_active FROM bots WHERE token_hash = ?', sha256(m[1]));
-  if (r && r.gallery_active === 0) return null; // a gallery bot Velora took away
+  if (r && r.gallery_active === 0) return null; // a gallery bot Nookara took away
   const u = r && auth.userById(r.user_id);
   return u && !u.banned ? u : null;
 }
@@ -149,7 +150,7 @@ function fromHeader(h) {
 const uidOf = (() => { return principal => db.get('SELECT id FROM users WHERE principal = ?', String(principal))?.id; })();
 // a message's alias for the bot API: principals become numeric ids like every other id there (member_id = the matched member)
 const botAlias = a => (a ? { name: a.name, avatar_url: a.avatar_url || null, unmarked: !!a.unmarked, ...(a.member_id && uidOf(a.member_id) ? { member_id: String(uidOf(a.member_id)) } : {}) } : null);
-const userObj = u => ({ id: String(u.id), username: u.username, global_name: u.display_name || u.username, discriminator: '0', avatar: u.pfp ? 'bonfire' : null, avatar_url: u.pfp || null, bot: u.kind === 'bot', ...(db.get('SELECT 1 FROM bots WHERE user_id = ? AND gallery_verified = 1', Number(u.id)) ? { verified: true } : {}) });
+const userObj = u => ({ id: String(u.id), username: u.username, global_name: u.display_name || u.username, discriminator: '0', avatar: u.pfp ? BOT_API.avatar : null, avatar_url: u.pfp || null, bot: u.kind === 'bot', ...(db.get('SELECT 1 FROM bots WHERE user_id = ? AND gallery_verified = 1', Number(u.id)) ? { verified: true } : {}) });
 function permsToDiscord(p) {
   let d = 1024n | 65536n | 16384n | 64n; // view, read history, embed links, add reactions
   if (p & P.ADMIN) d |= 8n;
@@ -159,9 +160,9 @@ function permsToDiscord(p) {
 }
 const roleId = (c, r) => (r.is_default ? String(c.id) : String(ROLE_BASE + r.id));
 const roleObj = (c, r) => ({ id: roleId(c, r), name: r.name, color: r.color ? parseInt(r.color.slice(1), 16) : 0, position: r.position, permissions: permsToDiscord(Number(r.permissions)), hoist: !!r.hoist, mentionable: !!r.mentionable, managed: false });
-const channelObj = (ch, c) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: [], bonfire_type: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
+const channelObj = (ch, c) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: [], [BOT_API.channelType]: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
 const guildObj = (c, snap, full, bot) => {
-  const out = { id: String(c.id), name: c.name, icon: c.icon_url ? 'bonfire' : null, icon_url: c.icon_url || null, owner_id: String(c.owner_id), description: c.description || null, member_count: C.memberCount(c.id), roles: snap.roles.map(r => roleObj(c, r)) };
+  const out = { id: String(c.id), name: c.name, icon: c.icon_url ? BOT_API.avatar : null, icon_url: c.icon_url || null, owner_id: String(c.owner_id), description: c.description || null, member_count: C.memberCount(c.id), roles: snap.roles.map(r => roleObj(c, r)) };
   if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c)); out.voice_states = botVoice.voiceStates(c, snap, uidOf); }
   return out;
 };
@@ -213,7 +214,7 @@ function messageObj(m, c, snap) {
     reactions: (m.reactions || []).map(x => { const cm = /^<a?:(\w+):(e[0-9a-f]{10})>$/.exec(x.emoji); return { emoji: cm ? { id: cm[2], name: cm[1] } : { id: null, name: x.emoji }, count: x.count, me: false }; }),
     timestamp: new Date(m.created_at).toISOString(), edited_timestamp: m.edited_at ? new Date(m.edited_at).toISOString() : null,
     member: auId ? { roles: [...snap.roleIds(auId)].map(id => String(ROLE_BASE + id)), nick: snap.nick(auId) } : undefined,
-    channel_name: ch?.name, guild_name: c.name, bonfire: { cid: m.channel, sid: c.sid, bridge: au?.bridge || undefined },
+    channel_name: ch?.name, guild_name: c.name, [BOT_API.extra]: { cid: m.channel, sid: c.sid, bridge: au?.bridge || undefined },
     alias: botAlias(m.alias), // Ember extension: { name, avatar_url, unmarked, member_id? } when a bot posted under an alias; author is still the real bot
   };
   if (au?.webhook && !au.bridge) out.webhook_id = '1';

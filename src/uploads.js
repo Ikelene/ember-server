@@ -209,7 +209,7 @@ async function acceptUpload(c, me, buf, name, s, { expiresInDays } = {}) {
     buf = out.buffer;
   }
   if (s.storage_mb != null && storageUsed() + buf.length > s.storage_mb * MB) throw err('storage_full', 403, { limit_mb: s.storage_mb });
-  // the longest a file is kept; members can pick a shorter time. Members on a listed Velora plan or with a listed role keep theirs.
+  // the longest a file is kept; members can pick a shorter time. Members on a listed Nookara plan or with a listed role keep theirs.
   let days = s.expire_days;
   if (days != null && me.tier && s.never_expire_plans.includes(String(me.tier).toLowerCase())) days = null;
   if (days != null && s.never_expire_roles.length) { // ... and so do members with a listed role

@@ -1,5 +1,6 @@
 'use strict';
-// Community REST API: same paths + response shapes as Velora's routes/chat.js under /api/v1 (PROTOCOL §6).
+// Community REST API: same paths + response shapes as Nookara's routes/chat.js under /api/v1 (PROTOCOL §6).
+const { NOOKARA_ID_FIELD } = require('../compat');
 const C = require('../communities');
 const uploads = require('../uploads');
 const { err } = require('../util');
@@ -17,7 +18,7 @@ function register(app) {
   app.get(v1('/settings'), req => ({ settings: C.getSettings(req.user), defaults: C.SETTING_DEFAULTS }));
   app.patch(v1('/settings'), req => ({ settings: C.setSettings(req.user, req.body) }));
   app.get(v1('/notify'), req => ({ notify: C.notifyList(req.user) }));
-  // sleep mode (§7.2): still here while the client sleeps, and one ping through Velora when something new arrives
+  // sleep mode (§7.2): still here while the client sleeps, and one ping through Nookara when something new arrives
   app.post(v1('/wake'), req => require('../wake').subscribe(req.user));
   app.delete(v1('/wake'), req => { require('../wake').end(req.user.id); });
   app.put(v1('/notify/:target'), req => ({ notify: C.setNotify(req.user, req.params.target, req.body || {}) }));
@@ -122,7 +123,7 @@ function register(app) {
   app.delete(v1('/servers/:sid/emojis/:eid'), req => { C.deleteEmoji(req.params.sid, req.user, req.params.eid); });
 
   // clone locks (clonelock.js): may these exact bytes be copied? { locked } - asked by Nookara and other Ember servers
-  app.get(v1('/clone-check'), A, req => require('../clonelock').check(req.query.sha256, req.query.velora_id));
+  app.get(v1('/clone-check'), A, req => require('../clonelock').check(req.query.sha256, req.query.nookara_id ?? req.query[NOOKARA_ID_FIELD]));
 
   // ---- stickers ----
   app.get(v1('/stickers'), req => C.allStickers(req.user));

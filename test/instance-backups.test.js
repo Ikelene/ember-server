@@ -8,24 +8,24 @@ const auth = require('../src/auth');
 const db = require('../src/db');
 const config = require('../src/config');
 const { tmpDir, api, fakeIdp } = require('./helpers');
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_PUBLIC_URL = 'http://chat.test';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test';
-process.env.BONFIRE_OWNER = 'v:100';
-delete process.env.BONFIRE_MANAGED;
-delete process.env.BONFIRE_READ_ONLY;
-const dir = tmpDir(), idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_PUBLIC_URL = 'http://chat.test';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test';
+process.env.EMBER_OWNER = 'v:100';
+delete process.env.EMBER_MANAGED;
+delete process.env.EMBER_READ_ONLY;
+const dir = tmpDir(), idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 let inst, owner, member, admin, sid, role;
 const B = '/api/v1/instance/backups';
 const file = buf => { const f = new FormData(); f.append('file', new Blob([buf]), 'export.zip'); return f; };
 const S = p => `/api/v1/servers/${sid}${p || ''}`;
-const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/velora', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
+const login = async sub => { const r = await api(inst.url).post('/api/v1/auth/nookara', { token: idp.mint({ sub: String(sub), username: 'user' + sub }) }); assert.equal(r.status, 200); return api(inst.url, r.body.session); };
 test.before(async () => {
   inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1' });
   auth.setJwksFetcher(idp.jwks);
   owner = await login(100); member = await login(101); admin = await login(102);
 });
-test.after(async () => { delete process.env.BONFIRE_MANAGED; delete process.env.BONFIRE_LIMITS; delete process.env.BONFIRE_READ_ONLY; await inst.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(async () => { delete process.env.EMBER_MANAGED; delete process.env.EMBER_LIMITS; delete process.env.EMBER_READ_ONLY; await inst.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 test('backups: no community, admin access, and owner-only restore', async () => {
   assert.equal((await owner.post(B)).body.error, 'no_community');
   sid = (await owner.post('/api/v1/servers', { name: 'Backup test', join_policy: 'open' })).body.server.sid;
@@ -67,7 +67,7 @@ test('roles: nullable 1-500 override, 20 MB upload allowed only with role, owner
     assert.equal(server.upload_ceiling_mb, 500);
   }
   assert.equal((await member.raw('POST', '/api/v1/media/upload?sid=' + sid, file(data))).status, 200);
-  process.env.BONFIRE_MANAGED = '1'; process.env.BONFIRE_PLAN = 'starter'; process.env.BONFIRE_LIMITS = JSON.stringify({ max_upload_mb: 10 });
+  process.env.EMBER_MANAGED = '1'; process.env.EMBER_PLAN = 'starter'; process.env.EMBER_LIMITS = JSON.stringify({ max_upload_mb: 10 });
   {
     const server = (await member.get(S())).body.server;
     assert.equal(server.upload_max_mb, 10);
@@ -77,7 +77,7 @@ test('roles: nullable 1-500 override, 20 MB upload allowed only with role, owner
   const cappedUpload = await member.raw('POST', '/api/v1/media/upload?sid=' + sid, file(data));
   assert.equal(cappedUpload.status, 403);
   assert.deepEqual(cappedUpload.body, { error: 'plan_limit', what: 'max_upload_mb', limit: 10, used: null, plan: 'starter' });
-  process.env.BONFIRE_PLAN = 'plus'; delete process.env.BONFIRE_LIMITS;
+  process.env.EMBER_PLAN = 'plus'; delete process.env.EMBER_LIMITS;
   assert.equal(config.get().max_upload_mb, 250);
   const plusServer = (await member.get(S())).body.server;
   assert.equal(plusServer.upload_max_mb, 10);
@@ -87,7 +87,7 @@ test('roles: nullable 1-500 override, 20 MB upload allowed only with role, owner
   assert.equal(listed.upload_max_mb, 10);
   assert.equal(listed.my_upload_max_mb, 250);
   assert.equal(listed.upload_ceiling_mb, 250);
-  delete process.env.BONFIRE_MANAGED;
+  delete process.env.EMBER_MANAGED;
   assert.equal((await owner.patch(S('/roles/' + role.rid), { upload_max_mb: null })).body.role.upload_max_mb, null);
   await owner.patch(S('/roles/' + role.rid), { upload_max_mb: 250 });
 });
@@ -142,10 +142,10 @@ test('max_backups pruning, selected restore with max=1, deletion, read-only list
   list = (await owner.get(B)).body.backups; assert.equal(list.length, 1);
   const restored = await owner.post(B + '/' + list[0].id + '/restore'); assert.equal(restored.status, 200); sid = restored.body.sid;
   const b = (await owner.get(B)).body.backups[0]; assert.equal(b.note, 'before restore');
-  process.env.BONFIRE_READ_ONLY = '1';
+  process.env.EMBER_READ_ONLY = '1';
   assert.equal((await admin.get(B)).status, 200); assert.equal((await admin.get(B + '/' + b.id + '/download')).status, 200);
   for (const r of [await owner.post(B), await owner.del(B + '/' + b.id), await owner.post(B + '/' + b.id + '/restore'), await owner.post('/api/v1/instance/restore')]) { assert.equal(r.status, 403); assert.equal(r.body.error, 'read_only'); }
-  delete process.env.BONFIRE_READ_ONLY;
+  delete process.env.EMBER_READ_ONLY;
   assert.equal((await admin.del(B + '/' + b.id)).status, 200);
   assert.equal((await owner.get(B)).body.backups.length, 0);
   assert.equal((await owner.get(B + '/../../config.json/download')).status, 404);

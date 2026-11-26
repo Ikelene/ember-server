@@ -1,7 +1,8 @@
 'use strict';
-// Name sync (PROTOCOL §12.4a): a Velora account's username / picture is copied into this instance at login, so a rename
-// would otherwise only show up the next time that person signs in here. Ask Velora for the current identities of the
-// Velora accounts we know (in batches) a minute after boot and every 10 minutes, and apply what changed.
+// Name sync (PROTOCOL §12.4a): a Nookara account's username / picture is copied into this instance at login, so a rename
+// would otherwise only show up the next time that person signs in here. Ask Nookara for the current identities of the
+// Nookara accounts we know (in batches) a minute after boot and every 10 minutes, and apply what changed.
+const { relayPath, KIND_NOOKARA } = require('../compat');
 const db = require('../db');
 const config = require('../config');
 const auth = require('../auth');
@@ -29,16 +30,16 @@ function apply(list) {
 }
 
 async function sync() {
-  if (busy || !client.registered() || config.mode() !== 'velora') return 0;
+  if (busy || !client.registered() || config.mode() !== 'nookara') return 0;
   busy = true;
   let changed = 0;
   try {
-    const ids = db.all("SELECT velora_id FROM users WHERE kind = 'velora' AND velora_id IS NOT NULL").map(r => r.velora_id);
+    const ids = db.all(`SELECT nookara_id FROM users WHERE kind = '${KIND_NOOKARA}' AND nookara_id IS NOT NULL`).map(r => r.nookara_id);
     for (let i = 0; i < ids.length; i += BATCH) {
-      const r = await client.call('POST', '/bonfire/relay/identities', { ids: ids.slice(i, i + BATCH) });
+      const r = await client.call('POST', relayPath('/identities'), { ids: ids.slice(i, i + BATCH) });
       changed += apply(Array.isArray(r?.users) ? r.users : []);
     }
-  } catch { /* Velora unreachable or too old for this route: the next round tries again */ } finally { busy = false; }
+  } catch { /* Nookara unreachable or too old for this route: the next round tries again */ } finally { busy = false; }
   return changed;
 }
 

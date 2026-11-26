@@ -1,5 +1,5 @@
 'use strict';
-// Link previews made on the server: the browser never visits the linked site. Ported from Velora's unfurl.js, with strict SSRF rules:
+// Link previews made on the server: the browser never visits the linked site. Ported from Nookara's unfurl.js, with strict SSRF rules:
 //  - only http / https, only ports 80 and 443, no user:pass@
 //  - the host is resolved here; if ANY address is private / loopback / link-local / metadata / reserved (IPv4 and IPv6, incl.
 //    IPv4-mapped, NAT64 and 6to4 forms) the fetch is refused, and the connection is then pinned to the address we checked (no rebinding)
@@ -17,7 +17,7 @@ const db = require('./db');
 const uploads = require('./uploads');
 const { sha256, now, normalizeOrigin } = require('./util');
 
-const UA = 'Mozilla/5.0 (compatible; BonfireBot/1.0) facebookexternalhit/1.1';
+const UA = 'Mozilla/5.0 (compatible; EmberBot/1.0) facebookexternalhit/1.1';
 const TTL = 24 * 3600 * 1000, FAIL_TTL = 3600 * 1000;
 const MAX_REDIRECTS = 3, HOP_MS = 7000, TOTAL_MS = 10000;
 

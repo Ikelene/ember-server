@@ -1,5 +1,7 @@
 'use strict';
+const fs = require('fs');
 const path = require('path');
+const { DB_FILE, LEGACY_DB_FILE } = require('./compat');
 // Node's built-in SQLite: no native addon to download or compile, on any platform. Still flagged experimental in
 // Node 22/24, so drop that one warning instead of printing it on every start.
 const emitWarning = process.emitWarning;
@@ -17,7 +19,7 @@ const MIGRATIONS = [
   CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
   CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT, principal TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
-    username TEXT NOT NULL, display_name TEXT NOT NULL, pfp TEXT, velora_id TEXT,
+    username TEXT NOT NULL, display_name TEXT NOT NULL, pfp TEXT, velora_id TEXT, -- renamed to nookara_id in v21
     username_lc TEXT, password_hash TEXT, settings TEXT, banned INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, last_login INTEGER
   );
@@ -132,7 +134,7 @@ const MIGRATIONS = [
     description TEXT NOT NULL DEFAULT '', public INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
   );
   `,
-  // v4: Velora relays (PROTOCOL §12): paid roles-shop purchases (Velora's chat_role_purchases) and their pay requests
+  // v4: Nookara relays (PROTOCOL §12): paid roles-shop purchases (Nookara's chat_role_purchases) and their pay requests
   `
   CREATE TABLE role_purchases (
     community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -153,13 +155,13 @@ const MIGRATIONS = [
   CREATE TABLE instance_backups (
     id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, size INTEGER NOT NULL, by_principal TEXT NOT NULL, note TEXT NOT NULL DEFAULT ''
   );`,
-  // v6: bot gallery (PROTOCOL §14.1): bots added from Velora's gallery keep their gallery id, a verified flag and an active flag
+  // v6: bot gallery (PROTOCOL §14.1): bots added from Nookara's gallery keep their gallery id, a verified flag and an active flag
   `ALTER TABLE bots ADD COLUMN gallery_id TEXT;
   ALTER TABLE bots ADD COLUMN gallery_test INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE bots ADD COLUMN gallery_verified INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE bots ADD COLUMN gallery_active INTEGER NOT NULL DEFAULT 1;
   CREATE UNIQUE INDEX bots_gallery ON bots(gallery_id) WHERE gallery_id IS NOT NULL;`,
-  // v7: server settings (src/settings.js), AutoMod timeouts, reports, the audit log, upload expiry, a Velora member's plan
+  // v7: server settings (src/settings.js), AutoMod timeouts, reports, the audit log, upload expiry, a Nookara member's plan
   `ALTER TABLE communities ADD COLUMN settings TEXT NOT NULL DEFAULT '{}';
   ALTER TABLE uploads ADD COLUMN expires_at INTEGER;
   CREATE INDEX uploads_expiry ON uploads(expires_at) WHERE expires_at IS NOT NULL;
@@ -214,7 +216,7 @@ const MIGRATIONS = [
   CREATE INDEX reactions_created ON reactions(created_at, message_id, user_id);`,
   // v12: "Last online" on profiles: when someone's last gateway socket closed (backfilled from last_connect as a best guess)
   `ALTER TABLE users ADD COLUMN last_online INTEGER; UPDATE users SET last_online = last_connect WHERE last_connect IS NOT NULL;`,
-  // v13: Velora switched Ember off for this account (profiles endpoint `restricted`): refused over REST + the gateway until it is switched back on
+  // v13: Nookara switched Ember off for this account (profiles endpoint `restricted`): refused over REST + the gateway until it is switched back on
   `ALTER TABLE users ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;`,
   // v14: the registered Nookara app a session was signed in through (the token's `app` claim), for messages' `via`
   `ALTER TABLE sessions ADD COLUMN app TEXT;`,
@@ -236,11 +238,25 @@ const MIGRATIONS = [
   `ALTER TABLE members ADD COLUMN profile TEXT;`,
   // v20: a local account's own profile (account-profile.js): JSON { banner, color, bio, pronouns, sync } (name + picture are display_name / pfp)
   `ALTER TABLE users ADD COLUMN account_profile TEXT;`,
+  // v21: Velora is Nookara now: the account id column and the relay state keys take the new name
+  `ALTER TABLE users RENAME COLUMN velora_id TO nookara_id;
+  UPDATE meta SET k = 'nookara_reg' WHERE k = 'velora_reg';
+  UPDATE meta SET k = 'nookara_dir' WHERE k = 'velora_dir';`,
 ];
+
+// the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
+function adoptLegacyFile(dir) {
+  const now = path.join(dir, DB_FILE), old = path.join(dir, LEGACY_DB_FILE);
+  if (fs.existsSync(now) || !fs.existsSync(old)) return;
+  for (const ext of ['-wal', '-shm']) if (fs.existsSync(old + ext)) fs.renameSync(old + ext, now + ext);
+  fs.renameSync(old, now);
+  console.log(`[db] renamed ${LEGACY_DB_FILE} to ${DB_FILE}`);
+}
 
 function open() {
   close();
-  db = new DatabaseSync(path.join(config.dir(), 'bonfire.db'));
+  adoptLegacyFile(config.dir());
+  db = new DatabaseSync(path.join(config.dir(), DB_FILE));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;');
   const have = db.prepare('PRAGMA user_version').get().user_version;
   for (let v = have; v < MIGRATIONS.length; v++) tx(() => { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); });

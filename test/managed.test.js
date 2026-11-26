@@ -1,5 +1,5 @@
 'use strict';
-// Velora-hosted ("managed") instances (PROTOCOL §19): plan limits from BONFIRE_PLAN / BONFIRE_LIMITS, locked settings, the `managed` object, voice quota frames.
+// Nookara-hosted ("managed") instances (PROTOCOL §19): plan limits from EMBER_PLAN / EMBER_LIMITS, locked settings, the `managed` object, voice quota frames.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -7,17 +7,17 @@ const { startServer } = require('../src/index');
 const auth = require('../src/auth');
 const { tmpDir, api, wsClient, fakeIdp } = require('./helpers');
 
-process.env.BONFIRE_ACCOUNTS_MODE = 'velora';
-process.env.BONFIRE_VELORA_URL = 'http://velora.test/';
-process.env.BONFIRE_PUBLIC_URL = 'http://chat.test';
-process.env.BONFIRE_OWNER = 'v:100';
-process.env.BONFIRE_MANAGED = '1';
-process.env.BONFIRE_PLAN = 'starter';
+process.env.EMBER_ACCOUNTS_MODE = 'nookara';
+process.env.EMBER_NOOKARA_URL = 'http://nookara.test/';
+process.env.EMBER_PUBLIC_URL = 'http://chat.test';
+process.env.EMBER_OWNER = 'v:100';
+process.env.EMBER_MANAGED = '1';
+process.env.EMBER_PLAN = 'starter';
 const LIMITS = { member_cap: 3, max_upload_mb: 1, emojis: 1, sounds: 1, bots: 1, bridges: false, custom_voice_keys: false, files_per_member: null, upload_expiry_days: null, storage_mb: null };
-process.env.BONFIRE_LIMITS = JSON.stringify(LIMITS);
+process.env.EMBER_LIMITS = JSON.stringify(LIMITS);
 
 const dir = tmpDir();
-const idp = fakeIdp({ iss: 'http://velora.test', aud: 'http://chat.test' });
+const idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const file = (buf, name, fields = {}) => { const f = new FormData(); for (const [k, v] of Object.entries(fields)) f.append(k, v); f.append('file', new Blob([buf]), name); return f; };
 let inst, base, owner, sid;
@@ -31,13 +31,13 @@ test.before(async () => {
 test.after(async () => { clients.forEach(c => c.close()); await inst.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 const login = async (sub, username) => {
-  const r = await api(base).post('/api/v1/auth/velora', { token: idp.mint({ sub: String(sub), username }) });
+  const r = await api(base).post('/api/v1/auth/nookara', { token: idp.mint({ sub: String(sub), username }) });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return { ...r.body, a: api(base, r.body.session) };
 };
 
 test('well-known and settings carry the managed object; the server shows its member cap', async () => {
-  const wk = (await api(base).get('/.well-known/bonfire')).body;
+  const wk = (await api(base).get('/.well-known/ember')).body;
   assert.deepEqual(wk.managed, { plan: 'starter', limits: LIMITS, host: 'velora' });
   assert.equal(wk.features.bridges, false);
   assert.equal(wk.max_upload_mb, 1);
@@ -111,13 +111,13 @@ test('uploads: the plan caps the file size and community upload_max_mb', async (
 
 test('locked settings, custom voice keys and bridges are refused', async () => {
   const P = body => owner.a.patch('/api/v1/instance/settings', body);
-  for (const [k, v] of [['accounts_mode', 'local'], ['public_url', 'https://elsewhere.example'], ['velora_url', 'https://evil.example'], ['velora_registration', 'off']]) {
+  for (const [k, v] of [['accounts_mode', 'local'], ['public_url', 'https://elsewhere.example'], ['nookara_url', 'https://evil.example'], ['nookara_registration', 'off']]) {
     const r = await P({ [k]: v });
     assert.equal(r.status, 403, k);
     assert.deepEqual({ error: r.body.error, setting: r.body.setting }, { error: 'managed_setting', setting: k });
   }
   // the current value is fine (the admin form sends everything back)
-  const ok = await P({ accounts_mode: 'velora', public_url: 'http://chat.test', velora_registration: 'auto', name: 'Renamed' });
+  const ok = await P({ accounts_mode: 'velora', public_url: 'http://chat.test', nookara_registration: 'auto', name: 'Renamed' });
   assert.equal(ok.status, 200);
   assert.equal(ok.body.name, 'Renamed');
   const keys = await P({ voice: { cf_app_id: 'x', cf_app_secret: 'y', cf_turn_key_id: 'z', cf_turn_token: 'w' } });
@@ -149,16 +149,16 @@ test('managed.js: plan defaults, bad JSON, and a plain instance has no limits', 
   const managed = require('../src/managed');
   const keep = { ...process.env };
   try {
-    process.env.BONFIRE_LIMITS = 'not json'; process.env.BONFIRE_PLAN = 'plus';
+    process.env.EMBER_LIMITS = 'not json'; process.env.EMBER_PLAN = 'plus';
     assert.deepEqual(managed.limits(), managed.PLAN_DEFAULTS.plus);
-    process.env.BONFIRE_LIMITS = JSON.stringify({ member_cap: null, emojis: 7, bridges: 'yes' }); process.env.BONFIRE_PLAN = 'starter';
+    process.env.EMBER_LIMITS = JSON.stringify({ member_cap: null, emojis: 7, bridges: 'yes' }); process.env.EMBER_PLAN = 'starter';
     assert.deepEqual(managed.limits(), { ...managed.PLAN_DEFAULTS.starter, member_cap: null, emojis: 7 });
-    process.env.BONFIRE_PLAN = 'nonsense plan!';
+    process.env.EMBER_PLAN = 'nonsense plan!';
     assert.equal(managed.plan(), 'starter');
-    delete process.env.BONFIRE_MANAGED;
+    delete process.env.EMBER_MANAGED;
     assert.equal(managed.view(), null);
     assert.equal(managed.limit('member_cap'), null);
     assert.equal(managed.allows('bridges'), true);
     managed.assertRoom('emojis', 1e6); managed.assertCanJoin(1e6, false); managed.guardSettings({ accounts_mode: 'local' }, {});
-  } finally { for (const k of ['BONFIRE_MANAGED', 'BONFIRE_PLAN', 'BONFIRE_LIMITS']) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } }
+  } finally { for (const k of ['EMBER_MANAGED', 'EMBER_PLAN', 'EMBER_LIMITS']) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } }
 });

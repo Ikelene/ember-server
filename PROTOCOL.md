@@ -1,38 +1,40 @@
 # Ember Instance Protocol - v1
 
-> **Ember is an open protocol.** Anyone can write an Ember client and use or run Ember servers. Velora's own clients (web, desktop, Android) are just the ones the Velora ecosystem uses; this document is all a third-party client or server needs.
+> **Ember is an open protocol.** Anyone can write an Ember client and use or run Ember servers. Nookara's own clients (web, desktop, Android) are just the ones the Nookara ecosystem uses; this document is all a third-party client or server needs.
 
 This is the contract between three parties:
 
-- **Velora** (`VELORA` = Velora base URL, e.g. `https://nookara.cc`, dev `http://localhost:3000`) — identity provider, the account signing key, DMs.
-- **Instance** (`INSTANCE` = origin of a bonfire-server, e.g. `https://chat.ikelene.net`, dev `http://localhost:4100`) - hosts exactly **one community** (what the UI calls a "server"). Adding an instance's URL in Ember *is* joining that server.
+- **Nookara** (`NOOKARA` = Nookara base URL, e.g. `https://nookara.cc`, dev `http://localhost:3000`) — identity provider, the account signing key, DMs.
+- **Instance** (`INSTANCE` = origin of an ember-server, e.g. `https://chat.ikelene.net`, dev `http://localhost:4100`) - hosts exactly **one community** (what the UI calls a "server"). Adding an instance's URL in Ember *is* joining that server.
 - **Client** - Ember (web `/chat`, desktop, android).
 
 Terminology in code and docs: **instance** (the running server process at a URL) and **community** (its one Discord-like server). One instance = one community (§5a). On the wire, paths keep the old `servers` / `sid` naming so the existing client and response shapes carry over (see §6).
 
-All JSON. All errors are `{ "error": "<snake_code>", ...extra }` with a fitting HTTP status. All instance HTTP routes send `Access-Control-Allow-Origin: *` and allow the `Authorization, Content-Type, X-Device-Fingerprint` headers. No cookies anywhere. The client is always served from Velora, so every instance call is cross-origin. Ember works **without a Velora sign-in** (local-account instances); a Velora sign-in is only needed for DMs, group chats and Velora-login instances.
+All JSON. All errors are `{ "error": "<snake_code>", ...extra }` with a fitting HTTP status. All instance HTTP routes send `Access-Control-Allow-Origin: *` and allow the `Authorization, Content-Type, X-Device-Fingerprint` headers. No cookies anywhere. The client is always served from Nookara, so every instance call is cross-origin. Ember works **without a Nookara sign-in** (local-account instances); a Nookara sign-in is only needed for DMs, group chats and Nookara-login instances.
 
+
+**Old names.** Bonfire is now Ember and Velora is now Nookara. Where a client, bot, the Minecraft plugin or Nookara itself depends on an old name it is kept for protocol v1 and listed in the server's `src/compat.js`: the `/bonfire/*` paths and `/.well-known/bonfire/jwks.json` on Nookara, the `X-Bonfire-*` relay headers, the `bonfire-*-v1` signature contexts and `bonfire-*+jwt` token types (receipts are also accepted as `ember-receipt+jwt`), the `bonfire-export-v1` format, `velora_id` on user objects, `kind: "velora"`, `accounts_mode: "velora"`, `v:` principals and the `velora_*` error codes. The new `/.well-known/ember`, `/api/v1/auth/nookara`, `/api/v1/import/nookara` and `/api/v1/instance/nookara/register` are canonical; the old `velora` / `bonfire` paths still answer.
 ---
 
 ## 1. Origins and normalization
 
-`normalizeOrigin(url)` means: parse it, lowercase the scheme and host, drop the default port (80 for http, 443 for https), drop the path, query and trailing slash. The result is `scheme://host[:port]`. Velora puts the instance origin in a token's `aud`, and instances compare `aud` with their own `public_url` (config), normalized the same way.
+`normalizeOrigin(url)` means: parse it, lowercase the scheme and host, drop the default port (80 for http, 443 for https), drop the path, query and trailing slash. The result is `scheme://host[:port]`. Nookara puts the instance origin in a token's `aud`, and instances compare `aud` with their own `public_url` (config), normalized the same way.
 
-Production requires `https`. `http` audiences are accepted only when Velora runs with `BONFIRE_DEV=1`.
+Production requires `https`. `http` audiences are accepted only when Nookara runs with `EMBER_DEV=1`.
 
 ---
 
-## 2. Velora identity API
+## 2. Nookara identity API
 
 ### 2.1 JWKS
-`GET VELORA/.well-known/bonfire/jwks.json` returns:
+`GET NOOKARA/.well-known/bonfire/jwks.json` returns:
 ```json
 { "keys": [ { "kty": "OKP", "crv": "Ed25519", "x": "<b64url raw 32B>", "kid": "<kid>", "alg": "EdDSA", "use": "sig" } ] }
 ```
-The signing key is stored at `BONFIRE_IDP_KEY` (default `/opt/secrets/bonfire-idp.key`, PKCS8 PEM), and Velora generates it on first use if it's missing. `kid` is the first 16 hex characters of `sha256(raw public key)`. Instances cache JWKS for 10 minutes, and refetch it once when they see an unknown `kid`.
+The signing key is stored at `BONFIRE_IDP_KEY` (default `/opt/secrets/bonfire-idp.key`, PKCS8 PEM), and Nookara generates it on first use if it's missing. `kid` is the first 16 hex characters of `sha256(raw public key)`. Instances cache JWKS for 10 minutes, and refetch it once when they see an unknown `kid`.
 
 ### 2.2 Instance token
-`POST VELORA/bonfire/instance-token` takes a Velora bearer token and needs scope `CHAT` (2048).
+`POST NOOKARA/bonfire/instance-token` takes a Nookara bearer token and needs scope `CHAT` (2048).
 Request `{ "instance": "<any url>" }` returns `{ "token": "<jwt>", "expires_at": <ms>, "aud": "<normalized origin>" }`.
 
 The JWT is compact and signed with EdDSA (Ed25519).
@@ -41,33 +43,33 @@ The JWT is compact and signed with EdDSA (Ed25519).
 
 | claim | value |
 |---|---|
-| `iss` | Velora `BASE_URL`, normalized |
-| `sub` | Velora `users.id` as a **string** |
+| `iss` | Nookara `BASE_URL`, normalized |
+| `sub` | Nookara `users.id` as a **string** |
 | `aud` | normalized instance origin |
 | `iat`, `exp` | seconds since epoch; `exp = iat + 600` |
 | `jti` | 16 random bytes, b64url |
-| `username` | Velora username |
+| `username` | Nookara username |
 | `display_name` | currently the same as username |
 | `pfp` | absolute URL or null |
-| `scp` | array drawn from `"chat"`, `"voice"`, `"media"`, `"sign"`; each is present only if the Velora token holds `CHAT`, `VOICE`, `MEDIA_UPLOAD` or `SIGN_MESSAGES` respectively |
-| `tier` | the person's Velora plan: `"pro"` (Pro, legacy Plus, staff ranks or a credit-bought tier) or `"free"`; instances use it for "plans whose files never expire" (§6.4) |
-| `app` | optional: `{ id, name?, icon? }` when the person signed in to Velora through a registered (third-party) app. The instance keeps it with the session and adds `app` (the id), `token` (the name) and `icon` to the `via` of messages sent with that session, so clients can name the app. `id` is `app_` + hex; `icon` is an https link to Velora's `/uploads/app-logos/`. Clients never take an instance's `via.app` as proof of an official app (no verified badge from it). |
+| `scp` | array drawn from `"chat"`, `"voice"`, `"media"`, `"sign"`; each is present only if the Nookara token holds `CHAT`, `VOICE`, `MEDIA_UPLOAD` or `SIGN_MESSAGES` respectively |
+| `tier` | the person's Nookara plan: `"pro"` (Pro, legacy Plus, staff ranks or a credit-bought tier) or `"free"`; instances use it for "plans whose files never expire" (§6.4) |
+| `app` | optional: `{ id, name?, icon? }` when the person signed in to Nookara through a registered (third-party) app. The instance keeps it with the session and adds `app` (the id), `token` (the name) and `icon` to the `via` of messages sent with that session, so clients can name the app. `id` is `app_` + hex; `icon` is an https link to Nookara's `/uploads/app-logos/`. Clients never take an instance's `via.app` as proof of an official app (no verified badge from it). |
 
 Errors:
 - `invalid_instance`: the URL doesn't parse, or it's http outside dev.
-- `insufficient_scope`: the standard Velora 403.
+- `insufficient_scope`: the standard Nookara 403.
 
 ### 2.3 Account signing key (message signing)
-New Velora scope: **`SIGN_MESSAGES = 32768`** ("Sign messages as you"). It counts as dangerous, so it's unchecked by default on the consent screen.
+New Nookara scope: **`SIGN_MESSAGES = 32768`** ("Sign messages as you"). It counts as dangerous, so it's unchecked by default on the consent screen.
 
-Each Velora account has **one** active Ed25519 signing key, shared by every app and browser the person uses. Velora keeps the private half encrypted at rest (AES-256-GCM, with a key file outside the repository) and gives it only to a token that holds `SIGN_MESSAGES`. Per-device key registration (`POST /bonfire/keys`) is retired.
+Each Nookara account has **one** active Ed25519 signing key, shared by every app and browser the person uses. Nookara keeps the private half encrypted at rest (AES-256-GCM, with a key file outside the repository) and gives it only to a token that holds `SIGN_MESSAGES`. Per-device key registration (`POST /bonfire/keys`) is retired.
 
 | route | auth | result |
 |---|---|---|
-| `GET VELORA/bonfire/signing-key` | bearer + `SIGN_MESSAGES` | `{ kid, public_key, private_key, created_at }`: the active key, created on the first call. `Cache-Control: no-store` |
-| `POST VELORA/bonfire/signing-key/rotate` | Velora **website session** only (not an app token) | revokes the active key, makes a new one, returns `{ kid, public_key, created_at }` |
-| `GET VELORA/bonfire/keys/kid/:kid` | public | `{ kid, user_id, public_key, created_at, revoked_at }` or 404 `key_not_found` |
-| `GET VELORA/bonfire/keys/user/:userId` | public | `{ user_id, keys: [ ... including revoked ] }` |
+| `GET NOOKARA/bonfire/signing-key` | bearer + `SIGN_MESSAGES` | `{ kid, public_key, private_key, created_at }`: the active key, created on the first call. `Cache-Control: no-store` |
+| `POST NOOKARA/bonfire/signing-key/rotate` | Nookara **website session** only (not an app token) | revokes the active key, makes a new one, returns `{ kid, public_key, created_at }` |
+| `GET NOOKARA/bonfire/keys/kid/:kid` | public | `{ kid, user_id, public_key, created_at, revoked_at }` or 404 `key_not_found` |
+| `GET NOOKARA/bonfire/keys/user/:userId` | public | `{ user_id, keys: [ ... including revoked ] }` |
 
 - `public_key` is the b64url of the raw 32-byte Ed25519 public key. `private_key` is the b64url of the PKCS#8 DER private key. Clients import it into WebCrypto as a **non-extractable** key, keep it in memory, and never store the raw bytes.
 - `kid = "k_" + first 16 hex of sha256(raw public key)`.
@@ -76,38 +78,38 @@ Each Velora account has **one** active Ed25519 signing key, shared by every app 
 - Times are ms epoch numbers, and `revoked_at` is null while the key is active.
 
 ### 2.4 User instance list (syncs the rail across devices)
-The client always keeps its list locally; when signed in with Velora it merges the local list with this one (union, server order first) and then keeps them in sync.
+The client always keeps its list locally; when signed in with Nookara it merges the local list with this one (union, server order first) and then keeps them in sync.
 | route | auth | result |
 |---|---|---|
-| `GET VELORA/bonfire/instances` | bearer + `CHAT` | `{ default_instance: "<origin>" \| null, instances: [ { url, position, added_at, muted, push, auto_join } ] }` (see "Official server" below) |
-| `PUT VELORA/bonfire/instances` `{ instances: [ { url } ] }` | bearer + `CHAT` | replaces the whole list in this order (keeps each kept instance's `muted`/`push`); returns the list |
-| `PATCH VELORA/bonfire/instances/prefs` `{ url, muted?, push? }` | bearer + `CHAT` | per-instance push consent (§12.3); returns that list entry, or 404 `instance_not_in_list` |
-| `POST VELORA/bonfire/instances/default-joined` `{ url? }` | bearer + `CHAT` | the client confirms it joined (or chose not to join) the official server: clears `auto_join` for that `url` (all entries when omitted; bad `url` = 400 `invalid_instance`); returns the list |
+| `GET NOOKARA/bonfire/instances` | bearer + `CHAT` | `{ default_instance: "<origin>" \| null, instances: [ { url, position, added_at, muted, push, auto_join } ] }` (see "Official server" below) |
+| `PUT NOOKARA/bonfire/instances` `{ instances: [ { url } ] }` | bearer + `CHAT` | replaces the whole list in this order (keeps each kept instance's `muted`/`push`); returns the list |
+| `PATCH NOOKARA/bonfire/instances/prefs` `{ url, muted?, push? }` | bearer + `CHAT` | per-instance push consent (§12.3); returns that list entry, or 404 `instance_not_in_list` |
+| `POST NOOKARA/bonfire/instances/default-joined` `{ url? }` | bearer + `CHAT` | the client confirms it joined (or chose not to join) the official server: clears `auto_join` for that `url` (all entries when omitted; bad `url` = 400 `invalid_instance`); returns the list |
 
 Each `url` is a normalized origin, and the list holds at most 100.
 
-**Official server.** When Velora's `BONFIRE_DEFAULT_INSTANCE` (an https origin, e.g. `https://chat.ikelene.net`) is set, every account gets it **once**: at sign-up (password and OAuth), on its first `GET /bonfire/instances` for older accounts, and by the ops script `scripts/bonfire-default-instance.js [--dry-run]`. It is appended at the end of the list (`users.bonfire_default_added` marks it done, so removing it later sticks). `default_instance` is that origin (`null` when unset). `auto_join` is `true` only on the default instance's entry from the time it was added until the client calls `default-joined`; the client joins the community once, then confirms, so it happens once per account across devices. `PUT` keeps each entry's `auto_join`. Legacy Velora servers that have `moved_to` set no longer appear in `GET /chat/servers` or `/chat/discover`; their rows and memberships stay (the owner can still export).
+**Official server.** When Nookara's `BONFIRE_DEFAULT_INSTANCE` (an https origin, e.g. `https://chat.ikelene.net`) is set, every account gets it **once**: at sign-up (password and OAuth), on its first `GET /bonfire/instances` for older accounts, and by the ops script `scripts/bonfire-default-instance.js [--dry-run]`. It is appended at the end of the list (`users.bonfire_default_added` marks it done, so removing it later sticks). `default_instance` is that origin (`null` when unset). `auto_join` is `true` only on the default instance's entry from the time it was added until the client calls `default-joined`; the client joins the community once, then confirms, so it happens once per account across devices. `PUT` keeps each entry's `auto_join`. Legacy Nookara servers that have `moved_to` set no longer appear in `GET /chat/servers` or `/chat/discover`; their rows and memberships stay (the owner can still export).
 
 ### 2.5 Ember web sign-in (separate token)
-Ember on the web (`VELORA/chat`) never uses the main site's session token. It signs in like the apps do, through the consent screen, and keeps its **own** token (`localStorage['bonfire_token']`; project name `Ember (web)`):
-1. Client makes a random `state` (16–128 chars `[A-Za-z0-9_-]`, kept in `sessionStorage`) and navigates to `VELORA/bonfire/app-login?client=web&state=<state>`.
-2. Velora redirects to `/login?…&app=bonfire&client=web&state=…`. If already signed in on the site, the page offers the saved account (no password), then the consent screen.
+Ember on the web (`NOOKARA/chat`) never uses the main site's session token. It signs in like the apps do, through the consent screen, and keeps its **own** token (`localStorage['bonfire_token']`; project name `Ember (web)`):
+1. Client makes a random `state` (16–128 chars `[A-Za-z0-9_-]`, kept in `sessionStorage`) and navigates to `NOOKARA/bonfire/app-login?client=web&state=<state>`.
+2. Nookara redirects to `/login?…&app=ember&client=web&state=…`. If already signed in on the site, the page offers the saved account (no password), then the consent screen.
 3. On approve, the login page navigates to **`/chat#/signin?code=<code>&state=<state>`** (same origin only, hard-coded path, never a URL from the query).
-4. Client checks `state` matches, then `POST VELORA/bonfire/app-exchange { code, state }` → `{ token, username, scopes, version }`, stores it, clears the hash.
+4. Client checks `state` matches, then `POST NOOKARA/bonfire/app-exchange { code, state }` → `{ token, username, scopes, version }`, stores it, clears the hash.
 Desktop/Android keep their existing `bonfire://` flow and token storage. Signing out of Ember revokes only Ember's token.
 
 ### 2.6 Legacy export
-Legacy Velora communities may be read-only: server objects include `read_only: boolean` and `moved_to: https-origin|null`. Writes fail with HTTP 403 `{ error: "server_read_only", moved_to }` (gateway: `chat_error`); typing is ignored. Reading, leaving, and owner exports remain available; new accounts are not auto-joined to a read-only default server.
+Legacy Nookara communities may be read-only: server objects include `read_only: boolean` and `moved_to: https-origin|null`. Writes fail with HTTP 403 `{ error: "server_read_only", moved_to }` (gateway: `chat_error`); typing is ignored. Reading, leaving, and owner exports remain available; new accounts are not auto-joined to a read-only default server.
 
-`POST VELORA/chat/servers/:sid/export-to-account` (owner bearer + `CHAT`, 3/hour/owner) saves the same ZIP in account backups and returns `{ backup: { id, slug, name, size, created_at, reason: "legacy", source: "uploaded", url: null } }`. Existing backup listing, download and restore flows accept it; the 10-per-account retention prunes oldest backups.
+`POST NOOKARA/chat/servers/:sid/export-to-account` (owner bearer + `CHAT`, 3/hour/owner) saves the same ZIP in account backups and returns `{ backup: { id, slug, name, size, created_at, reason: "legacy", source: "uploaded", url: null } }`. Existing backup listing, download and restore flows accept it; the 10-per-account retention prunes oldest backups.
 
-`GET VELORA/chat/servers/:sid/export` takes a bearer with `CHAT`, and only the **owner** may call it. It returns `application/zip` in the format of §9. Users in the export are principals of the form `v:<users.id>`.
+`GET NOOKARA/chat/servers/:sid/export` takes a bearer with `CHAT`, and only the **owner** may call it. It returns `application/zip` in the format of §9. Users in the export are principals of the form `v:<users.id>`.
 
 ---
 
 ## 3. Instance discovery
 
-`GET INSTANCE/.well-known/bonfire` is public and returns:
+`GET INSTANCE/.well-known/ember` is public and returns (`GET INSTANCE/.well-known/bonfire` still serves the same document):
 ```json
 {
   "software": "bonfire-server", "version": "0.1.0", "protocol": 1,
@@ -115,7 +117,8 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
   "name": "My Instance", "description": "", "icon_url": null,
   "public_url": "http://localhost:4100", "previous_urls": [],
   "accounts_mode": "velora" | "local",
-  "velora": { "issuer": "http://localhost:3000", "jwks_url": "http://localhost:3000/.well-known/bonfire/jwks.json", "signing_issuers": ["http://localhost:3000"] } | null,
+  "nookara": { "issuer": "http://localhost:3000", "jwks_url": "http://localhost:3000/.well-known/bonfire/jwks.json", "signing_issuers": ["http://localhost:3000"] } | null,
+  "velora": <the same as "nookara", for older clients>,
   "claimed": true,
   "registration": "open" | "closed",
   "features": { "signing": true, "voice": false, "uploads": true, "youtube": false, "minecraft": true, "bridges": { "discord": false, "fluxer": false, "cloudlink": true } },
@@ -127,16 +130,17 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
   "instance_key": "<b64url raw 32-byte Ed25519 public key>", "instance_id": "ik_…"
 }
 ```
+- `accounts_mode` is still `"velora"` on the wire for a Nookara-accounts instance (older clients compare against it); `software` is still `"bonfire-server"`. Both change in protocol v2.
 - `registration` applies only to local mode.
 - `features.signing` is false in local mode. `features.youtube` is true only when the optional yt-dlp player works (§15).
 - `features.minecraft` is always true (the Ember Link game gateway, §18); `features.bridges` says which bridge bots the owner has configured (§16; CloudLink needs none, §17).
 - `community` is the instance's one community (always shown, it's what the URL is for), or `null` while the instance is unclaimed / not set up yet.
 - `name` / `description` / `icon_url` mirror the community once it exists.
-- `instance_key` / `instance_id` are the instance's relay key (§12.1). Velora reads them here to check that a registering key controls the url.
-- `features.voice` is true when voice works: the instance's own Cloudflare keys, or Velora's voice broker while registered and under its cap (§10).
-- `managed` is non-null on a Velora-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
+- `instance_key` / `instance_id` are the instance's relay key (§12.1). Nookara reads them here to check that a registering key controls the url.
+- `features.voice` is true when voice works: the instance's own Cloudflare keys, or Nookara's voice broker while registered and under its cap (§10).
+- `managed` is non-null on a Nookara-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
 - `read_only` is true while the instance refuses all writes (§19.3).
-- `previous_urls` lists earlier `public_url`s, newest first (a Velora-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
+- `previous_urls` lists earlier `public_url`s, newest first (a Nookara-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
 - `build` is the running server build (§5c). `commit` / `built_at` are `null` on a server not built by the release script (plain checkout).
 
 ---
@@ -147,15 +151,15 @@ In both modes the client ends up holding an **instance session token**. It's 32 
 
 | route | body | result |
 |---|---|---|
-| `POST /api/v1/auth/velora` (velora mode) | `{ token: <instance jwt> }` | `{ session, user }` |
+| `POST /api/v1/auth/velora` (nookara mode) | `{ token: <instance jwt> }` | `{ session, user }` |
 | `POST /api/v1/auth/register` (local mode, registration open, or instance unclaimed) | `{ username, password }` | `{ session, user }` |
 | `POST /api/v1/auth/login` (local mode) | `{ username, password }` | `{ session, user }` |
 | `POST /api/v1/auth/logout` | – | `{ ok: true }` |
 | `GET /api/v1/me` | – | `{ user, instance_admin, instance_owner, scopes }` |
 
 How the instance checks a JWT:
-1. The signature verifies against JWKS from the configured `velora_url`.
-2. `iss` equals `normalizeOrigin(velora_url)`.
+1. The signature verifies against JWKS from the configured `nookara_url`.
+2. `iss` equals `normalizeOrigin(nookara_url)`.
 3. `aud` equals `normalizeOrigin(public_url)`.
 4. `exp` is in the future, with 60s of skew allowed.
 5. The `jti` hasn't been seen before.
@@ -176,15 +180,15 @@ A third principal kind is the **bot** (`b:<n>`, `"kind": "bot"`): its user objec
 
 ### 4.1 Account profiles (local accounts)
 
-A server with its own accounts (`accounts_mode: "local"`) advertises `features.account_profiles`: each local account has a profile kept on that server, made of a display name, picture, banner, name colour, bio and pronouns. (A Velora account's profile comes from Velora, see 5d; these routes answer `local_accounts_only` (400) for one.)
+A server with its own accounts (`accounts_mode: "local"`) advertises `features.account_profiles`: each local account has a profile kept on that server, made of a display name, picture, banner, name colour, bio and pronouns. (A Nookara account's profile comes from Nookara, see 5d; these routes answer `local_accounts_only` (400) for one.)
 
 - `GET /api/v1/me/profile` -> `{ profile: { display_name, pfp, banner, color, bio, pronouns }, sync, user }`. Every field is `null` when unset; `user` is the account's user object.
 - `PATCH /api/v1/me/profile` `{ display_name?, bio?, pronouns?, color?, sync? }` -> the same shape. `null` or `''` clears a field (`display_name` goes back to the username). `display_name` is up to 32 characters, bio up to 300, pronouns up to 40, `color` is `#rrggbb`. Errors: `invalid_display_name`, `display_name_too_long`, `bio_too_long`, `pronouns_too_long`, `invalid_color`, `invalid_sync`.
 - `POST /api/v1/me/profile/pfp` or `/banner` (multipart image, up to 4 MB) and `DELETE` the same path. The picture is stored on the server; the one it replaces is deleted.
 
-The display name and picture are the user object's `display_name` and `pfp`, so they show everywhere a user appears; a change emits `chat_identity_update` like a Velora profile change does. The whole look also rides on the member object's `profile` (6.7), with anything the person set for that server only on top, and a change emits `chat_member_update`.
+The display name and picture are the user object's `display_name` and `pfp`, so they show everywhere a user appears; a change emits `chat_identity_update` like a Nookara profile change does. The whole look also rides on the member object's `profile` (6.7), with anything the person set for that server only on top, and a change emits `chat_member_update`.
 
-**Following a Nookara profile.** The server never talks to Velora for this. A client that is signed in to both copies the person's Nookara profile over with the routes above (text fields with `PATCH`, the pictures downloaded and uploaded again so the server holds its own copy). `sync` is where it remembers that the profile should keep following: `PATCH { sync: { velora_id, stamp } }` stores `{ velora_id, stamp, at }` (`stamp`: an opaque string of up to 128 characters the client derives from the Nookara profile it copied), `PATCH { sync: null }` switches it off. A client signed in to the Nookara account `sync.velora_id` compares the stamp on connect and when that profile changes, and copies again when it differs. A client signed in to another Nookara account, or to none, leaves the profile alone.
+**Following a Nookara profile.** The server never talks to Nookara for this. A client that is signed in to both copies the person's Nookara profile over with the routes above (text fields with `PATCH`, the pictures downloaded and uploaded again so the server holds its own copy). `sync` is where it remembers that the profile should keep following: `PATCH { sync: { velora_id, stamp } }` stores `{ velora_id, stamp, at }` (`stamp`: an opaque string of up to 128 characters the client derives from the Nookara profile it copied), `PATCH { sync: null }` switches it off. A client signed in to the Nookara account `sync.velora_id` compares the stamp on connect and when that profile changes, and copies again when it differs. A client signed in to another Nookara account, or to none, leaves the profile alone.
 
 A moderator's profile reset (6.7, Manage users) on a local account clears its account profile too: name back to the username, pictures deleted, `sync` off.
 
@@ -194,9 +198,9 @@ A moderator's profile reset (6.7, Manage users) on a local account clears its ac
 
 **Claim.** On first boot an unclaimed instance writes a setup code (`XXXX-XXXX`, Crockford base32) to stdout and to `DATA_DIR/setup-code.txt`. An authenticated user claims it with `POST /api/v1/instance/claim { code }`, which returns `{ ok: true }`. That user becomes the instance owner and an admin, and the code file is deleted.
 
-If the env var `BONFIRE_OWNER=v:<velora id>` is set (Velora mode only), the instance boots already claimed by that user. While unclaimed, local-mode registration is always allowed so the first user can create an account.
+If the env var `EMBER_OWNER=v:<nookara id>` is set (Nookara mode only), the instance boots already claimed by that user. While unclaimed, local-mode registration is always allowed so the first user can create an account.
 
-**Stranded owner.** When the owner's account can't sign in under the running `accounts_mode` (`local` owner in Velora mode, Velora owner in local mode), the instance behaves as unclaimed for claiming: discovery reports `claimed: false`, a setup code is printed and saved at boot, and `POST /api/v1/instance/claim` accepts it. The claimer becomes the owner and an admin, every community the old owner owned becomes theirs, and they are added as a member. The old owner stays an admin row but can't sign in. Registration rules don't change (local registration still follows `registration`; switching to local needs a local admin, below). In Velora mode `BONFIRE_OWNER` takes over from a stranded owner at boot. Bots can't claim (`403 bots_cannot_claim`).
+**Stranded owner.** When the owner's account can't sign in under the running `accounts_mode` (`local` owner in Nookara mode, Nookara owner in local mode), the instance behaves as unclaimed for claiming: discovery reports `claimed: false`, a setup code is printed and saved at boot, and `POST /api/v1/instance/claim` accepts it. The claimer becomes the owner and an admin, every community the old owner owned becomes theirs, and they are added as a member. The old owner stays an admin row but can't sign in. Registration rules don't change (local registration still follows `registration`; switching to local needs a local admin, below). In Nookara mode `EMBER_OWNER` takes over from a stranded owner at boot. Bots can't claim (`403 bots_cannot_claim`).
 
 **Settings.** `GET /api/v1/instance/settings` (admins) returns the settings below; `PATCH` with a partial object updates them.
 
@@ -204,20 +208,20 @@ If the env var `BONFIRE_OWNER=v:<velora id>` is set (Velora mode only), the inst
 |---|---|---|
 | `name`, `description`, `icon_url` | string | |
 | `public_url` | origin | |
-| `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. When the owner switches to the kind their own account isn't, the PATCH response adds `handover_code`: after the restart they sign in with an account of the new kind and claim with it (see Stranded owner). GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `BONFIRE_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
-| `velora_url` | origin | default `https://nookara.cc` |
+| `accounts_mode` | `"velora"` / `"local"` | **requires restart**; existing principals of the other kind can no longer log in. When the owner switches to the kind their own account isn't, the PATCH response adds `handover_code`: after the restart they sign in with an account of the new kind and claim with it (see Stranded owner). GET also returns `running_accounts_mode`, `restart_required` and `accounts_mode_env` (true when env `EMBER_ACCOUNTS_MODE` fixes the mode, so a saved change has no effect until it is removed) |
+| `nookara_url` | origin | default `https://nookara.cc` |
 | `registration` | `"open"` / `"closed"` | local mode |
 | `max_upload_mb` | int 1–500 | instance ceiling (managed: follows the plan) |
 | `max_backups` | int 1–50 | retained instance backups; default 10, oldest pruned first |
 | `voice` | `{ cf_app_id, cf_app_secret, cf_turn_key_id, cf_turn_token }` | secrets are **write-only**; GET returns `{ cf_app_id, has_app_secret, cf_turn_key_id, has_turn_token }` |
 | `youtube` | `{ enabled, ytdlp_path, cache_dir, cache_max_gb }` | optional player, §15. Defaults `true`, `"yt-dlp"` (on PATH), `""` (= `DATA_DIR/cache/yt`), `5` |
-| `velora_registration` | `"auto"` / `"off"` | default `auto`: register with `velora_url` and use the relays (§12.11). `off`: never contact Velora (no push, payments, daily credits, voice broker, directory). Env `BONFIRE_VELORA_REGISTRATION` overrides |
-| `listed` | bool | show the instance in Velora's public directory (§12.9). The **same value** as the community's `listed` (patching either side updates both) |
+| `nookara_registration` | `"auto"` / `"off"` | default `auto`: register with `nookara_url` and use the relays (§12.11). `off`: never contact Nookara (no push, payments, daily credits, voice broker, directory). Env `EMBER_NOOKARA_REGISTRATION` overrides |
+| `listed` | bool | show the instance in Nookara's public directory (§12.9). The **same value** as the community's `listed` (patching either side updates both) |
 | `tags` | string[] | ≤ 8 directory tags, ≤ 24 chars each, lower-cased, no commas |
 
-`GET` (and `PATCH`) also return read-only relay status: `velora: { registration, velora_url, registered, instance_id, trusted, voice: { cap_minutes, used_minutes } | null, registered_at, last_error, voice_backend: "direct" | "broker" | null, directory: { listed, hidden_by_staff, pushed_at, last_error } }`. `POST /api/v1/instance/velora/register` (admins) registers right away and returns the same object; it takes no body (a `token` field is ignored: Velora tokens never go to an instance). `GET /api/v1/instance/owner-attestation` (instance owner only) returns `{ attestation, instance_id }` for the payee flow (§12.1).
+`GET` (and `PATCH`) also return read-only relay status: `velora: { registration, nookara_url, registered, instance_id, trusted, voice: { cap_minutes, used_minutes } | null, registered_at, last_error, voice_backend: "direct" | "broker" | null, directory: { listed, hidden_by_staff, pushed_at, last_error } }`. `POST /api/v1/instance/velora/register` (admins) registers right away and returns the same object; it takes no body (a `token` field is ignored: Nookara tokens never go to an instance). `GET /api/v1/instance/owner-attestation` (instance owner only) returns `{ attestation, instance_id }` for the payee flow (§12.1).
 
-On a Velora-hosted (managed) instance `GET`/`PATCH` also return `managed` (same object as in discovery), `max_upload_mb` is capped by the plan, and `accounts_mode`, `public_url`, `velora_url` and `velora_registration` cannot be changed (`403 managed_setting`); see §19.2.
+On a Nookara-hosted (managed) instance `GET`/`PATCH` also return `managed` (same object as in discovery), `max_upload_mb` is capped by the plan, and `accounts_mode`, `public_url`, `nookara_url` and `nookara_registration` cannot be changed (`403 managed_setting`); see §19.2.
 
 The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The instance watches it and reloads it, and API writes rewrite it. `DATA_DIR/config.json` is the source of truth for these keys.
 
@@ -229,15 +233,15 @@ The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The in
 
 **Other admin routes:**
 - `POST /api/v1/instance/restart` (admins) returns `202 { ok: true }`. The instance broadcasts `{type:"instance_restarting"}`, closes its sockets, and calls `process.exit(75)`. The supervisor (docker `--restart unless-stopped`, systemd `Restart=always`, or the dev script) starts it again.
-- `GET /api/v1/instance/update` (admins) returns `{ supported, reason?, current: build, latest?, running?, outdated?, update?, reachable?, error? }`. `supported` is false (`reason`: `not_configured` / `managed`) unless the instance was started with `BONFIRE_UPDATE_URL` + `BONFIRE_UPDATE_SECRET` (its host agent's API and bearer) and is not in managed mode. `latest` / `running` are build objects (`version`, `commit`, `commit_short`, `commit_date`, `built_at`, `build_id`, `message`), `outdated` whether a newer build is available, `update` the host's run state (`state`: `idle` / `running` / `done` / `failed`, `step`, `started_at`, `finished_at`, `output` tail). `POST /api/v1/instance/update` (admins) asks the host agent to rebuild and recreate this container: `200 { ok: true, update }` is sent before the container stops. Errors: `501 update_not_supported` / `update_managed`, `409 update_in_progress`, `502 update_service_unreachable` / `update_service_rejected` / `update_service_error`. The server then goes away for a short while; clients poll `GET` until it answers again with a different `current.build_id`.
+- `GET /api/v1/instance/update` (admins) returns `{ supported, reason?, current: build, latest?, running?, outdated?, update?, reachable?, error? }`. `supported` is false (`reason`: `not_configured` / `managed`) unless the instance was started with `EMBER_UPDATE_URL` + `EMBER_UPDATE_SECRET` (its host agent's API and bearer) and is not in managed mode. `latest` / `running` are build objects (`version`, `commit`, `commit_short`, `commit_date`, `built_at`, `build_id`, `message`), `outdated` whether a newer build is available, `update` the host's run state (`state`: `idle` / `running` / `done` / `failed`, `step`, `started_at`, `finished_at`, `output` tail). `POST /api/v1/instance/update` (admins) asks the host agent to rebuild and recreate this container: `200 { ok: true, update }` is sent before the container stops. Errors: `501 update_not_supported` / `update_managed`, `409 update_in_progress`, `502 update_service_unreachable` / `update_service_rejected` / `update_service_error`. The server then goes away for a short while; clients poll `GET` until it answers again with a different `current.build_id`.
 - `GET /api/v1/instance/admins` returns `{ admins: [user…], owner: user }`. `PUT /api/v1/instance/admins/:uid` and `DELETE /api/v1/instance/admins/:uid` are owner-only.
-- Switching `accounts_mode` from `velora` to `local` (`PATCH /api/v1/instance/settings`) needs an instance admin with a local account (`409 local_admin_required` otherwise; the settings list them as `local_admins`). `POST /api/v1/instance/local-admin { username, password }` (owner-only, works in Velora mode) makes one: a local account that is an instance admin and has an Administrator role in the community.
+- Switching `accounts_mode` from `velora` to `local` (`PATCH /api/v1/instance/settings`) needs an instance admin with a local account (`409 local_admin_required` otherwise; the settings list them as `local_admins`). `POST /api/v1/instance/local-admin { username, password }` (owner-only, works in Nookara mode) makes one: a local account that is an instance admin and has an Administrator role in the community.
 
 ---
 
 ### 5b. Backups
 
-Available on every instance (self-hosted, Starter and Plus). Authentication uses an **instance session**, never a Velora token. Backups are portable `bonfire-export-v1` ZIPs (section 9), saved in `DATA_DIR/backups/<id>.zip` with a SQLite index. Keep at most `max_backups` (default 10, configurable 1-50 through instance settings); the oldest are removed first. Lowering the setting through PATCH prunes immediately.
+Available on every instance (self-hosted, Starter and Plus). Authentication uses an **instance session**, never a Nookara token. Backups are portable `bonfire-export-v1` ZIPs (section 9), saved in `DATA_DIR/backups/<id>.zip` with a SQLite index. Keep at most `max_backups` (default 10, configurable 1-50 through instance settings); the oldest are removed first. Lowering the setting through PATCH prunes immediately.
 
 A backup is `{ id: <32 hex chars>, created_at: <ms>, size: <bytes>, by: <principal>, note: <string> }`. Notes are optional strings up to 300 characters.
 
@@ -267,9 +271,9 @@ Restore validates the archive, takes an automatic safety backup with note `befor
 }
 ```
 
-`stats` is cached for 30 s. `update` is `null` when the server cannot tell (no `build.build_id`, `BONFIRE_UPDATE_CHECK=0`, Velora unreachable and nothing cached). The comparison is against **`GET https://nookara.cc/bonfire/server-latest.json`** (override: env `BONFIRE_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and `latest.built_at` is newer. Only admins ever see `update`.
+`stats` is cached for 30 s. `update` is `null` when the server cannot tell (no `build.build_id`, `EMBER_UPDATE_CHECK=0`, Nookara unreachable and nothing cached). The comparison is against **`GET https://nookara.cc/bonfire/server-latest.json`** (override: env `EMBER_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and `latest.built_at` is newer. Only admins ever see `update`.
 
-Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds the image on the Docker LXC with the commit baked in (`BONFIRE_BUILD_*` build args), publishes `server-latest.json` (`POST VELORA/bonfire/server-latest`, Bearer = the hostd secret), and bonfire-hostd (`POST /update-all`) recreates every hosted container on the new image one at a time, health-checked, rolled back on failure. bonfire-hostd also does this check every 10 minutes by itself.
+Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds the image on the Docker LXC with the commit baked in (`EMBER_BUILD_*` build args), publishes `server-latest.json` (`POST NOOKARA/bonfire/server-latest`, Bearer = the hostd secret), and bonfire-hostd (`POST /update-all`) recreates every hosted container on the new image one at a time, health-checked, rolled back on failure. bonfire-hostd also does this check every 10 minutes by itself.
 
 ### 5c.1 Landing page and public stats (`GET /`, `GET /api/v1/instance/stats`)
 
@@ -286,17 +290,17 @@ Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds 
 
 `online` = people with at least one signed-in gateway socket (bots left out); `connections` = every signed-in socket, bots too. Nobody is named.
 
-### 5d. Profile freshness (Velora accounts)
+### 5d. Profile freshness (Nookara accounts)
 
-A Velora member's `username` / `display_name` / `pfp` follow their Velora profile: the instance refreshes them from `GET VELORA/bonfire/profiles?ids=1,2,3` (public, ≤ 100 ids, `{ profiles: [{ id, username, display_name, pfp }] }`) on every gateway `chat_hello` (at most once per account per 10 minutes), every 15 minutes for members, and at sign-in. A change emits `chat_identity_update { user, previous_username }` to every community the person is in; system lines (`body_parts`) already render the current name. Clients should patch every cached `author` / `subject` / member whose `id` equals `user.id` (principal, e.g. `v:12`). A client that learned about a change sooner (Velora's own `user_update` event) may send `chat_profile_refresh { velora_id }` to make the instance re-read that one profile right away (no reply; throttled to one fetch per account per 15 s). Env `BONFIRE_PROFILE_SYNC=0` turns the refresh off (so does `velora_registration: "off"`).
+A Nookara member's `username` / `display_name` / `pfp` follow their Nookara profile: the instance refreshes them from `GET NOOKARA/bonfire/profiles?ids=1,2,3` (public, ≤ 100 ids, `{ profiles: [{ id, username, display_name, pfp }] }`) on every gateway `chat_hello` (at most once per account per 10 minutes), every 15 minutes for members, and at sign-in. A change emits `chat_identity_update { user, previous_username }` to every community the person is in; system lines (`body_parts`) already render the current name. Clients should patch every cached `author` / `subject` / member whose `id` equals `user.id` (principal, e.g. `v:12`). A client that learned about a change sooner (Nookara's own `user_update` event) may send `chat_profile_refresh { velora_id }` to make the instance re-read that one profile right away (no reply; throttled to one fetch per account per 15 s). Env `EMBER_PROFILE_SYNC=0` turns the refresh off (so does `nookara_registration: "off"`).
 
 ## 6. Communities: REST (compatibility rule)
 
-**Rule:** every endpoint below uses the same path as Velora's current `routes/chat.js`, with the `/chat` prefix replaced by `/api/v1`. It has the same request body and the **same response JSON shape** as Velora returns today. The only difference is that user ids are principal strings (§4).
+**Rule:** every endpoint below uses the same path as Nookara's current `routes/chat.js`, with the `/chat` prefix replaced by `/api/v1`. It has the same request body and the **same response JSON shape** as Nookara returns today. The only difference is that user ids are principal strings (§4).
 
 A server/community object gains these fields:
 - `join_policy`: `"open"` or `"request"`
-- `allow_signing`: bool, true in velora mode (signing is always allowed there and never required). Older clients may still send `allow_signing` / `require_signing` in `PATCH`; they are ignored.
+- `allow_signing`: bool, true in nookara mode (signing is always allowed there and never required). Older clients may still send `allow_signing` / `require_signing` in `PATCH`; they are ignored.
 - `allow_uploads`: bool
 - `upload_max_mb`: int; the community default edited by community settings (never the caller's role limit)
 - `my_upload_max_mb`: int; the caller's effective per-file limit with roles, instance ceiling and managed plan applied; returned in personalized server objects, including `GET /api/v1/servers/:sid`, server lists and community PATCH responses; omitted from broadcasts/public views without a caller
@@ -316,9 +320,9 @@ Core subset for v1:
 - **Emojis:** `GET /servers/:sid/emojis`, `POST /servers/:sid/emojis` (multipart `file`, `name`), `DELETE /servers/:sid/emojis/:eid`
 - **Stickers:** `GET /stickers`, `GET /servers/:sid/stickers`, `POST /servers/:sid/stickers` (multipart `file`, `name`), `PATCH/DELETE /servers/:sid/stickers/:tid` (§6.1.1)
 
-Member routes take the principal id (`:uid`) where Velora took a username.
+Member routes take the principal id (`:uid`) where Nookara took a username.
 
-Also ported from Velora with the same paths and shapes (details in the sections named):
+Also ported from Nookara with the same paths and shapes (details in the sections named):
 
 | area | routes |
 |---|---|
@@ -357,7 +361,7 @@ A locked channel always needs Manage messages. `can_post` in `GET /servers/:sid`
 
 **Roles shop.** `GET /channels/:cid/shop` → `{ items: [{ role, price, desc, has, owned, pending? }], balance: null, owner_free, payments: "velora" | "unavailable" | "velora_required" }` (`balance` is null: the instance has no credits; `owned` = free, you are the owner, or you bought it; `pending` = your open pay request for that role). `POST /channels/:cid/shop/:rid` (body `{ price? }`, the price the client showed: `409 price_changed` if it differs) self-assigns a free or already bought role. `DELETE` takes the role off. Both return the shop view and push `chat_member_update` + `chat_perms_changed`.
 
-**Paid roles** go through Velora credits (§12.5): for a priced role you have not bought (and you are not the owner), `POST` creates a Velora pay request and answers `200 { ...shop view, pending: true, pay_request: { id, status: "pending", approve_url, amount, expires_at } }`. Asking again while it is open returns the same request. The client opens `approve_url` (Velora's Pay / Cancel page), then polls `GET /channels/:cid/shop/:rid/status` → `{ status: "none" | "pending" | "paid" | "declined" | "expired" | "failed", pay_request, ...shop view }` (the instance also polls Velora itself). On `paid` the instance has verified the receipt and granted the role (`chat_member_update`, `chat_perms_changed`, and to the buyer `chat_shop_update { server, channel, rid, status }`, which is also sent for `declined` / `expired`). `failed` carries `pay_request.error` (e.g. `receipt_wrong_amount`). Like Velora's own shop, a bought role is kept: take it off and put it back on for free; there are no refunds, and deleting the role deletes the purchase. Errors: `402 velora_required` (local accounts cannot pay), `402 payment_unavailable` (the instance is not registered with Velora, or `velora_registration` is `off`), and Velora's pay-request errors passed through (`403 not_subscribed`: add the instance to your Ember list; `429 too_many_requests`; `503 payee_unavailable`).
+**Paid roles** go through Nookara credits (§12.5): for a priced role you have not bought (and you are not the owner), `POST` creates a Nookara pay request and answers `200 { ...shop view, pending: true, pay_request: { id, status: "pending", approve_url, amount, expires_at } }`. Asking again while it is open returns the same request. The client opens `approve_url` (Nookara's Pay / Cancel page), then polls `GET /channels/:cid/shop/:rid/status` → `{ status: "none" | "pending" | "paid" | "declined" | "expired" | "failed", pay_request, ...shop view }` (the instance also polls Nookara itself). On `paid` the instance has verified the receipt and granted the role (`chat_member_update`, `chat_perms_changed`, and to the buyer `chat_shop_update { server, channel, rid, status }`, which is also sent for `declined` / `expired`). `failed` carries `pay_request.error` (e.g. `receipt_wrong_amount`). Like Nookara's own shop, a bought role is kept: take it off and put it back on for free; there are no refunds, and deleting the role deletes the purchase. Errors: `402 velora_required` (local accounts cannot pay), `402 payment_unavailable` (the instance is not registered with Nookara, or `nookara_registration` is `off`), and Nookara's pay-request errors passed through (`403 not_subscribed`: add the instance to your Ember list; `429 too_many_requests`; `503 payee_unavailable`).
 
 **Reactions.** `PUT/DELETE /api/v1/messages/:id/reactions/:emoji` accepts Unicode emoji or a custom key `c:<eid>` (URL-encode the path segment). For compatibility, bare `eid`, `<:name:eid>` / `<a:name:eid>`, and `:name:` of the message's community are accepted. New custom reactions require an existing emoji belonging to that community; foreign/deleted IDs return `unknown_emoji`. Users must be community members able to view the message's channel. There are at most 20 distinct reactions per message; repeat PUT is idempotent.
 
@@ -374,7 +378,7 @@ Stickers are like custom emojis but bigger and server-only: a sticker can only b
 - `PATCH /servers/:sid/stickers/:tid { name }` and `DELETE /servers/:sid/stickers/:tid` need Manage server; both are audit-logged (`sticker_create`, `sticker_update`, `sticker_delete`). Any change emits `{ type: "chat_stickers_update", server: "<sid>", stickers: [...] }` to the whole server.
 - **Sending.** `POST /channels/:cid/messages` and the gateway `chat_send` accept `sticker: "<tid>"` (one per message). A tid that does not belong to the channel's own server is `400 unknown_sticker`. A message with a sticker may have an empty `message`.
 - **Message view.** A message sent with a sticker carries `sticker: { tid, name, url, animated }` in history, pins, search, `chat_message` and `chat_message_update`. If the sticker was deleted afterwards the field stays as `{ tid, name: null, url: null, animated: false, deleted: true }` so clients can show "Sticker deleted". Messages without a sticker have no `sticker` field. Bots can read the message as usual (empty `content`); the Bot API has no sticker sending.
-- **Clone lock.** Server settings `emojis.allow_cloning` (default `true`, Manage server) says whether other servers and Nookara personal emojis/stickers may copy this server's emojis and stickers. The server view and each entry of `GET /emojis` / `GET /stickers` carry `allow_cloning`. A copy is recognised by the file's SHA-256 (Ember clones by uploading the same bytes): `GET /clone-check?sha256=<hex>[&velora_id=<Nookara id>]` (no login) -> `{ locked: true, reason: "cloning_disabled" }` when this server has a picture with those bytes and cloning off, unless that Nookara account is the server's owner or has Administrator; else `{ locked: false }`. Emoji/sticker uploads take an optional multipart `from` (the address the picture was copied from): when it is another Ember server, that server's `/clone-check` is asked; in Velora mode Nookara's `/chat/clone-check` is asked too (a locked personal emoji/sticker). Either says locked -> 403 `cloning_disabled` / `clone_locked`. A peer that does not answer within 4 s counts as not locked. A changed picture (re-saved, cropped) is not recognised.
+- **Clone lock.** Server settings `emojis.allow_cloning` (default `true`, Manage server) says whether other servers and Nookara personal emojis/stickers may copy this server's emojis and stickers. The server view and each entry of `GET /emojis` / `GET /stickers` carry `allow_cloning`. A copy is recognised by the file's SHA-256 (Ember clones by uploading the same bytes): `GET /clone-check?sha256=<hex>[&velora_id=<Nookara id>]` (no login) -> `{ locked: true, reason: "cloning_disabled" }` when this server has a picture with those bytes and cloning off, unless that Nookara account is the server's owner or has Administrator; else `{ locked: false }`. Emoji/sticker uploads take an optional multipart `from` (the address the picture was copied from): when it is another Ember server, that server's `/clone-check` is asked; in Nookara mode Nookara's `/chat/clone-check` is asked too (a locked personal emoji/sticker). Either says locked -> 403 `cloning_disabled` / `clone_locked`. A peer that does not answer within 4 s counts as not locked. A changed picture (re-saved, cropped) is not recognised.
 - **Origin.** A copy remembers where its bytes were first seen: `origin` is `{ type: "server", name, host }` or `{ type: "user", user_id, username }` (a Nookara personal emoji/sticker). It comes from the `/clone-check` answer of the server named by `from` (else Nookara's), is stored with the copy, and shows on emoji/sticker views, `GET /emojis/:eid/info` and a message's `sticker`. `/clone-check` returns `origin` too: the oldest copy's stored origin, else this server, so a copy of a copy keeps the first. Pictures that are not copies have no `origin`.
 - **Export.** `community.json` has `stickers: [{ tid, name, animated, file }]` (files under `files/`) and messages have `sticker: "<tid>"`; import gives them fresh ids and remaps the messages.
 
@@ -388,7 +392,7 @@ Sounds belong to the community: `GET /servers/:sid/sounds` → `{ sounds: [{ id,
 - `{ type: "link", url, site, title, description, color?, image, large }`, from OpenGraph / Twitter tags (falling back to oEmbed discovery); `image` is re-hosted at `/uploads/embeds/…` so viewers never contact the site;
 - `{ type: "youtube", id, url, title, channel, image }` for YouTube links.
 
-The fetch is **SSRF-safe**: http(s) only, ports 80 / 443 only, no credentials in the URL; the host is resolved and refused if *any* address is private, loopback, link-local, metadata (169.254.169.254), CGNAT, multicast or reserved, in IPv4 or IPv6 (including IPv4-mapped, NAT64 and 6to4 forms, and numeric host spellings like `2130706433`); the connection is pinned to the address that was checked; redirects are followed manually (max 3) and every hop is re-validated; limits are 1 MB per page, 5 MB per picture, 7 s per hop, 10 s total. Results are cached in SQLite (24 h, failures 1 h). Velora-specific cards (invites, profiles) are not made here.
+The fetch is **SSRF-safe**: http(s) only, ports 80 / 443 only, no credentials in the URL; the host is resolved and refused if *any* address is private, loopback, link-local, metadata (169.254.169.254), CGNAT, multicast or reserved, in IPv4 or IPv6 (including IPv4-mapped, NAT64 and 6to4 forms, and numeric host spellings like `2130706433`); the connection is pinned to the address that was checked; redirects are followed manually (max 3) and every hop is re-validated; limits are 1 MB per page, 5 MB per picture, 7 s per hop, 10 s total. Results are cached in SQLite (24 h, failures 1 h). Nookara-specific cards (invites, profiles) are not made here.
 
 New in v1:
 
@@ -402,7 +406,7 @@ New in v1:
 | `DELETE /invites/:code` | `MANAGE_SERVER` | `{ ok: true }` |
 | `GET /servers/:sid/export` | owner | `application/zip` (§9) |
 | `POST /import` multipart `file` | instance admins, only while the instance has no community (§5a) | `{ sid }` |
-| `POST /import/velora { ticket }` | same rules as `/import` | `{ sid }`: downloads a Discord / Fluxer import prepared on Velora (§12.6, §12.11) |
+| `POST /import/nookara { ticket }` | same rules as `/import` | `{ sid }`: downloads a Discord / Fluxer import prepared on Nookara (§12.6, §12.11) |
 | `GET /import/matrix`, `PUT` / `DELETE /import/matrix/bot`, `GET /import/matrix/guilds[/:gid]`, `POST /import/matrix` | same rules as `/import` | a Matrix space as the community, read by the instance with a bot the admin brings (§16.7) |
 
 Invites behave like this:
@@ -410,7 +414,7 @@ Invites behave like this:
 - A bare `POST /servers/:sid/join` follows `join_policy`.
 - Every community keeps its legacy permanent `invite_code` field too. `PATCH { new_invite: true }` regenerates it, as before.
 
-Permission bits are the same as Velora's `chat.js:42-49`:
+Permission bits are the same as Nookara's `chat.js:42-49`:
 
 | bit | value | bit | value |
 |---|---|---|---|
@@ -420,14 +424,14 @@ Permission bits are the same as Velora's `chat.js:42-49`:
 | MANAGE_ROLES | 8 | ATTACH | 256 |
 | KICK | 16 | ADMIN | 512 |
 | | | VIEW (channel-only) | 1024 |
-| | | MANAGE_USERS (Velora's own chat only) | 2048 |
+| | | MANAGE_USERS (Nookara's own chat only) | 2048 |
 | | | UNMARKED_ALIASES (instances only) | 4096 |
 | | | CHANGE_NICKNAME (instances only; @everyone has it by default) | 8192 |
 | | | MANAGE_NICKNAMES (instances only) | 16384 |
 
 The permission algorithm is the same as `permsOf` / `channelPermsOf` / `canView` / `canPost`. The community owner has all permissions. **Instance admins have no implicit power inside communities** unless they're a member with roles. The one exception is that instance admins may delete the community (returning the instance to setup).
 
-**Manage users (bit 2048).** Human presence is Velora's, not the instance's (section 7), so the invisible-status, sessions and notification-only parts below exist only in servers hosted by Velora's own chat. An instance supports the bit too (an owner has it, `grantable` and exports keep it) but only does the **Last login** and **Client on messages** parts, described at the end of this section. A person holding it, in a server they share with someone, gets these extra fields. Everyone else gets none of them, and Velora enforces that when it builds each payload (it is never a client-side hide):
+**Manage users (bit 2048).** Human presence is Nookara's, not the instance's (section 7), so the invisible-status, sessions and notification-only parts below exist only in servers hosted by Nookara's own chat. An instance supports the bit too (an owner has it, `grantable` and exports keep it) but only does the **Last login** and **Client on messages** parts, described at the end of this section. A person holding it, in a server they share with someone, gets these extra fields. Everyone else gets none of them, and Nookara enforces that when it builds each payload (it is never a client-side hide):
 
 - **Invisible people.** In `presence_update`, member lists and `chat_presence` replies, a person who set themselves to invisible has `status: "online"` and `invisible: true`, with their custom status and activities still hidden. Without the permission they stay `status: "offline"` with no `invisible` field. Clients should draw the dot hollow, not grey.
 - **Sessions.** `sessions` is a list (at most 8) of the person's live connections: `state` (`active`, `background` or `notifications`), `via` (below), `platform`, `device`, `browser`, `version`, `mobile`, `app` (a custom token's project name) and `connected_at`. There are no IP addresses. A connection that is only there for notifications (an app's background service, not the app open) is `state: "notifications"`; it never makes anyone look online. If that is all they have, the presence is `status: "offline"` with `notifications_only: true`.
@@ -436,13 +440,13 @@ The permission algorithm is the same as `permsOf` / `channelPermsOf` / `canView`
 
 `via` is `{ official, kind, name, token, url }`, worked out on the server and never trusted from the client: the official Ember apps sign in with a reserved token name only the app login flow can mint, and a website session counts as official only when the browser's `Origin` is the site. Otherwise `token` is the name the person gave their sign-in token and `url` is the page's origin (never an IP address).
 
-**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }`, plus `app` / `token` / `icon` when the session came from a registered app (the instance token's `app` claim) (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history, search and pins for every member who can see the message, as `{ url, kind?, app? }` only (the token name and icon are kept but never sent; clients name an app from Velora's app registry). An instance cannot tell whether a client is the official one, so it never sets `official`. Holders (and the person themselves) can also ask which clients a member is connected with right now: §7.1.
+**On an instance** (this server): `GET /servers/:sid/members` adds `last_login` (ms, or `null` if they never connected), `last_online` (ms their last gateway connection closed, or `null`) and `online` (true while connected) to each member for holders; the instance sets `last_login` whenever a gateway connection authenticates and `last_online` when the last one closes. Messages are stored with the `Origin` of the request that posted them as `via: { url }`, plus `app` / `token` / `icon` when the session came from a registered app (the instance token's `app` claim) (an origin only; IP addresses are dropped, and nothing is stored for bots, webhooks, bridges or system messages) and carry `via` in `chat_message`, `chat_message_update`, history, search and pins for every member who can see the message, as `{ url, kind?, app? }` only (the token name and icon are kept but never sent; clients name an app from Nookara's app registry). An instance cannot tell whether a client is the official one, so it never sets `official`. Holders (and the person themselves) can also ask which clients a member is connected with right now: §7.1.
 
 Backward compatible: older clients ignore the new fields. A client may add `client: { version, platform, device }` to its `auth_token` frame to say more about itself; it is optional, trimmed and capped.
 
 ### 6.4 Server settings, reports, timeouts, audit log, dashboard (bonfire-server only)
 
-`GET / PATCH /api/v1/servers/:sid/settings` (Manage server). The PATCH body has any of `join_policy`, `join_password` (4-200 chars, `""` clears) and the sections below; unknown keys are ignored and nothing is saved unless every value is valid. The answer is `{ settings }`: the saved values plus `join_policy`, `has_password`, `plan` (a Velora-hosted server's caps, else `null`), `spam_defaults`, `image_compression_available`, `instance_admin`, `audit_categories`, `file_types`.
+`GET / PATCH /api/v1/servers/:sid/settings` (Manage server). The PATCH body has any of `join_policy`, `join_password` (4-200 chars, `""` clears) and the sections below; unknown keys are ignored and nothing is saved unless every value is valid. The answer is `{ settings }`: the saved values plus `join_policy`, `has_password`, `plan` (a Nookara-hosted server's caps, else `null`), `spam_defaults`, `image_compression_available`, `instance_admin`, `audit_categories`, `file_types`.
 
 | section | keys (default) |
 |---|---|
@@ -451,7 +455,7 @@ Backward compatible: older clients ignore the new fields. A client may add `clie
 | `automod` | `words_enabled` (false), `words` ([]), `word_file` ("" - a file under the data folder, one word per line, `#` comments - **instance admins only**), `whole_word` (true), `match_case` (false), `timeout_seconds` (60, 0 = only block), `exempt_roles` ([]), `spam_enabled` (false), `spam_per_minute` / `spam_burst` / `spam_pause_seconds` (null = 30 a minute, 8 within 10 s, no pause) |
 | `audit` | `enabled` (true), `retention_days` (90), `retention` ({ category: days } overrides) |
 | `advanced` | `unmarked_aliases` (false - **the server owner only**, `403 owner_only` for anyone else; never exported or imported): see "Unmarked aliases" in §14 |
-| `uploads` | `per_minute` (30), `files_per_member` (null), `types` (["any"] or some of images / videos / audio / pdf / text / archives), `expire_days` (null = kept), `never_expire_plans` ([] Velora plans, from the instance token's `tier` claim), `never_expire_roles` ([] rids: members with one keep their files), `storage_mb` (null), `compress` (false), `max_width` / `max_height` (1920), `max_pixels` (50000000), `jpeg_quality` (85) |
+| `uploads` | `per_minute` (30), `files_per_member` (null), `types` (["any"] or some of images / videos / audio / pdf / text / archives), `expire_days` (null = kept), `never_expire_plans` ([] Nookara plans, from the instance token's `tier` claim), `never_expire_roles` ([] rids: members with one keep their files), `storage_mb` (null), `compress` (false), `max_width` / `max_height` (1920), `max_pixels` (50000000), `jpeg_quality` (85) |
 
 `join_policy`: `open`, `request` (a moderator lets them in), `password` (`POST /servers/:sid/join { password }` -> `password_required` / `wrong_password`), `allowlist` (`not_on_allowlist`), `invite` (`invite_only`). An invite link, and an instance admin, always gets in. A full server answers `server_full { cap }`.
 
@@ -475,7 +479,7 @@ Servers that advertise `features.server_profiles` let a member look different on
 - `PATCH /api/v1/servers/:sid/members/@me/profile` `{ bio?, pronouns?, color?, display_name? }` (`null` or `''` clears a field; `color` is `#rrggbb`; bio up to 300, pronouns up to 40; `display_name` sets the nickname). Errors: `not_allowed` (403), `invalid_color`, `bio_too_long`, `pronouns_too_long`.
 - `POST /api/v1/servers/:sid/members/@me/profile/pfp` or `/banner` (multipart image, up to 4 MB) and `DELETE` the same path (back to the global one for that field).
 - `DELETE /api/v1/servers/:sid/members/@me/profile`: everything back to the global profile, nickname included. No permission needed.
-- `POST /api/v1/servers/:sid/members/:uid/profile/reset`: Manage users, and above them (never the owner), resets someone's. It is audit-logged (`member_profile_reset`), and a Velora account is told through Velora's notification inbox (§12.13).
+- `POST /api/v1/servers/:sid/members/:uid/profile/reset`: Manage users, and above them (never the owner), resets someone's. It is audit-logged (`member_profile_reset`), and a Nookara account is told through Nookara's notification inbox (§12.13).
 
 The member object (member lists, `chat_member_update`) carries `profile: { pfp?, banner?, color?, bio?, pronouns? }` with only the fields that are set, and no `profile` at all for someone using their global one. On a server with its own accounts a local account's account profile (4.1) is what sits underneath: the member's `profile` is that, with the fields set for this server only on top. Clients show those instead of the person's account profile on this server (avatars and name colours in the member list and messages, and their profile card).
 
@@ -489,24 +493,24 @@ Connect to `ws(s)://INSTANCE/gateway`.
 3. The client sends `{ "type": "chat_hello" }`. The server replies `{ "type": "chat_ready" }` and starts sending community events.
 4. The client sends `{ "type": "ping" }` every 25 seconds. The server answers `{ "type": "pong" }` and drops any socket that has been idle for more than 60 seconds.
 
-**Client to server** frames have the same names and fields as Velora today:
+**Client to server** frames have the same names and fields as Nookara today:
 - `chat_send { nonce, channel, message, reply_to?, attachments?, signature?, sticker? }`. The server replies `chat_ack { nonce, message }` or `chat_error { nonce, error }`.
 - `chat_typing { channel }` (`typing: false` = stopped). Others get `chat_typing { server, channel, username, user_id, typing }`. Someone typing on the other side of a bridge (§16.6) comes as `chat_typing { server, channel, username: "<their name there>", user_id: null, typing, bridged: { platform, name, avatar } }`: they have no account here, so a client shows `bridged.name` and `bridged.avatar` (a picture on this instance, or null) with the platform's mark, and keys them by platform + name, not by `username`.
 - `chat_read { channel, message_id }`
 - the `chat_rtc_*` family (§10)
 
-**Server to client** events have the same names and shapes as Velora today:
+**Server to client** events have the same names and shapes as Nookara today:
 - Messages: `chat_message`, `chat_message_update`, `chat_message_delete`, `chat_reactions`, `chat_typing`, `chat_pins_update`
 - Server and roles: `chat_server_update`, `chat_server_removed`, `chat_roles_update`, `chat_perms_changed`
 - Channels and members: `chat_channels_update`, `chat_member_update`, `chat_members_stale`, `chat_emojis_update`, `chat_stickers_update`
 - Identity: `chat_identity_update`
 - Replies and errors: `chat_ack`, `chat_error`, `chat_ephemeral`
 - Bots (§14.2): `chat_commands_update { server }`, `chat_interaction_message`, `chat_interaction_modal`
-- Mentions: `chat_mention { id, server, sid, channel, cid, from, pfp, body }`, sent only to the people a message pings who are online (their `@name`, a reply to them, `@everyone`, `@here` (online members only), a role they hold, or every message if their level is `all`), minus muted / `none` settings. Everyone else goes to the server-side `notifyOffline(userIds, payload)` hook, which pushes Velora principals through Velora (§12.3, §12.11).
+- Mentions: `chat_mention { id, server, sid, channel, cid, from, pfp, body }`, sent only to the people a message pings who are online (their `@name`, a reply to them, `@everyone`, `@here` (online members only), a role they hold, or every message if their level is `all`), minus muted / `none` settings. Everyone else goes to the server-side `notifyOffline(userIds, payload)` hook, which pushes Nookara principals through Nookara (§12.3, §12.11).
 - Starboard: `chat_starboard { server, channel (the board), id (message), stars, added? }` when a watched message's stars change (`added: true` the moment it first lands on the board)
 - Voice: `chat_voice_state` and the rtc replies
 - Soundboard: the client sends `{ type: "voice_sound", sound: "<sound id>" }` while in a voice room (needs the `voice` scope); every socket in that room, the sender included, gets `{ type: "voice_sound", by: "<username>", channel: "<cid>", sound: { id, name, emoji, volume, duration, url } }`. Failures come back to the sender only as `{ type: "voice_sound_failed", reason }` with `not_in_voice`, `not_found`, `not_allowed`, `too_fast` (one sound per 1.2 s) or `insufficient_scope`.
-- Cross-server sounds: `sound` may instead be an object, the public view of a sound from another server (`{ name, emoji, volume, duration, url }` as `GET /sounds` lists it, taken from any instance or Velora the user is signed in to). The instance does not fetch it: it checks the shape (an `http(s)` URL with no credentials or query, whose path is `/uploads/sounds/<id>.<mp3|wav|ogg|flac|m4a>`; name, volume 5-100 and duration up to 5.3 s are cleaned; custom emoji are dropped), applies the same membership, timeout and 1.2 s cooldown checks, and relays `voice_sound` with `sound: { id: null, external: true, name, emoji, volume, duration, url }`. Plain ids keep working unchanged. Clients should only play an external `url` whose origin they already trust (Velora, an instance they are signed in to, or the room's own instance), so a stranger's URL never makes your client contact an unknown host.
+- Cross-server sounds: `sound` may instead be an object, the public view of a sound from another server (`{ name, emoji, volume, duration, url }` as `GET /sounds` lists it, taken from any instance or Nookara the user is signed in to). The instance does not fetch it: it checks the shape (an `http(s)` URL with no credentials or query, whose path is `/uploads/sounds/<id>.<mp3|wav|ogg|flac|m4a>`; name, volume 5-100 and duration up to 5.3 s are cleaned; custom emoji are dropped), applies the same membership, timeout and 1.2 s cooldown checks, and relays `voice_sound` with `sound: { id: null, external: true, name, emoji, volume, duration, url }`. Plain ids keep working unchanged. Clients should only play an external `url` whose origin they already trust (Nookara, an instance they are signed in to, or the room's own instance), so a stranger's URL never makes your client contact an unknown host.
 
 New events:
 - `chat_join_request { sid, request }` goes to members who can accept.
@@ -517,7 +521,7 @@ New events:
 - `chat_shop_update { server, channel, rid, status }`: your pay request for a shop role was `paid` (role granted), `declined` or `expired` (§6.1).
 - Ember Link: `game_status`, `game_console`, `game_linked`, `game_unlinked` (§18.4).
 
-**Fan-out** is per community. Each socket subscribes to the communities its user belongs to, and a member only receives an event if they can view its channel. Instances don't relay human presence: the client gets Velora users' presence from its Velora home socket (Manage users holders can still ask which clients a member is connected with, §7.1). Bot presence is instance-local (section 14).
+**Fan-out** is per community. Each socket subscribes to the communities its user belongs to, and a member only receives an event if they can view its channel. Instances don't relay human presence: the client gets Nookara users' presence from its Nookara home socket (Manage users holders can still ask which clients a member is connected with, §7.1). Bot presence is instance-local (section 14).
 
 **Close codes:**
 
@@ -530,15 +534,15 @@ New events:
 
 ### 7.1 Member clients (Manage users)
 
-An instance reports which clients each member is connected with right now: one entry per live gateway connection, on `/gateway` (Ember, third-party apps, scripts) or `/bot/gateway` (bots). This is how a profile shows the clients of instance-only accounts, bots, and Velora members who talk to the instance directly (with no Velora socket of their own).
+An instance reports which clients each member is connected with right now: one entry per live gateway connection, on `/gateway` (Ember, third-party apps, scripts) or `/bot/gateway` (bots). This is how a profile shows the clients of instance-only accounts, bots, and Nookara members who talk to the instance directly (with no Nookara socket of their own).
 
 **Who sees it.** The person themselves, and members holding **Manage users** (bit 2048) in a server they both belong to. Nobody else, instance admins included unless they hold the bit there. The instance checks this on every reply and again before every live update; there are no IP addresses in it.
 
-**Session entry** (the same field names as Velora's presence `sessions`, §6 Manage users):
+**Session entry** (the same field names as Nookara's presence `sessions`, §6 Manage users):
 
 | field | |
 |---|---|
-| `via` | `{ url?, kind?, app?, token?, icon? }` like a message's `via` (§6): `url` = the connection's `Origin` (never an IP address; absent for scripts that send none), `kind` = `desktop` / `android` (official app User-Agent marker) or `bot` (a `/bot/gateway` connection), `app` / `token` / `icon` = the registered Nookara app of the session (the instance token's `app` claim). An instance can write anything here, so clients take the app's name, logo and verified mark only from Velora's app registry, never from these fields. |
+| `via` | `{ url?, kind?, app?, token?, icon? }` like a message's `via` (§6): `url` = the connection's `Origin` (never an IP address; absent for scripts that send none), `kind` = `desktop` / `android` (official app User-Agent marker) or `bot` (a `/bot/gateway` connection), `app` / `token` / `icon` = the registered Nookara app of the session (the instance token's `app` claim). An instance can write anything here, so clients take the app's name, logo and verified mark only from Nookara's app registry, never from these fields. |
 | `state` | `active` (default), `background` or `notifications`, as the client last said (below) |
 | `platform`, `browser`, `mobile` | coarse, from the User-Agent (only for browser-style `Mozilla/` agents; no versions, no device model) |
 | `version`, `device`, `platform` | from the client's own `client` object in `auth` (overrides the User-Agent platform) |
@@ -562,15 +566,15 @@ Older clients ignore all of this; an instance without it answers the REST route 
 
 Servers that advertise `features.member_presence` say who is here: a person's member `presence` is `"online"` while they have a socket open to this server, or a fresh sleep sign-up (below), else `"offline"`; their communities get `chat_presence` when that changes (settled 2 s, as for bots in §14).
 
-Servers that advertise `features.wake` let a client close its socket to save data without looking gone. Before closing, the client calls `POST /api/v1/wake` (any session; answers `{ ok, ttl_ms, pings }`) and renews it well inside `ttl_ms` (5 minutes) for as long as it wants to stay reachable. While the sign-up is fresh the person counts as here (above), and the first new message they can see sends one ping for them through Velora (§12.12); `pings: false` means this server can't send them (not registered with Velora, or a local account). One ping per sign-up: nothing more until the person connects again, which ends the sign-up (so does `DELETE /api/v1/wake`). A client that stops renewing is gone once `ttl_ms` passes.
+Servers that advertise `features.wake` let a client close its socket to save data without looking gone. Before closing, the client calls `POST /api/v1/wake` (any session; answers `{ ok, ttl_ms, pings }`) and renews it well inside `ttl_ms` (5 minutes) for as long as it wants to stay reachable. While the sign-up is fresh the person counts as here (above), and the first new message they can see sends one ping for them through Nookara (§12.12); `pings: false` means this server can't send them (not registered with Nookara, or a local account). One ping per sign-up: nothing more until the person connects again, which ends the sign-up (so does `DELETE /api/v1/wake`). A client that stops renewing is gone once `ttl_ms` passes.
 
 ## 8. Message signing
 
-Signing is available only in velora mode and only to sessions whose `scp` contains `"sign"`. It is **optional**: every community in velora mode accepts signed messages, and no community can require them (unsigned messages are always accepted, with `verified: null`).
+Signing is available only in nookara mode and only to sessions whose `scp` contains `"sign"`. It is **optional**: every community in nookara mode accepts signed messages, and no community can require them (unsigned messages are always accepted, with `verified: null`).
 
 **What the client signs:** the UTF-8 bytes of `"bonfire-msg-v1\n" + canonical(payload)`.
 - `canonical` means JSON with object keys sorted recursively, no whitespace, and numbers as integers.
-- `iss` is one of the instance's `velora.signing_issuers` (discovery, §3), preferred first. On any Nookara address that list is `["https://nookara.cc", "https://velora.ikelene.net"]`: both are accepted, and clients sign with `https://nookara.cc`. Instances older than the list check `iss` against their own `velora_url`, so a client signs with exactly `velora.issuer` there. The instance stores no `iss`; anyone re-checking a stored signature tries each Nookara issuer.
+- `iss` is one of the instance's `velora.signing_issuers` (discovery, §3), preferred first. On any Nookara address that list is `["https://nookara.cc", "https://velora.ikelene.net"]`: both are accepted, and clients sign with `https://nookara.cc`. Instances older than the list check `iss` against their own `nookara_url`, so a client signs with exactly `velora.issuer` there. The instance stores no `iss`; anyone re-checking a stored signature tries each Nookara issuer.
 - `payload` has these fields:
 ```json
 {
@@ -579,7 +583,7 @@ Signing is available only in velora mode and only to sessions whose `scp` contai
   "instance": "<normalized instance origin>",
   "community": "<sid>",
   "channel": "<cid>",
-  "author": "<velora user id string>",
+  "author": "<nookara user id string>",
   "ts": <ms epoch int>,
   "nonce": "<b64url 16 random bytes>",
   "body": "<exact message text>",
@@ -592,11 +596,11 @@ Signing is available only in velora mode and only to sessions whose `scp` contai
 `sticker` is there only for a message sent with a sticker (`sticker` on `chat_send` / `POST /channels/:cid/messages`, section on stickers), and an edit of one; every other payload leaves the key out, so it is unchanged.
 `attachments` holds one sha256 from the upload response (section 11) per uploaded attachment, in message order. Link-only Klipy GIFs without a sha256 use `"url:" + url` instead (the exact stored URL, limited to 512 characters); this binds the link, not the remote bytes. Existing hash entries and text-only payloads are unchanged. Saved files hosted elsewhere are imported with `POST /api/v1/media/import?sid=...&cid=...` (section 11) before signing and use its returned sha256. The browser never needs to fetch the remote bytes; the instance stores, sanitizes and hashes them. No signing payload or verifier change is needed.
 
-**How the client sends it.** `chat_send` and `POST /channels/:cid/messages` carry `signature: { kid, sig, ts, nonce }`, where `sig` is the b64url of a 64-byte Ed25519 signature. An edit, `PATCH /messages/:id { message, signature }`, uses `edit_of = id`. (The text field is `message`, as in Velora's routes; the instance also accepts `body` as an alias on REST.)
+**How the client sends it.** `chat_send` and `POST /channels/:cid/messages` carry `signature: { kid, sig, ts, nonce }`, where `sig` is the b64url of a 64-byte Ed25519 signature. An edit, `PATCH /messages/:id { message, signature }`, uses `edit_of = id`. (The text field is `message`, as in Nookara's routes; the instance also accepts `body` as an alias on REST.)
 
 **How the instance verifies it** (unchanged by the single account key: a signature is still checked by `kid`, and a key revoked before `ts` is rejected):
 1. It rebuilds the payload from the stored fields.
-2. It fetches the key from `VELORA/bonfire/keys/kid/:kid` and caches it for 10 minutes.
+2. It fetches the key from `NOOKARA/bonfire/keys/kid/:kid` and caches it for 10 minutes.
 3. It requires that `key.user_id == author.velora_id`.
 4. It requires that the key wasn't revoked before `ts`.
 5. It requires that `|ts - now| ≤ 5 min`.
@@ -604,7 +608,7 @@ Signing is available only in velora mode and only to sessions whose `scp` contai
 
 If verification fails, the instance rejects the message with `bad_signature`. Bots, webhooks and system messages never carry signatures.
 
-**What the API returns.** Each message gains `signature: { kid, sig, ts, nonce } | null` and `verified: true | false | null`. `null` means unsigned. The API also returns `reply_to` (the stored id, even if the target was deleted) for reconstructing the signed payload. **Clients verify independently** against Velora keys, so they don't trust `verified`. An edit without a signature clears `signature` and `verified`. Exports keep signatures, and so does a later re-import.
+**What the API returns.** Each message gains `signature: { kid, sig, ts, nonce } | null` and `verified: true | false | null`. `null` means unsigned. The API also returns `reply_to` (the stored id, even if the target was deleted) for reconstructing the signed payload. **Clients verify independently** against Nookara keys, so they don't trust `verified`. An edit without a signature clears `signature` and `verified`. Exports keep signatures, and so does a later re-import.
 
 ---
 
@@ -623,22 +627,22 @@ Import rules:
 - `allow_signing` / `require_signing` in the `settings` of older exports are ignored (signing is always optional, §8).
 - The **owner of the import is whoever runs it**. The exported owner flag is kept only as a hint.
 - `v:` principals keep their identity. `l:` principals from another instance become **name-only authors**: `author_name` and `author_avatar` are set and there is no account.
-- On a velora-mode instance, members whose principal is `v:` are recreated as members with their roles.
+- On a nookara-mode instance, members whose principal is `v:` are recreated as members with their roles.
 - Channel `config` of the typed channels (§6.1) is carried over: link `url`, welcome templates, starboard `watch` (channel ids remapped) and shop `items` (role ids remapped), CloudLink settings of `logs` channels (re-validated, at most 3) and `game` channel settings (purpose, events, address, …; the Minecraft link itself does not travel: `instance` becomes null, so the channel needs a server picked again).
 
 ---
 
 ## 10. Voice
 
-Voice uses the same `chat_rtc_*` protocol Velora has today (`chat_rtc_join`, `publish`, `connected`, `subscribe`, `answer`, `close`, `ice` and `leave`, plus `chat_rtc_joined`/`published`/`offer`/`ready`/`room` and `chat_voice_state`). It runs over the instance gateway, and rooms are named `bf_<cid>`.
+Voice uses the same `chat_rtc_*` protocol Nookara has today (`chat_rtc_join`, `publish`, `connected`, `subscribe`, `answer`, `close`, `ice` and `leave`, plus `chat_rtc_joined`/`published`/`offer`/`ready`/`room` and `chat_voice_state`). It runs over the instance gateway, and rooms are named `bf_<cid>`.
 
 Mute state: once connected, a client sends `{ type: "chat_voice_mute", room, muted, deafened }` (booleans; deafened implies muted) whenever either changes and right after `chat_rtc_connected`. The instance keeps the flags per participant and broadcasts them as `muted` / `deafened` on that participant's entry in `chat_voice_state { server, channel, users: [ { id, username, muted, deafened, since } ] }`, so clients can show the red mute / deafen icon. Older clients that never send it simply show as unmuted.
 
 Resuming after a dropped socket: `chat_rtc_joined` carries `resume` (an opaque token). When a gateway socket closes while its participant is connected, the instance parks the call for 30 s instead of ending it: the participant stays in the room and in `chat_voice_state`, and its Cloudflare sessions stay open (the media never went through the gateway). A new socket of the same account sends `{ type: "chat_rtc_resume", nonce, room, resume }` and gets `{ type: "chat_rtc_resumed", nonce, room, resume, tracks, people }` (a fresh token every time; `tracks` = what it publishes, `people` = the room as in `chat_rtc_room`); it then carries on with the same peer connections. Anything else (`chat_error { error: "resume_failed" }`: unknown or spent token, another account, the grace ran out, the instance restarted) means join again with `chat_rtc_join`. A participant that disconnects before `chat_rtc_connected` leaves at once. The gateway also sends websocket pings to sockets that have been quiet for 15 s, and a pong counts as activity, so a background tab whose `{"type":"ping"}` timer is throttled is not cut off after 60 s.
 
-Backend, chosen per join: (1) the instance's own Cloudflare Realtime keys (`voice` settings) when all four are set; else (2) **Velora's voice broker** (§12.7) while the instance is registered and Velora has voice set up; else `chat_rtc_join` returns `chat_error { nonce, error: "voice_unavailable" }`. Through the broker the receive session is created on the first subscribe (sessions are metered), every open session gets a heartbeat each minute, and when the instance is over its monthly cap the joiner gets `chat_error { nonce, error: "voice_cap_reached", cap_minutes, used_minutes }` (and `features.voice` turns false until Velora answers again). A participant stays on the backend they joined with.
+Backend, chosen per join: (1) the instance's own Cloudflare Realtime keys (`voice` settings) when all four are set; else (2) **Nookara's voice broker** (§12.7) while the instance is registered and Nookara has voice set up; else `chat_rtc_join` returns `chat_error { nonce, error: "voice_unavailable" }`. Through the broker the receive session is created on the first subscribe (sessions are metered), every open session gets a heartbeat each minute, and when the instance is over its monthly cap the joiner gets `chat_error { nonce, error: "voice_cap_reached", cap_minutes, used_minutes }` (and `features.voice` turns false until Nookara answers again). A participant stays on the backend they joined with.
 
-DM calls (`bfc_…`) stay on Velora.
+DM calls (`bfc_…`) stay on Nookara.
 
 ---
 
@@ -664,34 +668,34 @@ Response:
 
 ---
 
-## 12. Velora relays
+## 12. Nookara relays
 
-Services an instance asks Velora for: registering, push, credit payments, daily credits, the voice broker, import bundles and the public directory. People and the public call the matching routes under `VELORA/bonfire/*`. Everything an instance calls is **signed with the instance's Ed25519 key** (§12.2). Velora never fetches an instance-supplied URL. Dev: `http` instance urls need `BONFIRE_DEV=1` on Velora (as in §1); public urls stored for the directory must be `https`.
+Services an instance asks Nookara for: registering, push, credit payments, daily credits, the voice broker, import bundles and the public directory. People and the public call the matching routes under `NOOKARA/bonfire/*`. Everything an instance calls is **signed with the instance's Ed25519 key** (§12.2). Nookara never fetches an instance-supplied URL. Dev: `http` instance urls need `EMBER_DEV=1` on Nookara (as in §1); public urls stored for the directory must be `https`.
 
 ### 12.1 Registration
 The instance has an Ed25519 key (`DATA_DIR/keys/instance.key`). Its **`instance_id`** is `ik_` + first 16 hex of `sha256(raw 32-byte public key)`. `pubkey` is the b64url of the raw 32 bytes (same encoding as the signing key, §2.3). `url` is the instance's `public_url` (normalized as in §1).
 
-1. `POST VELORA/bonfire/instances/challenge` `{ pubkey, url }` -> `{ nonce, expires_in: 300 }` (single use).
-2. `POST VELORA/bonfire/instances/register` `{ pubkey, url, name, accounts_mode: "velora"|"local", nonce, sig, operator_terms?: { version, accepted_at } }` (`operator_terms`: the Ember Server Operator Terms the operator accepted, https://nookara.cc/operator-terms; omitted until accepted) where `sig` = b64url Ed25519 over the UTF-8 string `bonfire-register-v1|<nonce>|<normalized url>` -> `{ instance_id, trusted, voice: { cap_minutes, used_minutes } }`.
+1. `POST NOOKARA/bonfire/instances/challenge` `{ pubkey, url }` -> `{ nonce, expires_in: 300 }` (single use).
+2. `POST NOOKARA/bonfire/instances/register` `{ pubkey, url, name, accounts_mode: "velora"|"local", nonce, sig, operator_terms?: { version, accepted_at } }` (`operator_terms`: the Ember Server Operator Terms the operator accepted, https://nookara.cc/operator-terms; omitted until accepted) where `sig` = b64url Ed25519 over the UTF-8 string `bonfire-register-v1|<nonce>|<normalized url>` -> `{ instance_id, trusted, voice: { cap_minutes, used_minutes } }`.
 
 - Upserts by key hash, so re-registering updates `url`, `name` and `accounts_mode` (call it on every start). `cap_minutes` is `null` when unlimited (trusted).
-- Registration never reads an `Authorization` header and never changes the instance's owner. A Velora token is never sent to an instance.
+- Registration never reads an `Authorization` header and never changes the instance's owner. A Nookara token is never sent to an instance.
 - Errors: `invalid_pubkey`, `invalid_url`, `invalid_nonce`, `bad_signature` (401), `invalid_accounts_mode`, `invalid_name`, `url_taken` (409, another key owns that url), `instance_banned` (403). Rate limited per IP (429 `rate_limited`).
 - `name` is stored with control characters and `<>` stripped, max 80 characters.
-- **Url proof:** before binding a url that is not already bound to this key, Velora fetches `<url>/.well-known/bonfire` and requires its `instance_key` (§3) to equal `pubkey`; otherwise `403 { error: "url_unverified", reason }` (`reason`: `key_mismatch`, `no_instance_key`, `private_address`, `bad_status`, `timeout`, `too_large`, `dns_failed`, `fetch_failed`, …). The fetch is SSRF-guarded: http(s) only, no credentials, refused when the host resolves to any private, loopback, link-local, CGNAT, metadata, multicast or reserved address (IPv4 and IPv6, incl. IPv4-mapped, NAT64, 6to4 and Teredo forms; the connection is pinned to the checked address), redirects (max 3) re-checked, 5 s total, 64 KB max. With `BONFIRE_DEV=1` localhost / private targets are allowed (dev stack), cloud metadata addresses never are. So the instance must be reachable at `public_url` when it registers. An admin can still remove a registration.
-- `trusted` is set only by Velora staff (for `chat.ikelene.net` and hosted instances). It unlocks §12.4 and unlimited voice.
+- **Url proof:** before binding a url that is not already bound to this key, Nookara fetches `<url>/.well-known/bonfire` and requires its `instance_key` (§3) to equal `pubkey`; otherwise `403 { error: "url_unverified", reason }` (`reason`: `key_mismatch`, `no_instance_key`, `private_address`, `bad_status`, `timeout`, `too_large`, `dns_failed`, `fetch_failed`, …). The fetch is SSRF-guarded: http(s) only, no credentials, refused when the host resolves to any private, loopback, link-local, CGNAT, metadata, multicast or reserved address (IPv4 and IPv6, incl. IPv4-mapped, NAT64, 6to4 and Teredo forms; the connection is pinned to the checked address), redirects (max 3) re-checked, 5 s total, 64 KB max. With `EMBER_DEV=1` localhost / private targets are allowed (dev stack), cloud metadata addresses never are. So the instance must be reachable at `public_url` when it registers. An admin can still remove a registration.
+- `trusted` is set only by Nookara staff (for `chat.ikelene.net` and hosted instances). It unlocks §12.4 and unlimited voice.
 - `instance-token` (§2.2) refuses audiences that are banned (403 `instance_banned`).
 
-**Payee (owner attestation).** The instance **owner** receives pay-request payments (§12.5) once Velora knows their account. The owner proves it with a short-lived proof signed by the instance, and presents it to Velora themselves:
+**Payee (owner attestation).** The instance **owner** receives pay-request payments (§12.5) once Nookara knows their account. The owner proves it with a short-lived proof signed by the instance, and presents it to Nookara themselves:
 1. `GET INSTANCE/api/v1/instance/owner-attestation` (instance owner session only) -> `{ attestation, instance_id }`. Errors: 403 `owner_only`, 400 `owner_not_velora` (the owner is a local account), 409 `not_registered`.
-2. `POST VELORA/bonfire/instances/payout { attestation }` with the owner's own Velora bearer token (scope `CHAT`; Ember's token, called by the client) -> `{ ok: true, instance_id }`. Sets the instance's `owner_user_id` to the caller.
-- `attestation` is a compact JWS signed with the instance key: header `{ "alg": "EdDSA", "typ": "bonfire-owner+jwt" }`, claims `{ iss: <instance_id>, url: <public_url, normalized>, sub: <owner Velora id, string>, iat, exp: iat + 300, jti: <random> }` (seconds).
-- Velora finds the instance by `iss`, verifies the signature with that row's stored `pubkey`, requires `typ`, `exp` in the future but at most 10 min ahead, `url` equal to the row's url, `sub` equal to the caller's Velora id, and a `jti` not seen before. Errors: 400 `invalid_attestation`, 404 `unknown_instance`, 403 `not_owner` (`sub` is another account), 403 `instance_banned`.
+2. `POST NOOKARA/bonfire/instances/payout { attestation }` with the owner's own Nookara bearer token (scope `CHAT`; Ember's token, called by the client) -> `{ ok: true, instance_id }`. Sets the instance's `owner_user_id` to the caller.
+- `attestation` is a compact JWS signed with the instance key: header `{ "alg": "EdDSA", "typ": "bonfire-owner+jwt" }`, claims `{ iss: <instance_id>, url: <public_url, normalized>, sub: <owner Nookara id, string>, iat, exp: iat + 300, jti: <random> }` (seconds).
+- Nookara finds the instance by `iss`, verifies the signature with that row's stored `pubkey`, requires `typ`, `exp` in the future but at most 10 min ahead, `url` equal to the row's url, `sub` equal to the caller's Nookara id, and a `jti` not seen before. Errors: 400 `invalid_attestation`, 404 `unknown_instance`, 403 `not_owner` (`sub` is another account), 403 `instance_banned`.
 
 
-**Payout card:** `GET VELORA/bonfire/instances/payout?url=<instance origin>` (bearer + `CHAT`) returns `{ linked: bool, payee: { id: <string>, username, pfp } | null, linked_at: <ms> | null, you: bool }`. Normalize the URL as in section 1. Only the registered owner/current payee can read it (`403 forbidden` otherwise); unknown instance -> `404 unknown_instance`, bad URL -> `400 invalid_instance`. The existing registry uses `owner_user_id` for both the owner and payout target, so those are the same account. `you` compares the payee with the caller. `linked_at` records the last successful owner attestation; pre-existing/automatically registered ownership may return null. A missing payee account returns `linked: false`, `payee: null`, `you: false`.
+**Payout card:** `GET NOOKARA/bonfire/instances/payout?url=<instance origin>` (bearer + `CHAT`) returns `{ linked: bool, payee: { id: <string>, username, pfp } | null, linked_at: <ms> | null, you: bool }`. Normalize the URL as in section 1. Only the registered owner/current payee can read it (`403 forbidden` otherwise); unknown instance -> `404 unknown_instance`, bad URL -> `400 invalid_instance`. The existing registry uses `owner_user_id` for both the owner and payout target, so those are the same account. `you` compares the payee with the caller. `linked_at` records the last successful owner attestation; pre-existing/automatically registered ownership may return null. A missing payee account returns `linked: false`, `payee: null`, `you: false`.
 
-### 12.2 Signed requests (instance -> Velora, all `VELORA/bonfire/relay/*`)
+### 12.2 Signed requests (instance -> Nookara, all `NOOKARA/bonfire/relay/*`)
 Headers:
 ```
 X-Bonfire-Instance: <instance_id>
@@ -699,60 +703,60 @@ X-Bonfire-Ts:       <unix ms>
 X-Bonfire-Sig:      b64url( Ed25519( METHOD "|" path "|" ts "|" sha256hex(body) ) )
 ```
 - `METHOD` is upper case. `path` is the request target exactly as sent: the path **with** its query string (`/bonfire/relay/import/bundle?ticket=bit_...`). `body` is the exact bytes sent (empty for GET, so the hash is `e3b0c442...b855`). Send JSON bodies with `Content-Type: application/json`.
-- `ts` must be within **60 s** of Velora's clock (401 `stale_timestamp`). Each signature is accepted **once** (401 `replayed`), so sign every request freshly.
+- `ts` must be within **60 s** of Nookara's clock (401 `stale_timestamp`). Each signature is accepted **once** (401 `replayed`), so sign every request freshly.
 - Other errors: 401 `unknown_instance` / `bad_timestamp` / `bad_signature`, 403 `instance_banned`, 429 `rate_limited` (with `Retry-After`), 400 `invalid_json`, 413 `payload_too_large` (bodies are at most 300 KB).
-- The relay router reads the raw body itself, ahead of Velora's global JSON parser and xss-clean, so strings are never rewritten before the hash is checked. Responses are normal JSON.
+- The relay router reads the raw body itself, ahead of Nookara's global JSON parser and xss-clean, so strings are never rewritten before the hash is checked. Responses are normal JSON.
 - Limits are per instance: 1500 requests/min overall, plus the route limits below.
 
 ### 12.3 `POST /bonfire/relay/notify` (offline push)
 ```json
 { "user_id": "123", "kind": "mention" | "reply" | "dm_like", "community_name": "…", "channel_name": "…", "title": "nat mentioned you", "preview": "…", "url": "INSTANCE/…" }
 ```
-- `user_id` is the Velora id (`sub` of the token). `title` max 100, `preview` max 300, names max 80. `url` is optional and must be on the instance's own origin (400 `invalid_url`).
+- `user_id` is the Nookara id (`sub` of the token). `title` max 100, `preview` max 300, names max 80. `url` is optional and must be on the instance's own origin (400 `invalid_url`).
 - Result: `{ "delivered": true }` or `{ "delivered": false, "reason": "not_subscribed" | "muted" | "push_off" | "held" }`. It always returns 200 for those cases.
 - **Consent:** only if the user has this instance's url in their list (§2.4), `muted` is false and `push` is true. People change this with `PATCH /bonfire/instances/prefs`.
-- Delivery matches Velora's own mentions: the Android notification socket plus browser push, with the "quiet while you're here" hold. While the person is actively using Ember somewhere, the push is `held` and sent after they go idle (relayed pushes can't be checked for "read", so they are dropped after 2 hours).
+- Delivery matches Nookara's own mentions: the Android notification socket plus browser push, with the "quiet while you're here" hold. While the person is actively using Ember somewhere, the push is `held` and sent after they go idle (relayed pushes can't be checked for "read", so they are dropped after 2 hours).
 - Tapping the push opens Ember at that instance (`/chat#/i/<instance>`).
 - Limits: 600/min per instance, 20/min per instance and user (429 `user_rate_limited`).
 
 ### 12.4 `POST /bonfire/relay/daily` (trusted only)
-`{ "user_id": "123" }` -> `{ "status": "claimed", "amount": 5 }` | `{ "status": "already" }` | `{ "status": "banned" }`. This is the same once-a-day credit as Ember/Fluxer chat (`source: bonfire`; 15 for Pro or staff). Untrusted instances get 403 `not_trusted`.
+`{ "user_id": "123" }` -> `{ "status": "claimed", "amount": 5 }` | `{ "status": "already" }` | `{ "status": "banned" }`. This is the same once-a-day credit as Ember/Fluxer chat (`source: ember`; 15 for Pro or staff). Untrusted instances get 403 `not_trusted`.
 
 ### 12.4a `POST /bonfire/relay/identities`
-`{ "ids": ["123", ...] }` (1-200 Velora account ids) -> `{ "users": [{ "id": "123", "username", "display_name", "pfp" }] }`. Banned and unknown accounts are left out. An instance in `velora` mode calls this a minute after boot and then every 10 minutes for every Velora account it knows, and applies changed names / pictures (members, messages and clients then see them through `chat_identity_update`, as for a login refresh). Without it a rename only reached an instance when that person next signed in there.
+`{ "ids": ["123", ...] }` (1-200 Nookara account ids) -> `{ "users": [{ "id": "123", "username", "display_name", "pfp" }] }`. Banned and unknown accounts are left out. An instance in `velora` mode calls this a minute after boot and then every 10 minutes for every Nookara account it knows, and applies changed names / pictures (members, messages and clients then see them through `chat_identity_update`, as for a login refresh). Without it a rename only reached an instance when that person next signed in there.
 
 ### 12.5 Credit payments (pay requests)
 `POST /bonfire/relay/pay-request` `{ user_id, amount, reason, ref }` -> `{ id, status: "pending", approve_url, amount, expires_at }`.
 - `amount` is an integer from 1 to 100000. `reason` max 200 is shown on the approval page. `ref` (required, max 100) is the instance's own reference, e.g. `role:<rid>`. Sending the same `ref` again returns the same request (a different user or amount gives 409 `ref_reused`).
 - The user must have the instance in their list (403 `not_subscribed`). Other errors: `invalid_amount`, `invalid_ref`, `user_not_found` (404), `self_payment`, `too_many_requests` (429, five open requests per user), `payee_unavailable` (503).
-- **Payee:** the instance **owner's Velora account** when registration recorded one (§12.1). Otherwise Velora's own account (`BONFIRE_HOUSE_USER`, default the first owner-rank account). Credits are never burned.
-- The request is a normal Velora payment request that lives 30 minutes. The person opens `approve_url` (`VELORA/payment/<id>`: the existing Pay / Cancel page with the captcha). Alternatively `POST VELORA/bonfire/pay-requests/:id/approve` (bearer + `CURRENCY_PAY` + captcha like `/currency/transfer`) and `POST VELORA/bonfire/pay-requests/:id/decline` (bearer, only the payer).
+- **Payee:** the instance **owner's Nookara account** when registration recorded one (§12.1). Otherwise Nookara's own account (`BONFIRE_HOUSE_USER`, default the first owner-rank account). Credits are never burned.
+- The request is a normal Nookara payment request that lives 30 minutes. The person opens `approve_url` (`NOOKARA/payment/<id>`: the existing Pay / Cancel page with the captcha). Alternatively `POST NOOKARA/bonfire/pay-requests/:id/approve` (bearer + `CURRENCY_PAY` + captcha like `/currency/transfer`) and `POST NOOKARA/bonfire/pay-requests/:id/decline` (bearer, only the payer).
 - `GET /bonfire/relay/pay-request/:id` -> `{ id, status: "pending"|"paid"|"declined"|"expired", amount, ref, receipt, paid_at?, error? }`. Only the requesting instance can read it (else 404). Poll every few seconds. `declined` covers cancelled and failed (then `error` is set). Credits move before `paid` is reported.
-- **Receipt** (`status: "paid"` only): an EdDSA JWS signed with Velora's key (the JWKS key of §2.1), verifiable offline:
+- **Receipt** (`status: "paid"` only): an EdDSA JWS signed with Nookara's key (the JWKS key of §2.1), verifiable offline:
   - header `{ "alg": "EdDSA", "typ": "bonfire-receipt+jwt", "kid": <jwks kid> }`
-  - claims `{ iss: <Velora issuer>, aud: <instance url>, sub: "<user id>", amount, ref, paid_at: <ms>, rcp: "<request id>", iat, exp }` (`exp` is about a year)
+  - claims `{ iss: <Nookara issuer>, aud: <instance url>, sub: "<user id>", amount, ref, paid_at: <ms>, rcp: "<request id>", iat, exp }` (`exp` is about a year)
   - The instance MUST check the signature against the JWKS, `typ` is exactly `bonfire-receipt+jwt`, `aud` is its own `public_url`, `ref`/`amount`/`sub` match what it asked for, and `rcp` has not been used before. Receipts must never be accepted as login tokens (§2.2 tokens have `typ: "JWT"`), and login verification should reject any other `typ`.
 
 
 Clients display the payout target using `GET /bonfire/instances/payout?url=` (section 12.1). `POST /bonfire/instances/payout { attestation }` still links payouts through the signed owner attestation and now records `linked_at`. No DELETE/unlink endpoint is provided; the existing payout fallback behavior is unchanged.
 
 ### 12.6 Import bundles
-For importing a Discord / Fluxer server into a self-hosted instance. The person uses their **Velora** token (it works for local-account instances too), so the user routes take a bearer with `CHAT`:
+For importing a Discord / Fluxer server into a self-hosted instance. The person uses their **Nookara** token (it works for local-account instances too), so the user routes take a bearer with `CHAT`:
 
 | route | result |
 |---|---|
-| `GET VELORA/bonfire/import/platforms` | `{ platforms: [ { id, name, ready, bot, invite, linked } ] }` |
-| `GET VELORA/bonfire/import/:platform/guilds` | `{ guilds: [ { id, name, icon } ] }` the person can manage (needs the linked account; `not_linked`, `bot_not_in_server`, `not_your_server`) |
-| `GET VELORA/bonfire/import/:platform/guilds/:gid` | the picker preview: `{ guild, groups: [ {name, channels: [ {id, name, topic, kind, skip, private, locked} ]} ], roles, emojis, … }` |
-| `POST VELORA/bonfire/import` `{ platform, guild_id, channels: [id…], roles: [id…], options?: { name, icon, banner, emojis }, instance }` | `{ job_id, ticket, instance, expires_at }` |
-| `GET VELORA/bonfire/import/:job_id` | `{ job_id, status: "queued"\|"running"\|"done"\|"failed", progress (0-100), stage, error, instance, size, expires_at, downloaded }` (owner only) |
+| `GET NOOKARA/bonfire/import/platforms` | `{ platforms: [ { id, name, ready, bot, invite, linked } ] }` |
+| `GET NOOKARA/bonfire/import/:platform/guilds` | `{ guilds: [ { id, name, icon } ] }` the person can manage (needs the linked account; `not_linked`, `bot_not_in_server`, `not_your_server`) |
+| `GET NOOKARA/bonfire/import/:platform/guilds/:gid` | the picker preview: `{ guild, groups: [ {name, channels: [ {id, name, topic, kind, skip, private, locked} ]} ], roles, emojis, … }` |
+| `POST NOOKARA/bonfire/import` `{ platform, guild_id, channels: [id…], roles: [id…], options?: { name, icon, banner, emojis }, instance }` | `{ job_id, ticket, instance, expires_at }` |
+| `GET NOOKARA/bonfire/import/:job_id` | `{ job_id, status: "queued"\|"running"\|"done"\|"failed", progress (0-100), stage, error, instance, size, expires_at, downloaded }` (owner only) |
 
 - The job runs in the background (one per person at a time: 429 `import_running`; at least one channel is required: `pick_a_channel`). It builds a **`bonfire-export-v1` zip** (§9) with `source_kind: "velora-import"`: channels (with categories, voice channels and per-role view/send/attach settings), roles with their permissions, `@everyone` (rid `everyone`, `is_default`), emojis, icon and banner. It contains **no members or messages**: `members.jsonl` and `messages/<cid>.jsonl` are empty, so history stays where it is. `cid`s are `c<platform id>`, role `rid`s are `r<platform id>`.
 - **`ticket`** (`bit_…`) is a one-time secret, shown only in the `POST` response and bound to the normalized `instance` url. The client hands it to the instance.
 - Instance route: `GET /bonfire/relay/import/bundle?ticket=<ticket>` (signed, §12.2) -> `application/zip`. Errors: 404 `ticket_invalid`, 403 `ticket_wrong_instance` (the signing instance's url must equal the ticket's), 409 `not_ready` (retry), 410 `ticket_expired` (already downloaded, or older than 1 hour after the bundle was ready), 410 `import_failed`. **One download:** the ticket is spent when the download starts and the file is deleted afterwards. If a transfer fails, run the import again.
 
 ### 12.7 Voice broker
-`POST /bonfire/relay/rtc/*`, `GET /bonfire/relay/rtc/ice`, wrapping Cloudflare Realtime. The keys stay on Velora. The bodies mirror what `chat_rtc_*` does today, with Cloudflare's names. Limit: 1200/min per instance, at most 400 open sessions.
+`POST /bonfire/relay/rtc/*`, `GET /bonfire/relay/rtc/ice`, wrapping Cloudflare Realtime. The keys stay on Nookara. The bodies mirror what `chat_rtc_*` does today, with Cloudflare's names. Limit: 1200/min per instance, at most 400 open sessions.
 
 | route | body | result |
 |---|---|---|
@@ -764,12 +768,12 @@ For importing a Discord / Fluxer server into a self-hosted instance. The person 
 | `GET /rtc/ice` | | `{ iceServers }` |
 | `GET /rtc/usage` | | `{ cap_minutes, used_minutes, over }` |
 
-- A session can only be used by the instance that opened it (404 `session_not_found`). Track names are `[A-Za-z0-9_.:-]{1,64}`, `mid`s `[A-Za-z0-9_-]{1,32}`, at most 30 tracks per call. Errors: 503 `voice_unavailable` (not set up on Velora), 502 `voice_upstream`, 402 `voice_cap_reached` `{ cap_minutes, used_minutes }`.
+- A session can only be used by the instance that opened it (404 `session_not_found`). Track names are `[A-Za-z0-9_.:-]{1,64}`, `mid`s `[A-Za-z0-9_-]{1,32}`, at most 30 tracks per call. Errors: 503 `voice_unavailable` (not set up on Nookara), 502 `voice_upstream`, 402 `voice_cap_reached` `{ cap_minutes, used_minutes }`.
 - **Metering:** Cloudflare sessions are metered **per instance, per calendar month (UTC)** in raw session-minutes. A session counts from `rtc/session` until `rtc/close` (without `mids`) or, if the instance disappears, until its last call or heartbeat (sessions silent for 10 minutes are closed automatically). A participant who has a publish and a receive session uses 2 minutes per minute, so create the receive session lazily. Every `rtc/*` call for a session counts as a heartbeat, but an idle but connected session needs `rtc/heartbeat` at least every 5 minutes (once a minute is recommended).
 - **Cap:** trusted instances are unlimited. Others get `BONFIRE_VOICE_FREE_MINUTES` (default 3000) a month, or the per-instance override set by staff. At or over the cap, `rtc/session`, `rtc/tracks` and `rtc/ice` return `402 { error: "voice_cap_reached" }` (renegotiate, close and heartbeat still work). Fall back to the instance's own keys when configured (§10).
 
 ### 12.8 Bans
-Velora staff can ban an instance by key (`ik_…`) or by url host (`chat.example.com`, or `*.example.com` for subdomains). A banned instance gets 403 `instance_banned` on every relay and registration, no instance tokens, and no directory listing.
+Nookara staff can ban an instance by key (`ik_…`) or by url host (`chat.example.com`, or `*.example.com` for subdomains). A banned instance gets 403 `instance_banned` on every relay and registration, no instance tokens, and no directory listing.
 
 ### 12.9 Directory
 `PUT /bonfire/relay/directory` (signed, 20/min):
@@ -777,8 +781,8 @@ Velora staff can ban an instance by key (`ik_…`) or by url host (`chat.example
 { "listed": true, "name": "…", "description": "…", "icon_url": "https://…", "banner_url": "https://…", "member_count": 12, "invite_url": "https://…", "tags": ["gaming"] }
 ```
 - `listed: false` removes the listing (nothing else is needed). One listing per instance (one instance = one community).
-- Validation: `name` required, max 80. `description` max 500. `icon_url`, `banner_url` and `invite_url` are optional `https` urls without credentials, max 512 (`banner_url` is newer: an older Velora ignores it). `member_count` is an integer 0-100000000. `tags` is at most 8, each max 24 characters, lower-cased, no commas. Control characters and `<>` are stripped from text. Errors: `invalid_listed`, `invalid_name`, `invalid_icon_url`, `invalid_banner_url`, `invalid_invite_url`, `invalid_member_count`, `invalid_tags`. The response is `{ listed, hidden_by_staff? }`. Staff can hide a listing, and then the instance can't bring it back.
-- `GET VELORA/bonfire/directory?q=<text>&page=<n>` is public (CORS `*`) and returns `{ page, page_size: 24, has_more, results: [ { id: <instance_id>, url, name, description, icon_url, banner_url, member_count, invite_url, tags, trusted, updated_at } ] }`, sorted by `member_count`. `q` matches name, description and tags. Unlisted, staff-hidden and banned instances never appear. Clients must treat every field as untrusted text and open `invite_url` / `url` only as links.
+- Validation: `name` required, max 80. `description` max 500. `icon_url`, `banner_url` and `invite_url` are optional `https` urls without credentials, max 512 (`banner_url` is newer: an older Nookara ignores it). `member_count` is an integer 0-100000000. `tags` is at most 8, each max 24 characters, lower-cased, no commas. Control characters and `<>` are stripped from text. Errors: `invalid_listed`, `invalid_name`, `invalid_icon_url`, `invalid_banner_url`, `invalid_invite_url`, `invalid_member_count`, `invalid_tags`. The response is `{ listed, hidden_by_staff? }`. Staff can hide a listing, and then the instance can't bring it back.
+- `GET NOOKARA/bonfire/directory?q=<text>&page=<n>` is public (CORS `*`) and returns `{ page, page_size: 24, has_more, results: [ { id: <instance_id>, url, name, description, icon_url, banner_url, member_count, invite_url, tags, trusted, updated_at } ] }`, sorted by `member_count`. `q` matches name, description and tags. Unlisted, staff-hidden and banned instances never appear. Clients must treat every field as untrusted text and open `invite_url` / `url` only as links.
 
 ### 12.10 Staff routes (not for instances)
 `/admin/bonfire/*` (rank `admin` or `owner` only): `GET instances`, `PATCH instances/:key` `{ trusted?, voice_cap_override? }` (`null` = default cap), `DELETE instances/:key`, `POST directory/:key/delist|relist`, `GET|POST bans` `{ key_hash? | url?, reason }`, `DELETE bans/:id`. They are driven by Admin > Instances in the dashboard.
@@ -786,22 +790,22 @@ Velora staff can ban an instance by key (`ik_…`) or by url host (`chat.example
 ---
 
 ### 12.11 Instance behaviour (bonfire-server)
-- **Owner attestation.** `GET /api/v1/instance/owner-attestation` is owner-only, needs the owner principal to be a Velora user and the instance to be registered (§12.1). The instance never receives, forwards or stores a Velora token.
-- **Key + registration.** The key is generated on first boot (`DATA_DIR/keys/instance.key`, PKCS#8 PEM, mode 0600; keep it with backups, it is the instance's identity on Velora). Once the HTTP server listens, the instance registers (§12.1) in both accounts modes (local-mode instances use Velora only for these opt-in services); it never blocks startup, retries with backoff (5 s … 30 min), re-registers when `velora_url`, `public_url`, `name`, `accounts_mode` or `velora_registration` change and every 12 h, and again after a `401 unknown_instance`. `instance_id`, `trusted` and the voice cap are kept in the database (`meta`). `velora_registration: "off"` stops every Velora call.
-- **Push** (§12.3): only for Velora principals (`v:`) that `notifyOffline` reports (pinged, not connected to this instance, push not muted). `kind` is `reply` for a reply to them, else `mention`; `title` "`<from>` mentioned you" / "replied to you"; `preview` is the message (≤ 300); `url` is `INSTANCE/#/s/<sid>/<cid>` (on the instance's own origin as Velora requires; the fragment is the client route, i.e. `VELORA/chat#/i/<instance>/s/<sid>/<cid>`). Per user and channel at most one push per 30 s: later pings in the window become one summary ("3 new mentions in #general"), dropped if the person connected meanwhile.
-- **Daily credits** (§12.4): the first message (people only: not system, webhook or bridged) of the UTC day by a Velora principal calls `relay/daily` when the instance is `trusted`; a `claimed` answer sends that person `chat_ephemeral { server, channel, kind: "daily", amount, body: "You claimed your daily chat credits (+5 credits)." }` (unless their `daily_notice` setting is false). `403 not_trusted` marks the instance untrusted until the next registration says otherwise.
-- **Paid roles** (§6.1, §12.5): `ref` is `role:<rid>:v<velora id>:<attempt>:<random>`, unique per person, role and attempt and reused on retries. A background poller asks Velora every few seconds while requests are open. Receipts are checked offline against the JWKS (same cache as login, §4): `alg` EdDSA, `typ` exactly `bonfire-receipt+jwt`, signature, `iss` = `velora_url`, `aud` = `public_url`, `sub` = the buyer's Velora id, `amount`, `ref`, `rcp` = the request id, not expired, and `rcp` never used before. A bad receipt fails the attempt and grants nothing. Login refuses any JWT whose `typ` is not `JWT`.
+- **Owner attestation.** `GET /api/v1/instance/owner-attestation` is owner-only, needs the owner principal to be a Nookara user and the instance to be registered (§12.1). The instance never receives, forwards or stores a Nookara token.
+- **Key + registration.** The key is generated on first boot (`DATA_DIR/keys/instance.key`, PKCS#8 PEM, mode 0600; keep it with backups, it is the instance's identity on Nookara). Once the HTTP server listens, the instance registers (§12.1) in both accounts modes (local-mode instances use Nookara only for these opt-in services); it never blocks startup, retries with backoff (5 s … 30 min), re-registers when `nookara_url`, `public_url`, `name`, `accounts_mode` or `nookara_registration` change and every 12 h, and again after a `401 unknown_instance`. `instance_id`, `trusted` and the voice cap are kept in the database (`meta`). `nookara_registration: "off"` stops every Nookara call.
+- **Push** (§12.3): only for Nookara principals (`v:`) that `notifyOffline` reports (pinged, not connected to this instance, push not muted). `kind` is `reply` for a reply to them, else `mention`; `title` "`<from>` mentioned you" / "replied to you"; `preview` is the message (≤ 300); `url` is `INSTANCE/#/s/<sid>/<cid>` (on the instance's own origin as Nookara requires; the fragment is the client route, i.e. `NOOKARA/chat#/i/<instance>/s/<sid>/<cid>`). Per user and channel at most one push per 30 s: later pings in the window become one summary ("3 new mentions in #general"), dropped if the person connected meanwhile.
+- **Daily credits** (§12.4): the first message (people only: not system, webhook or bridged) of the UTC day by a Nookara principal calls `relay/daily` when the instance is `trusted`; a `claimed` answer sends that person `chat_ephemeral { server, channel, kind: "daily", amount, body: "You claimed your daily chat credits (+5 credits)." }` (unless their `daily_notice` setting is false). `403 not_trusted` marks the instance untrusted until the next registration says otherwise.
+- **Paid roles** (§6.1, §12.5): `ref` is `role:<rid>:v<nookara id>:<attempt>:<random>`, unique per person, role and attempt and reused on retries. A background poller asks Nookara every few seconds while requests are open. Receipts are checked offline against the JWKS (same cache as login, §4): `alg` EdDSA, `typ` exactly `bonfire-receipt+jwt`, signature, `iss` = `nookara_url`, `aud` = `public_url`, `sub` = the buyer's Nookara id, `amount`, `ref`, `rcp` = the request id, not expired, and `rcp` never used before. A bad receipt fails the attempt and grants nothing. Login refuses any JWT whose `typ` is not `JWT`.
 - **Voice broker** (§10, §12.7): see §10.
-- **Directory** (§12.9): while `listed` is on, the instance PUTs `{ listed: true, name, description, icon_url (absolute), banner_url (absolute), member_count, invite_url, tags }`, where `invite_url` is the community's permanent invite opened in Ember on the web (`VELORA/chat#/i/<instance>/invite/<code>`). It re-pushes (debounced) when any of that changes and every 6 h; turning `listed` off sends `{ listed: false }`. A link Velora refuses (it stores only `https`) is dropped from the listing instead of failing it.
-- **Import** (§12.6): `POST /api/v1/import/velora { ticket }` (instance admins, only while no community exists) downloads `relay/import/bundle?ticket=` and runs the zip importer (§9). Velora's errors come back with the same codes plus a `message`: `404 ticket_invalid`, `403 ticket_wrong_instance`, `409 not_ready` (`retry: true`), `410 ticket_expired` / `import_failed`; `503 velora_not_registered` / `velora_off` when the instance cannot reach the relays.
+- **Directory** (§12.9): while `listed` is on, the instance PUTs `{ listed: true, name, description, icon_url (absolute), banner_url (absolute), member_count, invite_url, tags }`, where `invite_url` is the community's permanent invite opened in Ember on the web (`NOOKARA/chat#/i/<instance>/invite/<code>`). It re-pushes (debounced) when any of that changes and every 6 h; turning `listed` off sends `{ listed: false }`. A link Nookara refuses (it stores only `https`) is dropped from the listing instead of failing it.
+- **Import** (§12.6): `POST /api/v1/import/velora { ticket }` (instance admins, only while no community exists) downloads `relay/import/bundle?ticket=` and runs the zip importer (§9). Nookara's errors come back with the same codes plus a `message`: `404 ticket_invalid`, `403 ticket_wrong_instance`, `409 not_ready` (`retry: true`), `410 ticket_expired` / `import_failed`; `503 velora_not_registered` / `velora_off` when the instance cannot reach the relays.
 
 ### 12.12 `POST /bonfire/relay/wake`
 
-`{ user_ids: [velora user id, ...] }` (at most 200): people signed up for wake pings (§7.2) have something new on this instance. Velora checks each person has this instance in their list (muted ones too: a ping is not a notification) and sends `{ "type": "instance_wake", "instance": "<instance origin>" }` to their open Velora sockets; clients mark the instance unread. Nothing is stored, pushed or emailed. Answers `{ ok, delivered, delivered_ids }`: the instance treats only `delivered_ids` as pinged, so someone whose client couldn't be reached gets the next message's ping.
+`{ user_ids: [nookara user id, ...] }` (at most 200): people signed up for wake pings (§7.2) have something new on this instance. Nookara checks each person has this instance in their list (muted ones too: a ping is not a notification) and sends `{ "type": "instance_wake", "instance": "<instance origin>" }` to their open Nookara sockets; clients mark the instance unread. Nothing is stored, pushed or emailed. Answers `{ ok, delivered, delivered_ids }`: the instance treats only `delivered_ids` as pinged, so someone whose client couldn't be reached gets the next message's ping.
 
 ### 12.13 `POST /bonfire/relay/notice`
 
-`{ user_id, kind: "profile_reset", community_name }`: something this instance did to a person that they should hear about. Velora writes the wording itself (an instance can't put its own text in someone's inbox) and adds it to their notification inbox, for people who have this instance in their list. Answers `{ ok, delivered }`.
+`{ user_id, kind: "profile_reset", community_name }`: something this instance did to a person that they should hear about. Nookara writes the wording itself (an instance can't put its own text in someone's inbox) and adds it to their notification inbox, for people who have this instance in their list. Answers `{ ok, delivered }`.
 
 ## 13. Webhooks
 
@@ -817,7 +821,7 @@ A bot is an instance-local account (principal `b:<n>`, BOT tag, no login, no DMs
 
 **Token:** `base64url(<n>) + "." + 40 random base64url chars`, shown once, stored as sha256. Used as `Authorization: Bot <token>`.
 
-**REST** is Discord's dialect at `INSTANCE/bot/v1/...` (Velora serves it at `/chat/api/v1`): `GET /bot/discovery` (`{ api_code_version, endpoints: { api, api_public, api_client, gateway } }`), `GET /bot/v1/gateway`, and with a token `GET /gateway/bot`, `/users/@me`, `/users/@me/guilds`, `DELETE /users/@me/guilds/:gid`, `/users/:uid`, `/guilds/:gid` (+ `/roles`, `/channels`, `/members`, `/members/:uid`), `/channels/:cid` (+ `POST /typing`), `GET/POST /channels/:cid/messages`, `GET/PATCH/DELETE /channels/:cid/messages/:mid`, `PUT/DELETE /channels/:cid/messages/:mid/reactions/:emoji/@me`, `PUT/DELETE /channels/:cid/pins/:mid`. Ids are numbers (guild = community row id, channel / message / user = row ids, role = 1000000000 + row id, `@everyone` = the guild id). Message bodies take `content`, `embeds`, `message_reference`, `allowed_mentions`, multipart `payload_json` + files. A bot posts as a member: it needs Send in the channel and obeys locked / no-chat channels. Rate limit **150 requests / 10 s per bot** (`429`). Errors are `{ message, code }`.
+**REST** is Discord's dialect at `INSTANCE/bot/v1/...` (Nookara serves it at `/chat/api/v1`): `GET /bot/discovery` (`{ api_code_version, endpoints: { api, api_public, api_client, gateway } }`), `GET /bot/v1/gateway`, and with a token `GET /gateway/bot`, `/users/@me`, `/users/@me/guilds`, `DELETE /users/@me/guilds/:gid`, `/users/:uid`, `/guilds/:gid` (+ `/roles`, `/channels`, `/members`, `/members/:uid`), `/channels/:cid` (+ `POST /typing`), `GET/POST /channels/:cid/messages`, `GET/PATCH/DELETE /channels/:cid/messages/:mid`, `PUT/DELETE /channels/:cid/messages/:mid/reactions/:emoji/@me`, `PUT/DELETE /channels/:cid/pins/:mid`. Ids are numbers (guild = community row id, channel / message / user = row ids, role = 1000000000 + row id, `@everyone` = the guild id). Message bodies take `content`, `embeds`, `message_reference`, `allowed_mentions`, multipart `payload_json` + files. A bot posts as a member: it needs Send in the channel and obeys locked / no-chat channels. Rate limit **150 requests / 10 s per bot** (`429`). Errors are `{ message, code }`.
 
 **Aliases:** a bot may post a message under another name and picture. `POST /channels/:cid/messages` (and interaction replies / followups) take an optional `alias: { name, avatar_url? }`: `name` is trimmed and cleaned like a display name and must be 1-32 characters on one line; `avatar_url` is optional, `https://` only, at most 500 characters (no credentials), stored as given and loaded by clients like webhook avatars (the instance does not proxy it). Bad input is `400 invalid_alias` (`message` says which field). `PATCH /channels/:cid/messages/:mid` with `alias` replaces it, `alias: null` clears it, leaving it out keeps it. Every message object (bot REST and gateway `MESSAGE_CREATE / UPDATE`, `referenced_message`, and the client API's history, search, pins, `chat_message` / `chat_message_update`, `reply`) carries `alias: { name, avatar_url, unmarked, member_id?, member? } | null` next to the unchanged real `author`. Mentions, notifications, blocks, moderation, reports and the audit log all use the real author; clients show the alias with a mask icon that names the real bot. Only bots may set one: a person sending `alias` (REST post / edit, gateway `chat_send`) gets `403 alias_bots_only`. Webhooks keep their own `username` / `avatar_url` overrides (§13), which are separate.
 
@@ -839,8 +843,8 @@ A bot is an instance-local account (principal `b:<n>`, BOT tag, no login, no DMs
 
 This gateway does not support IDENTIFY presence or UPDATE_PRESENCE (`op 3`); supplied `idle`, `dnd`, `invisible`, or `offline` statuses are ignored, as before. A live READY connection remains online. There is no invisible mode. Generic `userView` / profile and Discord-shaped Bot REST user/member objects do not expose human presence and remain unchanged; bot presence is exposed in the community member view, not globally to non-members.
 
-### 14.1 Bot gallery (Velora Discovery > Bots)
-Velora lists reviewed bots (`VELORA/bonfire/bots/gallery`, see Velora's BOT-GALLERY.md). A manager adds a listed bot with a **ticket**: the client asks `POST VELORA/bonfire/bots/gallery/:id/ticket { instance }` (bearer + CHAT) and sends it to `POST INSTANCE/api/v1/bots/gallery/add { ticket, sid }` (needs Manage server). The ticket is an EdDSA JWS (`typ: bonfire-botadd+jwt`) signed with Velora's IdP key; claims `{ iss, aud: <public_url>, sub: <Velora id>, iat, exp (5 min), jti, test, verified, token_hash, bot: { id, username, description, avatar_url } }`. The instance verifies it offline (as receipts, §12.5: signature, `iss`, `aud`, `sub` = the caller's `velora_id`, `exp`, single use by `jti`), creates a normal bot (principal `b:<n>`) with `bots.gallery_id`, stores `token_hash` as its token hash (the developer's own Velora token then authenticates on this instance) and adds it to the community. Errors: `gallery_needs_velora_account`, `ticket_invalid | ticket_unknown_kid | ticket_bad_signature | ticket_wrong_issuer | ticket_wrong_audience | ticket_wrong_user | ticket_expired | ticket_used`, `token_conflict`, `already_in_server`, `banned_from_server`. Gallery bots carry `verified` (bot views, `userView`, bot API user objects) and `gallery: { id, test }`; they are managed by Velora (`403 gallery_bot_managed` on rename / avatar / token reset). `POST VELORA/bonfire/relay/bots/sync { bots: [ { id, test } ] }` (signed, §12.2) runs every 10 minutes and after an add: per bot `{ id, status: ok | revoked | unknown, verified, token_hash, username, description, avatar_url, trusted_in }`; `ok` refreshes the copy, `revoked` / `unknown` remove the bot, and Velora counts installs from these reports ("trusted in N servers").
+### 14.1 Bot gallery (Nookara Discovery > Bots)
+Nookara lists reviewed bots (`NOOKARA/bonfire/bots/gallery`, see Nookara's BOT-GALLERY.md). A manager adds a listed bot with a **ticket**: the client asks `POST NOOKARA/bonfire/bots/gallery/:id/ticket { instance }` (bearer + CHAT) and sends it to `POST INSTANCE/api/v1/bots/gallery/add { ticket, sid }` (needs Manage server). The ticket is an EdDSA JWS (`typ: bonfire-botadd+jwt`) signed with Nookara's IdP key; claims `{ iss, aud: <public_url>, sub: <Nookara id>, iat, exp (5 min), jti, test, verified, token_hash, bot: { id, username, description, avatar_url } }`. The instance verifies it offline (as receipts, §12.5: signature, `iss`, `aud`, `sub` = the caller's `velora_id`, `exp`, single use by `jti`), creates a normal bot (principal `b:<n>`) with `bots.gallery_id`, stores `token_hash` as its token hash (the developer's own Nookara token then authenticates on this instance) and adds it to the community. Errors: `gallery_needs_velora_account`, `ticket_invalid | ticket_unknown_kid | ticket_bad_signature | ticket_wrong_issuer | ticket_wrong_audience | ticket_wrong_user | ticket_expired | ticket_used`, `token_conflict`, `already_in_server`, `banned_from_server`. Gallery bots carry `verified` (bot views, `userView`, bot API user objects) and `gallery: { id, test }`; they are managed by Nookara (`403 gallery_bot_managed` on rename / avatar / token reset). `POST NOOKARA/bonfire/relay/bots/sync { bots: [ { id, test } ] }` (signed, §12.2) runs every 10 minutes and after an add: per bot `{ id, status: ok | revoked | unknown, verified, token_hash, username, description, avatar_url, trusted_in }`; `ok` refreshes the copy, `revoked` / `unknown` remove the bot, and Nookara counts installs from these reports ("trusted in N servers").
 
 ### 14.2 Slash commands, context menus and interactions
 
@@ -881,7 +885,7 @@ The client's "watch without YouTube" player. It needs a **yt-dlp** binary on the
 | `POST /yt/:id/save { title }` | session + `media` scope | fetches if needed (poll again); then `{ status: "saved", id, attachment: { url, type: "video", name, size, sha256 } }`, a regular upload in `/uploads/` (subject to `allow_uploads` and the size limit) |
 | `GET /yt/stream/:id?e=&s=[&dl=1]` | HMAC link | the video, `Range` supported; `403 link_expired` for a bad / expired / mismatched signature, `404 not_ready` |
 
-`:id` must match `[A-Za-z0-9_-]{11}` (`400 bad_video`), and yt-dlp is spawned with an argument array, never through a shell. `src` / `download` are absolute URLs on the instance, signed with an HMAC (`sha256(secret, id.expires.dl)`, secret per process, 6 h validity, a stream link cannot be turned into a download). Videos are capped at 2 h / 720p / 900 MB, at most 2 downloads run at once, files are kept 24 h after the last watch, and the cache is trimmed oldest-first to `cache_max_gb`. Unlike Velora there are no account tiers: every signed-in member gets the download link.
+`:id` must match `[A-Za-z0-9_-]{11}` (`400 bad_video`), and yt-dlp is spawned with an argument array, never through a shell. `src` / `download` are absolute URLs on the instance, signed with an HMAC (`sha256(secret, id.expires.dl)`, secret per process, 6 h validity, a stream link cannot be turned into a download). Videos are capped at 2 h / 720p / 900 MB, at most 2 downloads run at once, files are kept 24 h after the last watch, and the cache is trimmed oldest-first to `cache_max_gb`. Unlike Nookara there are no account tiers: every signed-in member gets the download link.
 
 ## 16. Bridges: Discord, Fluxer and Matrix
 
@@ -894,9 +898,9 @@ The instance owner connects **their own bot** for each platform (Discord, Fluxer
 | `GET /api/v1/bridge/settings` | `{ bridges: { discord: B, fluxer: B } }`, `B = { configured, token: "********WXYZ" \| null, source: "settings" \| "env" \| null, state: "off" \| "connecting" \| "ready" \| "waiting" \| "error" \| "stopped", error, bot: { id, username } \| null }`. The token is **write-only**: only its last 4 characters are shown |
 | `PATCH /api/v1/bridge/settings` `{ discord?: { token }, fluxer?: { token } }` | a non-empty token is checked with `GET /users/@me` first (`400 invalid_token { platform }`, `502 platform_unreachable`), saved, and the gateway (re)connects; `""` keeps the stored token, `null` removes it. Same response as GET |
 
-Env fallbacks: `BONFIRE_DISCORD_TOKEN`, `BONFIRE_FLUXER_TOKEN` (used when the setting is empty). Discovery shows `features.bridges = { discord, fluxer, matrix, cloudlink: true }` (configured or not; `matrix` is missing on servers older than the Matrix bridge, 16.5).
+Env fallbacks: `EMBER_DISCORD_TOKEN`, `EMBER_FLUXER_TOKEN` (used when the setting is empty). Discovery shows `features.bridges = { discord, fluxer, matrix, cloudlink: true }` (configured or not; `matrix` is missing on servers older than the Matrix bridge, 16.5).
 
-**Community routes** (same paths and shapes as Velora's `/chat/bridge/*`; all need **Manage server** in the community; there is no linked-account check, since it is the owner's bot):
+**Community routes** (same paths and shapes as Nookara's `/chat/bridge/*`; all need **Manage server** in the community; there is no linked-account check, since it is the owner's bot):
 
 | route | result |
 |---|---|
@@ -929,15 +933,15 @@ A voice channel linked to a Discord voice / stage channel carries **voice only**
 - **Discord → here:** each Discord person gets their own participant (a server-side publisher with one `audio` track) once the bot is in; their Opus packets are forwarded as they are, so each has their own speaking ring and volume. **Here → Discord:** a hidden server-side listener (never in `people`) subscribes to everyone with an account, decodes, mixes (60 ms jitter buffer per person, soft limiter), encodes once and the bot plays it. Bridged people are never sent back, so nothing loops.
 - The soundboard is not carried to Discord (clients play it locally).
 
-Not ported from Velora: importing a Discord / Fluxer server through the bot (`/bridge/:platform/guilds/:gid[/import]`) — use Velora's import bundles (§12.6).
+Not ported from Nookara: importing a Discord / Fluxer server through the bot (`/bridge/:platform/guilds/:gid[/import]`) — use Nookara's import bundles (§12.6).
 
 ### 16.5 Matrix
 
 The instance owner connects **their own bot**: an ordinary Matrix account on any homeserver (`src/bridge/matrix.js`). There is no application service, so nothing is installed on the homeserver and it works on homeservers the owner doesn't run. It uses the same routes, tables and message hooks as the Discord / Fluxer bridge, with platform id `matrix`.
 
-**Settings.** `GET /api/v1/bridge/settings` also answers `bridges.matrix = { configured, token: "********WXYZ" | null, homeserver: "https://..." | null, source, state: "off" | "connecting" | "ready" | "waiting" | "error" | "stopped", error, bot: { id, username } | null }` (`id` and `username` are both the bot's Matrix id, `@name:server`). `PATCH /api/v1/bridge/settings { matrix: { homeserver?, token? } }`: an empty or missing field keeps the stored value, `token: null` removes the bot (address, token and its place in the stream). Before anything is saved the pair is checked with `GET /_matrix/client/v3/account/whoami`: `400 invalid_token { platform: "matrix" }`, `400 invalid_homeserver { platform: "matrix" }`, `502 platform_unreachable`. Env fallbacks: `BONFIRE_MATRIX_HOMESERVER`, `BONFIRE_MATRIX_TOKEN`.
+**Settings.** `GET /api/v1/bridge/settings` also answers `bridges.matrix = { configured, token: "********WXYZ" | null, homeserver: "https://..." | null, source, state: "off" | "connecting" | "ready" | "waiting" | "error" | "stopped", error, bot: { id, username } | null }` (`id` and `username` are both the bot's Matrix id, `@name:server`). `PATCH /api/v1/bridge/settings { matrix: { homeserver?, token? } }`: an empty or missing field keeps the stored value, `token: null` removes the bot (address, token and its place in the stream). Before anything is saved the pair is checked with `GET /_matrix/client/v3/account/whoami`: `400 invalid_token { platform: "matrix" }`, `400 invalid_homeserver { platform: "matrix" }`, `502 platform_unreachable`. Env fallbacks: `EMBER_MATRIX_HOMESERVER`, `EMBER_MATRIX_TOKEN`.
 
-**The homeserver address** is typed by an admin, so it is treated like any user-supplied address: `https` only, no `user:pass@`, no query, and never a private, loopback or link-local address. The name is resolved by the instance on every connection and the connection is refused if any address it resolves to is private (the same rule as link previews, 6.3). A typed server name is looked up once at `/.well-known/matrix/client` and its `m.homeserver.base_url` is used when there is one. `BONFIRE_DEV=1` allows `http` and local addresses (development only).
+**The homeserver address** is typed by an admin, so it is treated like any user-supplied address: `https` only, no `user:pass@`, no query, and never a private, loopback or link-local address. The name is resolved by the instance on every connection and the connection is refused if any address it resolves to is private (the same rule as link previews, 6.3). A typed server name is looked up once at `/.well-known/matrix/client` and its `m.homeserver.base_url` is used when there is one. `EMBER_DEV=1` allows `http` and local addresses (development only).
 
 **Rooms.** The bot accepts every invite. Matrix has no servers to pick from, so `GET /bridge/matrix/guilds` answers one entry, `{ id: "rooms", name: "Rooms @bot:server is in" }`, and `PUT /bridge/servers/:sid { platform: "matrix", guild_id: "rooms" }` links the community to it (`guild_name` = the bot's id). In `GET /bridge/servers/:sid` its `ext_channels` are the rooms the bot is in (at most 300): `{ id: "<room id>", name: <room name, else its canonical alias, else its id>, category: "", kind: "text", encrypted?: true }`. `GET /bridge/platforms` lists `{ id: "matrix", name: "Matrix", ready, bot: "@bot:server", invite: null, linked: true, rooms: true }` (`rooms: true` = there is no add-to-server link: the bot is invited to a room like a person). A channel is linked with `PUT /bridge/servers/:sid/channels/:cid { platform: "matrix", ext_channel_id: "<room id>" }`: text channels only (`text_channels_only`), a room the bot is in (`channel_not_found`), not already linked (`already_linked`), and **not encrypted** (`room_encrypted`: the bot holds no keys, so it could neither read nor be read there). A link has no webhook (`hook: false`).
 
@@ -966,7 +970,7 @@ Who is typing is carried both ways on every linked text channel (Discord, Fluxer
 
 ### 16.7 A Matrix space as the community
 
-The Discord / Fluxer import (§12.6) is done by Velora with its own bot. Matrix has no such bot, so the instance does it itself (`src/bridge/matrix-import.js`) with a Matrix account the admin brings: the same kind of bot as §16.5, and the same rules for the homeserver address. Instance admins only, and only while the instance has no community (`403 not_allowed` / `forbidden`, `409 community_exists`). These routes are **not** behind the bridges plan: copying a space is not a bridge.
+The Discord / Fluxer import (§12.6) is done by Nookara with its own bot. Matrix has no such bot, so the instance does it itself (`src/bridge/matrix-import.js`) with a Matrix account the admin brings: the same kind of bot as §16.5, and the same rules for the homeserver address. Instance admins only, and only while the instance has no community (`403 not_allowed` / `forbidden`, `409 community_exists`). These routes are **not** behind the bridges plan: copying a space is not a bridge.
 
 | Route | Answer |
 |---|---|
@@ -989,7 +993,7 @@ The Discord / Fluxer import (§12.6) is done by Velora with its own bot. Matrix 
 
 A `logs` channel can join a **CloudLink 4** chat instead of being a webhook channel: `config = { mode: "cloudlink", url, room, username }` (Manage channels).
 
-- `url`: `ws:` / `wss:` only, no credentials, ports 80 / 443 only (`cl_bad_url`, `cl_bad_port`); empty = `wss://ikelene.net/cl/` (the official server). Refused (`cl_private_address`): `localhost`, `*.localhost`, `*.local`, `*.internal`, `*.lan`, `*.home.arpa`, numeric host spellings, and any private / loopback / link-local / metadata / reserved address (the same rules as link previews, §6.3, IPv4 and IPv6). The host is resolved again on **every connect** with a lookup that refuses the connection when *any* address is private, so DNS rebinding cannot reach the LAN. `BONFIRE_DEV=1` lifts the address and port rules (development only).
+- `url`: `ws:` / `wss:` only, no credentials, ports 80 / 443 only (`cl_bad_url`, `cl_bad_port`); empty = `wss://ikelene.net/cl/` (the official server). Refused (`cl_private_address`): `localhost`, `*.localhost`, `*.local`, `*.internal`, `*.lan`, `*.home.arpa`, numeric host spellings, and any private / loopback / link-local / metadata / reserved address (the same rules as link previews, §6.3, IPv4 and IPv6). The host is resolved again on **every connect** with a lookup that refuses the connection when *any* address is private, so DNS rebinding cannot reach the LAN. `EMBER_DEV=1` lifts the address and port rules (development only).
 - `room` ≤ 60 chars (empty = the main chat), `username` ≤ 40 (no `:`). With a room and no username the bridge uses `Ember`.
 - At most **3** CloudLink channels per community (`too_many_cloudlink_bridges`). The view adds `official: true` for the official URL.
 - Posting: unlike plain logs channels, a CloudLink channel is a chat — members with Send post (unless it is locked, then Manage messages).
@@ -1010,7 +1014,7 @@ The `game` channel type links a Minecraft server ("Ember Link" plugin / mod) to 
 1. The server owner runs `bonfire server https://chat.example.com` in the server console. The plugin stores the URL and connects to `wss://chat.example.com/game-gateway?v=1` (`http://` → `ws://`).
 2. Once identified, an unlinked server shows up in the instance's **Connected game servers** list (`GET /api/v1/game/connected`, Manage server) — with its MOTD, icon, version, player count and **pairing tag** (printed in its console on startup, so the admin can tell servers apart).
 3. A community admin creates a game channel (it starts "not set up", visible only to managers) and **picks the server from the list** (`POST /api/v1/game/connected/:iid/link { cid }`). The channel gets the server; the admin picks the purpose (info / console / chat).
-4. Alternative (Velora's flow, kept): a claim code. `POST /api/v1/game/claims { sid, cid? }` → `{ code: "XXXX-XXXX", command: "bonfire link XXXX-XXXX", expires_at }` (10 minutes, 10 per hour per user); running the command in the console links the server whose console ran it.
+4. Alternative (Nookara's flow, kept): a claim code. `POST /api/v1/game/claims { sid, cid? }` → `{ code: "XXXX-XXXX", command: "bonfire link XXXX-XXXX", expires_at }` (10 minutes, 10 per hour per user); running the command in the console links the server whose console ran it.
 
 ### 18.2 Gateway frames
 Every frame is a JSON text frame `{ "op": "<name>", "d": { … }, "id"?: <n> }`, at most 64 KB (bigger closes with 1009; binary closes 4001).
@@ -1033,7 +1037,7 @@ Every frame is a JSON text frame `{ "op": "<name>", "d": { … }, "id"?: <n> }`,
 | game → server | `link` `{ code }` (with `id`) | answered `link_result { ok, server_name? , error?: invalid_code\|expired\|not_allowed\|already_linked\|too_many_instances\|rate_limited }` (5 per 10 min) |
 | server → game | `linked` | `{ server_name, sid, linked_by }` (after a code or an admin's pick) |
 | game → server | `unlink` | `bonfire unlink confirm` in the console |
-| server → game | `unlinked` | `{ by: bonfire\|console, username }` |
+| server → game | `unlinked` | `{ by: ember\|console, username }` |
 | server → game | `error` | `{ code: rate_limited\|not_linked\|bad_op, message, fatal: false }` |
 
 **Skins.** `skin` (optional, on `chat` and `event`) is the player's skin texture URL from their profile, `https://textures.minecraft.net/texture/<hex>` and nothing else (anything else is ignored). With sharp installed the instance downloads that one texture (4 s, 256 KB, once per texture), cuts out face + hat, enlarges it to 64×64 and serves it as `/uploads/game-heads/<hex>.png`; that is the message's avatar. It is what makes heads work on offline-mode servers, where mc-heads.net can't find the skin. Without `skin` (an older mod) the instance asks Mojang's session server for the skin of a real (v4) UUID once per 10 minutes and renders that the same way. Without sharp, or when both fail, the avatar is `https://mc-heads.net/avatar/<uuid or name>/64` as below. Frames are posted in order even while a texture downloads.
@@ -1042,7 +1046,7 @@ A **segment** is `{ text, color?: "#rrggbb", b?, i?, u?, s?, code?, link?: https
 
 **Identity (trust on first use).** `iid = "g" + first 16 hex of sha256(SPKI DER)`; pairing tag = the top 30 bits of sha256 bytes 8–11 as 6 Crockford characters shown `XXX-XXX`. The first identify with a key creates the identity; later ones must sign with the same key (the iid is derived from it). One session per iid: a newer one closes the older with 4006.
 
-**Limits.** 10 open sockets per address; a token bucket of 30 frames / s (burst 60): excess frames are dropped (one `error rate_limited` per 5 s) and **10 s** of sustained excess closes the socket (4005). New identities: **5 per address per day**, 200 per hour on the instance (4008). Addresses are only kept as salted hashes (`BONFIRE_TRUST_PROXY=1` takes `X-Forwarded-For`).
+**Limits.** 10 open sockets per address; a token bucket of 30 frames / s (burst 60): excess frames are dropped (one `error rate_limited` per 5 s) and **10 s** of sustained excess closes the socket (4005). New identities: **5 per address per day**, 200 per hour on the instance (4008). Addresses are only kept as salted hashes (`EMBER_TRUST_PROXY=1` takes `X-Forwarded-For`).
 
 **Close codes:** 4000 server error, 4001 malformed / identify first / binary, 4002 identify timeout, 4003 bad key / signature, 4004 banned, 4005 rate limited, 4006 replaced by a newer session, 4007 unsupported protocol version, 4008 too many connections / new servers from this address, 1001 instance shutting down.
 
@@ -1055,7 +1059,7 @@ The connected list only shows sessions that are identified, unlinked, not banned
 - **Posting**: only `chat` channels take messages (Send, like a text channel). Their messages go to the game (`chat` frame); the game's `chat` / `event` frames are posted with `postBridged` as `{ bridge: "minecraft", username: display name, pfp: https://mc-heads.net/avatar/<uuid or name>/64, bridge_from: the Velocity backend (when show_server_tag) }`; events carry `sys_kind` `mc_join`, `mc_leave`, `mc_death`, `mc_adv`, `mc_switch`, `mc_start`, `mc_stop` and respect the channel's `events` switches. Nothing from the game pings (`@` gets a zero-width space). Unlinking posts a system line (`mc_unlink`).
 - A community links at most 10 servers (`too_many_instances`).
 
-### 18.4 REST (`/api/v1/game/*`, same shapes as Velora's `/chat/game/*`; `sid` may be omitted where it is a query / body field, the instance has one community)
+### 18.4 REST (`/api/v1/game/*`, same shapes as Nookara's `/chat/game/*`; `sid` may be omitted where it is a query / body field, the instance has one community)
 
 | route | who | result |
 |---|---|---|
@@ -1077,13 +1081,13 @@ An **instance** object is `{ iid, platform, software, mc_version, mod_version, n
 
 **Retention**: unlinked identities not seen for **30 days** (and not connected) are deleted hourly, with icons nobody uses; audit entries are kept a year. Discovery shows `features.minecraft: true`.
 
-**The plugin side** (Ember Link 0.2.0+, `minecraft-mod/`): `bonfire server <url>` stores the instance as `server=` in `config.properties` and connects to `<ws(s) of url>/game-gateway?v=1` (a path prefix is kept, `bonfire server velora` goes back to `wss://velora.ikelene.net/chat/game-gateway`); everything else (frames, identity, claim codes, `bonfire link` / `bonfire unlink confirm`) is unchanged. It prints the pairing tag and the instance it is connected to, and "waiting for an admin to pick this server" while unlinked.
+**The plugin side** (Ember Link 0.2.0+, `minecraft-mod/`): `bonfire server <url>` stores the instance as `server=` in `config.properties` and connects to `<ws(s) of url>/game-gateway?v=1` (a path prefix is kept, `bonfire server nookara` goes back to `wss://velora.ikelene.net/chat/game-gateway`); everything else (frames, identity, claim codes, `bonfire link` / `bonfire unlink confirm`) is unchanged. It prints the pairing tag and the instance it is connected to, and "waiting for an admin to pick this server" while unlinked.
 
 ---
 
-## 19. Velora-hosted instances
+## 19. Nookara-hosted instances
 
-Velora can run an Ember instance for someone: a `bonfire-server` container behind `https://<slug>-bonfire.ikelene.net`, started by **bonfire-hostd** (`bonfire-hostd/`, the Docker host agent) when the owner creates a server from Ember. The instance is an ordinary instance (Velora accounts, registered with Velora, one community) that was started in **managed mode**. Everything on this page is optional for self-hosters: without `BONFIRE_MANAGED=1` and `BONFIRE_READ_ONLY=1` nothing changes.
+Nookara can run an Ember instance for someone: a `bonfire-server` container behind `https://<slug>-bonfire.ikelene.net`, started by **bonfire-hostd** (`bonfire-hostd/`, the Docker host agent) when the owner creates a server from Ember. The instance is an ordinary instance (Nookara accounts, registered with Nookara, one community) that was started in **managed mode**. Everything on this page is optional for self-hosters: without `EMBER_MANAGED=1` and `EMBER_READ_ONLY=1` nothing changes.
 
 ### 19.1 Plans
 
@@ -1095,25 +1099,25 @@ Velora can run an Ember instance for someone: a `bonfire-server` container behin
 | upload size | 10 MB | 250 MB |
 | emojis / soundboard sounds / bots | 50 / 10 / 2 | unlimited |
 | Discord / Fluxer / CloudLink bridges | no | yes |
-| own Cloudflare voice keys | no (always Velora's broker) | yes |
+| own Cloudflare voice keys | no (always Nookara's broker) | yes |
 | files each member keeps / upload expiry / total upload storage | 500 / never / 2048 MB | unlimited |
 
-`plus` costs what Velora Pro costs with credits **per week** (`CREDIT_TIER_WEEK_COST.pro`, 50 credits). It never renews by itself (§19.8). All numbers are env-overridable on Velora (`BONFIRE_PLAN_<PLAN>_<FIELD>`, e.g. `BONFIRE_PLAN_PLUS_PRICE_CREDITS`) and editable by staff. Voice caps: a hosted instance gets its plan's number, a self-hosted untrusted one the starter number, a trusted one none, and the staff `voice_cap_override` always wins.
+`plus` costs what Nookara Pro costs with credits **per week** (`CREDIT_TIER_WEEK_COST.pro`, 50 credits). It never renews by itself (§19.8). All numbers are env-overridable on Nookara (`EMBER_PLAN_<PLAN>_<FIELD>`, e.g. `BONFIRE_PLAN_PLUS_PRICE_CREDITS`) and editable by staff. Voice caps: a hosted instance gets its plan's number, a self-hosted untrusted one the starter number, a trusted one none, and the staff `voice_cap_override` always wins.
 
-`GET VELORA/bonfire/hosting/plans` (public) -> `{ plans: [ { id, name, price_credits, period: "week" | null, limits: { member_cap, voice_minutes, max_upload_mb, emojis, sounds, bots, bridges, custom_voice_keys, files_per_member, upload_expiry_days, storage_mb } } ], available, domain, host_template, url_template, starter_limit_per_account }`. `null` = unlimited; `period` is `null` for the free plan.
+`GET NOOKARA/bonfire/hosting/plans` (public) -> `{ plans: [ { id, name, price_credits, period: "week" | null, limits: { member_cap, voice_minutes, max_upload_mb, emojis, sounds, bots, bridges, custom_voice_keys, files_per_member, upload_expiry_days, storage_mb } } ], available, domain, host_template, url_template, starter_limit_per_account }`. `null` = unlimited; `period` is `null` for the free plan.
 
-### 19.2 Managed mode (`BONFIRE_MANAGED=1`)
+### 19.2 Managed mode (`EMBER_MANAGED=1`)
 
-The host sets `BONFIRE_MANAGED=1`, `BONFIRE_PLAN` and `BONFIRE_LIMITS` (JSON of `member_cap`, `max_upload_mb`, `emojis`, `sounds`, `bots`, `bridges`, `custom_voice_keys`; a missing key falls back to the plan's number, `null` = unlimited), plus `BONFIRE_OWNER=v:<id>`, `BONFIRE_ACCOUNTS_MODE=velora`, `BONFIRE_PUBLIC_URL` and `BONFIRE_VELORA_URL`. The instance then enforces:
+The host sets `EMBER_MANAGED=1`, `EMBER_PLAN` and `EMBER_LIMITS` (JSON of `member_cap`, `max_upload_mb`, `emojis`, `sounds`, `bots`, `bridges`, `custom_voice_keys`; a missing key falls back to the plan's number, `null` = unlimited), plus `EMBER_OWNER=v:<id>`, `EMBER_ACCOUNTS_MODE=nookara`, `EMBER_PUBLIC_URL` and `EMBER_NOOKARA_URL`. The instance then enforces:
 
 - **Member cap.** Joining (`POST /servers/:sid/join`, `POST /join/:code`, a join request, accepting one) past `member_cap` retains the compatibility code: `403 { error: "member_cap_reached", cap, what: "member_cap", limit: cap, used: <human count>, plan: <name> }`. A zero allowance returns `plan_feature`. The community owner and instance admins are never blocked; bots are not counted. `GET /servers/:sid` (and every server object) has `member_cap` (`null` when none).
 - **Uploads.** `max_upload_mb` and the community's `upload_max_mb` are capped at the plan's number (a larger setting is accepted and reported as the cap). When the plan is the effective size cap, oversized uploads/imports return `403 { error: "plan_limit", what: "max_upload_mb", limit: <MB>, used: null, plan: <name> }`; zero disables uploads with `plan_feature`. A smaller community/role cap still returns `413 file_too_large`. Image, sound and backup format/safety size limits remain independent of the plan.
 - **Counts.** Creating an emoji / soundboard sound / bot past its positive allowance returns `403 { error: "plan_limit", what: "emojis" | "sounds" | "bots", limit: <number>, used: <current count>, plan: <name> }`. Zero allowance returns `plan_feature`. The matching lists report the plan's `max`; the bot list additionally reports `used`, including gallery bots. Bot usage counts only current community members, never retained accounts/history. Adding an existing bot (including gallery re-add) also checks the allowance.
 - **Bridges** off: every `/api/v1/bridge/*` route and CloudLink channel settings answer `403 plan_feature` with `what: "bridges"`, `features.bridges` is `false`, and no bridge connects.
-- **Custom voice keys** off: a `PATCH /api/v1/instance/settings` that sets any non-empty `voice` value -> `403 { error: "plan_feature", what: "custom_voice_keys", limit: 0, plan: <name>, message: <sentence> }` (clearing is fine); saved keys are ignored, voice always goes through Velora's broker (§12.7).
-- **Locked settings.** `accounts_mode` (always `velora`), `public_url`, `velora_url`, `velora_registration` (always `auto`): a PATCH that changes one -> `403 { error: "managed_setting", setting }`. Sending the current value is accepted, so an admin form can send everything back. Restart stays allowed.
+- **Custom voice keys** off: a `PATCH /api/v1/instance/settings` that sets any non-empty `voice` value -> `403 { error: "plan_feature", what: "custom_voice_keys", limit: 0, plan: <name>, message: <sentence> }` (clearing is fine); saved keys are ignored, voice always goes through Nookara's broker (§12.7).
+- **Locked settings.** `accounts_mode` (always `velora`), `public_url`, `nookara_url`, `nookara_registration` (always `auto`): a PATCH that changes one -> `403 { error: "managed_setting", setting }`. Sending the current value is accepted, so an admin form can send everything back. Restart stays allowed.
 
-`GET /.well-known/bonfire` and `GET /api/v1/instance/settings` carry `"managed": { "plan": "starter", "limits": { … }, "host": "velora" }` (`null` on a normal instance).
+`GET /.well-known/ember` and `GET /api/v1/instance/settings` carry `"managed": { "plan": "starter", "limits": { … }, "host": "velora" }` (`null` on a normal instance).
 
 Plan restriction responses use stable machine-readable keys. A feature wholly absent from the plan returns HTTP 403:
 
@@ -1151,7 +1155,7 @@ Admin `GET /api/v1/instance/info` and admin `GET`/`PATCH /api/v1/instance/settin
       "uploads": true,
       "backups": true,
       "game_servers": true,
-      "bonfire_link": true,
+      "ember_link": true,
       "webhooks": true
     }
   }
@@ -1162,17 +1166,17 @@ Admin `GET /api/v1/instance/info` and admin `GET`/`PATCH /api/v1/instance/settin
 
 On kick, ban or leave, human gateways receive `chat_server_removed` and lose the community subscription; typing is cleared with `chat_typing { typing: false }`. RTC participants receive `chat_rtc_left { room, reason: "membership_removed" }`, and their voice/RTC state and upstream sessions are removed. Bots receive `GUILD_DELETE { id, unavailable: false }`; when no memberships remain all their `/bot/gateway` sockets close with `4003`, reason `community membership removed: <left|kicked|banned>`, and presence becomes offline. Token reset/rotation uses `4004`. Deletion and gallery revocation use the same membership cleanup before closing any remaining sockets.
 
-Kicked/banned/left gallery bots retain their account/history with `gallery_active = 0`; their token cannot authenticate. A fresh add-ticket reactivates the existing row after bans and plan capacity are checked. Removal schedules a debounced report (normally 3 seconds) to the existing `POST /bonfire/relay/bots/sync`, including an empty `bots` list when the final install is removed. An in-flight reply cannot reactivate a removed bot, and a removal during sync queues another report. Velora must treat that list as the authoritative installed set for the reporting instance and delete/mark removed any absent install rows, then recompute counts. No new relay endpoint is required. If Velora only upserts submitted rows, that reconciliation is the needed Velora-side change. Failed/offline reporting retries on the existing periodic sync.
+Kicked/banned/left gallery bots retain their account/history with `gallery_active = 0`; their token cannot authenticate. A fresh add-ticket reactivates the existing row after bans and plan capacity are checked. Removal schedules a debounced report (normally 3 seconds) to the existing `POST /bonfire/relay/bots/sync`, including an empty `bots` list when the final install is removed. An in-flight reply cannot reactivate a removed bot, and a removal during sync queues another report. Nookara must treat that list as the authoritative installed set for the reporting instance and delete/mark removed any absent install rows, then recompute counts. No new relay endpoint is required. If Nookara only upserts submitted rows, that reconciliation is the needed Nookara-side change. Failed/offline reporting retries on the existing periodic sync.
 
-### 19.3 Read-only mode (`BONFIRE_READ_ONLY=1`)
+### 19.3 Read-only mode (`EMBER_READ_ONLY=1`)
 
 The host switches it on when a hosted server's paid time is over (§19.8). Every write is refused with `403 { error: "read_only" }`: posting (also through the gateway, bots, webhooks, bridges and Ember Link), editing, reactions, joins, uploads, settings, channels, roles, invites, emojis, bots, webhooks, and joining a voice room. Still allowed: signing in (`/api/v1/auth/*`) and every `GET` (including the owner's `GET /servers/:sid/export`). `/.well-known/bonfire` has `"read_only": true` and server objects have `read_only: true`. Clients should show a banner and hide write controls.
 
 ### 19.4 Voice quota for admins
 
-`GET /api/v1/instance/settings` -> `velora.voice: { cap_minutes, used_minutes }` (`cap_minutes: null` = unlimited). While registered, the instance refreshes it from Velora (`GET /bonfire/relay/rtc/usage`) at least every **10 minutes** (and on registration) and whenever a voice call reports it. Instance admins get the numbers on the gateway: `auth_success` carries `voice_quota: { cap_minutes, used_minutes }` when known, and after every change an `instance_update { settings, voice_quota }` frame is sent to **admins only**. A client warns admins at >= 80 % (`used_minutes / cap_minutes`) and says voice stops at 100 % (`voice_cap_reached`, §12.7).
+`GET /api/v1/instance/settings` -> `nookara.voice: { cap_minutes, used_minutes }` (`cap_minutes: null` = unlimited). While registered, the instance refreshes it from Nookara (`GET /bonfire/relay/rtc/usage`) at least every **10 minutes** (and on registration) and whenever a voice call reports it. Instance admins get the numbers on the gateway: `auth_success` carries `voice_quota: { cap_minutes, used_minutes }` when known, and after every change an `instance_update { settings, voice_quota }` frame is sent to **admins only**. A client warns admins at >= 80 % (`used_minutes / cap_minutes`) and says voice stops at 100 % (`voice_cap_reached`, §12.7).
 
-### 19.5 Velora hosting API (`VELORA/bonfire/hosting/*`)
+### 19.5 Nookara hosting API (`NOOKARA/bonfire/hosting/*`)
 
 Bearer token. Spending needs the `CURRENCY_PAY` scope (like Pro's buy route); the rest `CHAT`. Everything except `plans` answers `503 hosting_unavailable` when hostd is not configured (`BONFIRE_HOSTD_URL`, `BONFIRE_HOSTD_SECRET`, and a valid `BONFIRE_HOSTING_HOST_TEMPLATE` or fallback `BONFIRE_HOSTING_DOMAIN`). A hosted **server object**:
 
@@ -1186,7 +1190,7 @@ Bearer token. Spending needs the `CURRENCY_PAY` scope (like Pro's buy route); th
 |---|---|
 | `GET /hosting/plans` | public; `{ plans, available, host_template, url_template, domain, starter_limit_per_account }`. Production: `host_template: "{slug}-bonfire.ikelene.net"`, `url_template: "https://{slug}-bonfire.ikelene.net"`, `domain: "-bonfire.ikelene.net"` (the part after `{slug}`). Templates contain exactly one `{slug}`, may include a prefix/suffix and must form valid DNS labels for all 3-32 character slugs (each label <= 63 characters). `BONFIRE_HOSTING_HOST_TEMPLATE` takes precedence; fallback is `{slug}.<BONFIRE_HOSTING_DOMAIN>` (dev: `bonfire.localhost`). Missing/invalid configuration yields null templates and `available: false`. Slugs retain the built-in service reservations; `BONFIRE_HOSTING_RESERVED` adds comma-separated names. |
 | `GET /hosting/slug/:slug` | `{ available, reason? }`; `reason` is `invalid`, `reserved` or `taken`. A name you removed stays yours for 30 days: `{ available: true, reserved_for_you: true }` |
-| `POST /hosting/servers { slug, name, plan, weeks?, restore_backup? }` | provisions; `{ server, url, charged }` (`charged` is the credits spent, 0 with Pro). `plus` is free for a Pro owner (no `weeks` or `CURRENCY_PAY` needed); otherwise `weeks` 1-52 (default 1) is charged up front (`400 insufficient_balance { cost, balance }`). One free Starter per account (`403 starter_limit_reached`). Waits up to ~60 s for `GET <url>/.well-known/bonfire`; if the container is slower the server stays `provisioning` and flips to `running` when it answers. The url is added to your instance list. Velora holds **no session** on the instance: the client signs in there and calls `POST /api/v1/servers { name }` itself. Errors: `invalid_slug`, `slug_reserved`, `slug_taken` 409, `invalid_plan`, `invalid_weeks`, `backup_not_found` 404, `hosting_failed` 502 (nothing is charged or kept) |
+| `POST /hosting/servers { slug, name, plan, weeks?, restore_backup? }` | provisions; `{ server, url, charged }` (`charged` is the credits spent, 0 with Pro). `plus` is free for a Pro owner (no `weeks` or `CURRENCY_PAY` needed); otherwise `weeks` 1-52 (default 1) is charged up front (`400 insufficient_balance { cost, balance }`). One free Starter per account (`403 starter_limit_reached`). Waits up to ~60 s for `GET <url>/.well-known/bonfire`; if the container is slower the server stays `provisioning` and flips to `running` when it answers. The url is added to your instance list. Nookara holds **no session** on the instance: the client signs in there and calls `POST /api/v1/servers { name }` itself. Errors: `invalid_slug`, `slug_reserved`, `slug_taken` 409, `invalid_plan`, `invalid_weeks`, `backup_not_found` 404, `hosting_failed` 502 (nothing is charged or kept) |
 | `GET /hosting/servers` | `{ servers: [...], you: { pro: bool, pro_until: <ms> or null } }`; credit-Pro expiry in ms, null for a paying/staff rank or no Pro |
 | `GET /hosting/servers/by-url?url=<origin>` | `{ server }` or 404 (owner only) |
 | `POST /hosting/servers/:slug/weeks { weeks }` | buy 1-52 more weeks of Plus: `paid_until = max(now, paid_until) + paused_ms + weeks * 7 days`, then clears `paused_ms`. A Pro owner upgrades Starter for free (`weeks` ignored, no `CURRENCY_PAY`, `{ server, cost: 0 }`); already-Plus returns `409 { error: "pro_covers" }`. Otherwise `{ server, cost }`. Works while active, overdue or read-only (read-only is switched off at once) and on a Starter server (= upgrade). `400 insufficient_balance { cost, balance }` |
@@ -1203,21 +1207,21 @@ Staff (rank `admin` or `owner`): `GET /hosting/admin/servers` (every server + `o
 
 ### 19.6 Backups and restores
 
-Every plan can call `POST /hosting/servers/:slug/backup` (Starter included). Account backup records include `url` (origin or null) and `source: "hosted" | "uploaded"`. Clients can save an instance backup to their Velora account by downloading it with an **instance session**, then uploading the file to `POST VELORA/bonfire/hosting/backups/upload` with their **Velora bearer + CHAT**, multipart fields `file`, `name`, `url`, optional `slug`. The 500 MB limit applies only to this multipart route; the file streams to disk and archive validation reads bounded directory/manifest data. Saved records use `reason: "uploaded"`, count toward the shared 10-per-account/180-day retention, and can be listed/downloaded/deleted without hostd. For older hosted records `url` uses the configured hosting origin when available. No tokens are exchanged between services.
+Every plan can call `POST /hosting/servers/:slug/backup` (Starter included). Account backup records include `url` (origin or null) and `source: "hosted" | "uploaded"`. Clients can save an instance backup to their Nookara account by downloading it with an **instance session**, then uploading the file to `POST NOOKARA/bonfire/hosting/backups/upload` with their **Nookara bearer + CHAT**, multipart fields `file`, `name`, `url`, optional `slug`. The 500 MB limit applies only to this multipart route; the file streams to disk and archive validation reads bounded directory/manifest data. Saved records use `reason: "uploaded"`, count toward the shared 10-per-account/180-day retention, and can be listed/downloaded/deleted without hostd. For older hosted records `url` uses the configured hosting origin when available. No tokens are exchanged between services.
 
-To restore a saved account backup into an existing instance: download `GET VELORA/bonfire/hosting/backups/:id/download` with the Velora bearer, then send that ZIP as multipart `file` to `POST INSTANCE/api/v1/instance/restore` with the owner's instance session (section 5b). To create a new hosted server from either an uploaded or hosted backup, use the existing `restore_backup` field below.
+To restore a saved account backup into an existing instance: download `GET NOOKARA/bonfire/hosting/backups/:id/download` with the Nookara bearer, then send that ZIP as multipart `file` to `POST INSTANCE/api/v1/instance/restore` with the owner's instance session (section 5b). To create a new hosted server from either an uploaded or hosted backup, use the existing `restore_backup` field below.
 
-A backup is a normal `bonfire-export-v1` zip (§9: settings, channels, roles, emojis, members, messages, files). Velora keeps them under `BONFIRE_BACKUP_DIR` (default `/opt/velora-data/bonfire-backups`) in table `bonfire_hosted_backups`: 180 days, at most 10 per account (oldest removed first). The container produces one with `node src/cli.js export <out.zip>` (exit 3 = no community yet, nothing to save); hostd runs it with `docker exec` and streams the file to Velora.
+A backup is a normal `bonfire-export-v1` zip (§9: settings, channels, roles, emojis, members, messages, files). Nookara keeps them under `BONFIRE_BACKUP_DIR` (default `/opt/velora-data/bonfire-backups`) in table `bonfire_hosted_backups`: 180 days, at most 10 per account (oldest removed first). The container produces one with `node src/cli.js export <out.zip>` (exit 3 = no community yet, nothing to save); hostd runs it with `docker exec` and streams the file to Nookara.
 
-**Restore** = `POST /hosting/servers { …, restore_backup: <id> }`: hostd receives the zip, copies it to `/data/import.zip` of the new container and starts it with `BONFIRE_IMPORT_ON_BOOT=/data/import.zip`. On a boot where the instance has **no community yet**, it imports the zip as the owner (`BONFIRE_OWNER`) and deletes the file. Members who sign in again get their roles back.
+**Restore** = `POST /hosting/servers { …, restore_backup: <id> }`: hostd receives the zip, copies it to `/data/import.zip` of the new container and starts it with `EMBER_IMPORT_ON_BOOT=/data/import.zip`. On a boot where the instance has **no community yet**, it imports the zip as the owner (`EMBER_OWNER`) and deletes the file. Members who sign in again get their roles back.
 
-### 19.7 bonfire-hostd (Velora -> Docker host)
+### 19.7 bonfire-hostd (Nookara -> Docker host)
 
-`Authorization: Bearer <HOSTD_SECRET>` on `HOSTD_API_PORT` (8090): `POST /instances { slug, owner_principal, plan, limits, velora_url, public_url, env?, restore? }`, `GET /instances`, `GET /instances/:slug`, `PATCH /instances/:slug { plan?, limits?, read_only?, env? }` (recreates the container, same data), `POST /instances/:slug/{start,stop,restart}`, `DELETE /instances/:slug[?purge=1]`, `GET /instances/:slug/logs?tail=`, `POST /instances/:slug/backup` (the zip, or `204`), `PUT /imports/:slug` (the zip for a restore). The API can bind a LAN address via `HOSTD_API_HOST`; bearer secrets use constant-time digest comparison. Optional `HOSTD_API_ALLOW` is a comma-separated socket-IP allow-list (empty allows all; `::ffff:` normalized; forwarded headers ignored); firewall 8090 to Velora only. A reverse proxy on `HOSTD_PROXY_PORT` (8080) routes `HOSTD_HOST_TEMPLATE` (production `{slug}-bonfire.ikelene.net`, same syntax as Velora; fallback `{slug}.<HOSTD_DOMAIN>`) to the container, WebSockets included (`unknown_instance` 404 with a tiny JSON body and `Cache-Control: no-store`, no instance list; `instance_stopped` 503). Velora supplies `public_url`, hostd checks its hostname against the template and passes it as container `BONFIRE_PUBLIC_URL`. Cloudflare Tunnel uses `*` on `ikelene.net` -> `http://<hostd LXC>:8080` as the LAST rule, after explicit services; DNS `CNAME * -> <tunnel>.cfargotunnel.com`, proxied. Set `HOSTD_PROXY_HOST=0.0.0.0` for tunnel access. See `bonfire-hostd/README.md`.
+`Authorization: Bearer <HOSTD_SECRET>` on `HOSTD_API_PORT` (8090): `POST /instances { slug, owner_principal, plan, limits, nookara_url, public_url, env?, restore? }`, `GET /instances`, `GET /instances/:slug`, `PATCH /instances/:slug { plan?, limits?, read_only?, env? }` (recreates the container, same data), `POST /instances/:slug/{start,stop,restart}`, `DELETE /instances/:slug[?purge=1]`, `GET /instances/:slug/logs?tail=`, `POST /instances/:slug/backup` (the zip, or `204`), `PUT /imports/:slug` (the zip for a restore). The API can bind a LAN address via `HOSTD_API_HOST`; bearer secrets use constant-time digest comparison. Optional `HOSTD_API_ALLOW` is a comma-separated socket-IP allow-list (empty allows all; `::ffff:` normalized; forwarded headers ignored); firewall 8090 to Nookara only. A reverse proxy on `HOSTD_PROXY_PORT` (8080) routes `HOSTD_HOST_TEMPLATE` (production `{slug}-bonfire.ikelene.net`, same syntax as Nookara; fallback `{slug}.<HOSTD_DOMAIN>`) to the container, WebSockets included (`unknown_instance` 404 with a tiny JSON body and `Cache-Control: no-store`, no instance list; `instance_stopped` 503). Nookara supplies `public_url`, hostd checks its hostname against the template and passes it as container `EMBER_PUBLIC_URL`. Cloudflare Tunnel uses `*` on `ikelene.net` -> `http://<hostd LXC>:8080` as the LAST rule, after explicit services; DNS `CNAME * -> <tunnel>.cfargotunnel.com`, proxied. Set `HOSTD_PROXY_HOST=0.0.0.0` for tunnel access. See `bonfire-hostd/README.md`.
 
 ### 19.8 When paid time runs out
 
-**Velora Pro covers Plus for free.** Pro means a stored paying/staff rank with tier >= 2 (`pro`, legacy `plus`, `admin`, `mod`, `owner`), or any set `credit_tier` with a future `credit_tier_expires_at`. Public `GET /hosting/plans` adds `free_with_pro: true` on Plus.
+**Nookara Pro covers Plus for free.** Pro means a stored paying/staff rank with tier >= 2 (`pro`, legacy `plus`, `admin`, `mod`, `owner`), or any set `credit_tier` with a future `credit_tier_expires_at`. Public `GET /hosting/plans` adds `free_with_pro: true` on Plus.
 
 On Pro start, every live Plus row becomes `billing: "pro"`, `pro_covered: true`: remaining paid time is banked in `paused_ms` (a number, initially 0); `paid_until`, `read_only_at`, and `archive_at` are null. An overdue/read-only server becomes writable again; staff suspension is preserved. The owner is notified that its remaining days are saved. On Pro end, `paid_until = now + paused_ms`, `paused_ms = 0`, and billing resumes as `active` before the normal expiry flow below. No saved time means overdue immediately; the owner is notified that Plus weeks are needed. Other servers have `pro_covered: false`.
 
@@ -1226,11 +1230,11 @@ The hourly sweep joins owners in one query and checks both transitions, includin
 Without Pro, Plus is prepaid and **never renews automatically**. After `paid_until`:
 
 1. **`overdue`** (2 days): the server keeps working normally.
-2. **`read_only`** (the next 7 days): hostd recreates the container with `BONFIRE_READ_ONLY=1` (§19.3). Buying weeks brings it straight back.
-3. **`archived`**: Velora stores a backup (reason `archived`), hostd stops and removes the container and its data, `status` becomes `deleted`. The name stays the owner's for 30 days; restoring the backup into a new server (§19.6) brings it back.
+2. **`read_only`** (the next 7 days): hostd recreates the container with `EMBER_READ_ONLY=1` (§19.3). Buying weeks brings it straight back.
+3. **`archived`**: Nookara stores a backup (reason `archived`), hostd stops and removes the container and its data, `status` becomes `deleted`. The name stays the owner's for 30 days; restoring the backup into a new server (§19.6) brings it back.
 
 `read_only_at = paid_until + 2 days`, `archive_at = read_only_at + 7 days` (null for a free server). The owner is notified 2 days before `paid_until`, on overdue, on read-only and on archive. The job runs hourly; a failed backup keeps the server read-only and retries (nothing is removed without a backup). Starter servers never expire.
 
-### 19.9 Maintenance mode (Velora)
+### 19.9 Maintenance mode (Nookara)
 
-Staff can put Velora in maintenance: `GET /admin/maintenance` -> `{ on, message, env_forced }`, `PUT /admin/maintenance { on, message? }` (rank `admin` / `owner`). Env `VELORA_MAINTENANCE=1|0` overrides the stored toggle (`env_forced: true`). While on, everyone except those staff gets `503` with `Retry-After: 600`: a page for browser navigations, `{ "error": "maintenance", "message"? }` for API calls (including `POST /bonfire/instance-token`, so instances wait), and WebSockets are closed with `4503` after auth. Always open: `/health`, `/.well-known/bonfire/jwks.json`, `/bonfire/relay/*` (instances keep working), `/login`, `/auth/*` except registration, `/assets/*`. Signed-in staff pass with their bearer token; the maintenance page offers them "Continue as staff" (`POST /admin/maintenance/bypass` sets a 12 hour cookie).
+Staff can put Nookara in maintenance: `GET /admin/maintenance` -> `{ on, message, env_forced }`, `PUT /admin/maintenance { on, message? }` (rank `admin` / `owner`). Env `VELORA_MAINTENANCE=1|0` overrides the stored toggle (`env_forced: true`). While on, everyone except those staff gets `503` with `Retry-After: 600`: a page for browser navigations, `{ "error": "maintenance", "message"? }` for API calls (including `POST /bonfire/instance-token`, so instances wait), and WebSockets are closed with `4503` after auth. Always open: `/health`, `/.well-known/bonfire/jwks.json`, `/bonfire/relay/*` (instances keep working), `/login`, `/auth/*` except registration, `/assets/*`. Signed-in staff pass with their bearer token; the maintenance page offers them "Continue as staff" (`POST /admin/maintenance/bypass` sets a 12 hour cookie).

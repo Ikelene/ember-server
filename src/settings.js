@@ -1,7 +1,7 @@
 'use strict';
 // Server settings: one JSON object per community (communities.settings) for joining, message rules, AutoMod, the audit log and
 // uploads. GET / PATCH /api/v1/servers/:sid/settings (Manage server). Two keys reach outside the chat, so only instance admins
-// change them: the link-preview proxy and AutoMod's word-list file on the server. On a Velora-hosted server the plan caps a few
+// change them: the link-preview proxy and AutoMod's word-list file on the server. On a Nookara-hosted server the plan caps a few
 // numbers (members, files per member, how long files are kept, total storage: managed.js); a saved number above the cap counts
 // as the cap.
 const fs = require('fs');

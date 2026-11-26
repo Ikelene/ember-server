@@ -1,7 +1,7 @@
 'use strict';
-// Velora relays, instance side (PROTOCOL §12): a stub Velora built from Velora's own pure modules (bonfire-relay.js signature
+// Nookara relays, instance side (PROTOCOL §12): a stub Nookara built from Nookara's own pure modules (bonfire-relay.js signature
 // verification + receipts, bonfire-idp.js tokens / JWKS, bonfire-urlcheck.js url proof) - registration, signed requests,
-// import, push, daily credits, paid roles, voice broker, directory, `velora_registration: "off"`.
+// import, push, daily credits, paid roles, voice broker, directory, `nookara_registration: "off"`.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -13,17 +13,17 @@ const crypto = require('crypto');
 const { zipSync, strToU8 } = require('fflate');
 const { tmpDir, api, wsClient } = require('./helpers');
 
-const VELORA_DIR = path.join(__dirname, '../..');
-const haveVelora = fs.existsSync(path.join(VELORA_DIR, 'bonfire-relay.js'));
+const NOOKARA_DIR = path.join(__dirname, '../..');
+const haveNookara = fs.existsSync(path.join(NOOKARA_DIR, 'bonfire-relay.js'));
 process.env.BONFIRE_IDP_KEY = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bf-idp-')), 'idp.key');
-process.env.BONFIRE_DEV = '1';
-delete process.env.BONFIRE_VELORA_REGISTRATION; // this file talks to its own stub Velora
-delete process.env.BONFIRE_OWNER;
+process.env.EMBER_DEV = '1';
+delete process.env.EMBER_NOOKARA_REGISTRATION; // this file talks to its own stub Nookara
+delete process.env.EMBER_OWNER;
 
-const R = haveVelora ? require(path.join(VELORA_DIR, 'bonfire-relay.js')) : null;
-const idp = haveVelora ? require(path.join(VELORA_DIR, 'bonfire-idp.js')) : null;
-const urlcheck = haveVelora ? require(path.join(VELORA_DIR, 'bonfire-urlcheck.js')) : null;
-const T = { skip: haveVelora ? false : 'needs the Velora checkout next to bonfire-server' };
+const R = haveNookara ? require(path.join(NOOKARA_DIR, 'bonfire-relay.js')) : null;
+const idp = haveNookara ? require(path.join(NOOKARA_DIR, 'bonfire-idp.js')) : null;
+const urlcheck = haveNookara ? require(path.join(NOOKARA_DIR, 'bonfire-urlcheck.js')) : null;
+const T = { skip: haveNookara ? false : 'needs the Nookara checkout next to bonfire-server' };
 
 const freePort = () => new Promise(res => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -32,7 +32,7 @@ async function until(fn, ms = 5000, what = 'condition') {
   for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out waiting for ' + what); await sleep(25); }
 }
 
-// ---------------------------------------------------------------- the stub Velora
+// ---------------------------------------------------------------- the stub Nookara
 const V = {
   trusted: true, capped: false, voiceOn: true, calls: [], renames: {}, authFailures: [], instances: new Map(), nonces: new Map(), daily: new Set(),
   regAuth: [], pays: new Map(), receiptMode: 'good', sessions: new Set(), heartbeats: [], tickets: new Map(), directory: [], seq: 0,
@@ -52,7 +52,7 @@ function receiptFor(pr, inst) {
     default: return R.signReceipt(good);
   }
 }
-async function veloraHandler(req, res) {
+async function nookaraHandler(req, res) {
   const chunks = []; for await (const c of req) chunks.push(c);
   const raw = Buffer.concat(chunks);
   const send = (status, obj, headers = {}) => { const b = Buffer.isBuffer(obj) ? obj : Buffer.from(JSON.stringify(obj)); res.writeHead(status, { 'Content-Type': Buffer.isBuffer(obj) ? 'application/zip' : 'application/json', ...headers }); res.end(b); };
@@ -81,7 +81,7 @@ async function veloraHandler(req, res) {
     return send(200, { instance_id: keyHash, trusted: V.trusted, voice: { cap_minutes: V.trusted ? null : 3000, used_minutes: 7 } });
   }
   if (!u.pathname.startsWith('/bonfire/relay/')) return send(404, { error: 'not_found' });
-  // signed instance request: Velora's own verifier (bonfire-relay.js verifySigned)
+  // signed instance request: Nookara's own verifier (bonfire-relay.js verifySigned)
   const inst = V.instances.get(String(req.headers['x-bonfire-instance'] || ''));
   if (!inst) { V.authFailures.push('unknown_instance'); return send(401, { error: 'unknown_instance' }); }
   const v = R.verifySigned({ method: req.method, path: req.url, ts: req.headers['x-bonfire-ts'], sig: req.headers['x-bonfire-sig'], body: raw, pubkey: inst.pubkey });
@@ -100,11 +100,11 @@ async function veloraHandler(req, res) {
     }
     case 'POST /pay-request': {
       const prior = [...V.pays.values()].find(p => p.instance === inst.key_hash && p.ref === d.ref);
-      if (prior) { if (prior.user_id !== d.user_id || prior.amount !== d.amount) return send(409, { error: 'ref_reused' }); return send(200, { id: prior.id, status: prior.status, approve_url: `http://velora.stub/payment/${prior.id}`, amount: prior.amount }); }
+      if (prior) { if (prior.user_id !== d.user_id || prior.amount !== d.amount) return send(409, { error: 'ref_reused' }); return send(200, { id: prior.id, status: prior.status, approve_url: `http://nookara.stub/payment/${prior.id}`, amount: prior.amount }); }
       if (!Number.isInteger(d.amount) || d.amount < 1) return send(400, { error: 'invalid_amount' });
       const id = 'pr' + ++V.seq;
       V.pays.set(id, { id, instance: inst.key_hash, user_id: d.user_id, amount: d.amount, ref: d.ref, reason: d.reason, status: 'pending' });
-      return send(200, { id, status: 'pending', approve_url: `http://velora.stub/payment/${id}`, amount: d.amount, expires_at: Date.now() + 30 * 60000 });
+      return send(200, { id, status: 'pending', approve_url: `http://nookara.stub/payment/${id}`, amount: d.amount, expires_at: Date.now() + 30 * 60000 });
     }
     case 'GET /pay-request/:id': {
       const pr = V.pays.get(decodeURIComponent(u.pathname.split('/').pop()));
@@ -141,7 +141,7 @@ async function veloraHandler(req, res) {
   }
 }
 
-// the Discord-import bundle Velora would build (§12.6): structure only, no members / messages
+// the Discord-import bundle Nookara would build (§12.6): structure only, no members / messages
 function bundle() {
   const community = {
     name: 'Imported Guild', description: 'from discord', settings: { join_policy: 'open', allow_signing: true, require_signing: true }, categories: ['Text', 'Voice'], // (an older export: the signing fields are ignored)
@@ -154,32 +154,32 @@ function bundle() {
     emojis: [], invites: [],
   };
   return Buffer.from(zipSync({
-    'manifest.json': strToU8(JSON.stringify({ format: 'bonfire-export-v1', source: 'http://velora.stub', source_kind: 'velora-import', exported_at: Date.now(), community: 'c' })),
+    'manifest.json': strToU8(JSON.stringify({ format: 'bonfire-export-v1', source: 'http://nookara.stub', source_kind: 'nookara-import', exported_at: Date.now(), community: 'c' })),
     'community.json': strToU8(JSON.stringify(community)), 'members.jsonl': strToU8(''),
   }));
 }
 
 // ---------------------------------------------------------------- the instance
-let velora, VURL, inst, IURL, dir;
+let nookara, VURL, inst, IURL, dir;
 let relay, client, push, shop, directory, broker, messages;
 const SCOPES = 2048 | 16384 | 4096; // chat, voice, media
-async function veloraUser(id, username) {
+async function nookaraUser(id, username) {
   const { token } = idp.signInstanceToken({ id, username }, SCOPES, IURL);
-  const r = await api(IURL).post('/api/v1/auth/velora', { token });
+  const r = await api(IURL).post('/api/v1/auth/nookara', { token });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return { ...r.body, a: api(IURL, r.body.session) };
 }
 let alice, bob, carol, sid, general, lounge, shopCid, roles;
 
 test.before(async () => {
-  if (!haveVelora) return;
-  velora = http.createServer((req, res) => { veloraHandler(req, res).catch(e => { console.error(e); res.writeHead(500); res.end('{}'); }); });
-  await new Promise(r => velora.listen(0, '127.0.0.1', r));
-  VURL = `http://127.0.0.1:${velora.address().port}`;
+  if (!haveNookara) return;
+  nookara = http.createServer((req, res) => { nookaraHandler(req, res).catch(e => { console.error(e); res.writeHead(500); res.end('{}'); }); });
+  await new Promise(r => nookara.listen(0, '127.0.0.1', r));
+  VURL = `http://127.0.0.1:${nookara.address().port}`;
   process.env.BASE_URL = VURL; // the stub's issuer
   const port = await freePort();
   IURL = `http://127.0.0.1:${port}`;
-  Object.assign(process.env, { BONFIRE_ACCOUNTS_MODE: 'velora', BONFIRE_VELORA_URL: VURL, BONFIRE_PUBLIC_URL: IURL, BONFIRE_OWNER: 'v:2' });
+  Object.assign(process.env, { EMBER_ACCOUNTS_MODE: 'nookara', EMBER_NOOKARA_URL: VURL, EMBER_PUBLIC_URL: IURL, EMBER_OWNER: 'v:2' });
   dir = tmpDir();
   const { startServer } = require('../src/index');
   ({ client } = relay = require('../src/relay'));
@@ -188,28 +188,28 @@ test.before(async () => {
   inst = await startServer({ dataDir: dir, port, host: '127.0.0.1', restart: () => {} });
 });
 test.after(async () => {
-  if (!haveVelora) return;
+  if (!haveNookara) return;
   await inst?.close();
-  velora?.close();
+  nookara?.close();
   fs.rmSync(dir, { recursive: true, force: true });
-  for (const k of ['BONFIRE_ACCOUNTS_MODE', 'BONFIRE_VELORA_URL', 'BONFIRE_PUBLIC_URL', 'BONFIRE_OWNER']) delete process.env[k];
+  for (const k of ['EMBER_ACCOUNTS_MODE', 'EMBER_NOOKARA_URL', 'EMBER_PUBLIC_URL', 'EMBER_OWNER']) delete process.env[k];
 });
 
-test('registration: key in discovery, url proof, signed relay requests verify with Velora\'s verifier', T, async () => {
+test('registration: key in discovery, url proof, signed relay requests verify with Nookara\'s verifier', T, async () => {
   const keyFile = path.join(dir, 'keys', 'instance.key');
   assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
-  const disc = (await api(IURL).get('/.well-known/bonfire')).body;
+  const disc = (await api(IURL).get('/.well-known/ember')).body;
   assert.match(disc.instance_id, /^ik_[0-9a-f]{16}$/);
-  assert.equal(R.keyHashOf(disc.instance_key), disc.instance_id); // same id scheme as Velora
+  assert.equal(R.keyHashOf(disc.instance_key), disc.instance_id); // same id scheme as Nookara
   await until(() => client.registered(), 5000, 'registration');
   const rec = V.instances.get(disc.instance_id);
   assert.equal(rec.url, IURL);
   assert.equal(rec.accounts_mode, 'velora');
-  alice = await veloraUser(2, 'alice'); // the BONFIRE_OWNER
+  alice = await nookaraUser(2, 'alice'); // the EMBER_OWNER
   const s = (await alice.a.get('/api/v1/instance/settings')).body;
-  assert.equal(s.velora_registration, 'auto');
-  const { registration, velora_url, registered, instance_id, trusted, voice, last_error } = s.velora;
-  assert.deepEqual({ registration, velora_url, registered, instance_id, trusted, voice, last_error }, { registration: 'auto', velora_url: VURL, registered: true, instance_id: disc.instance_id, trusted: true, voice: { cap_minutes: null, used_minutes: 7 }, last_error: null });
+  assert.equal(s.nookara_registration, 'auto');
+  const { registration, nookara_url, registered, instance_id, trusted, voice, last_error } = s.nookara;
+  assert.deepEqual({ registration, nookara_url, registered, instance_id, trusted, voice, last_error }, { registration: 'auto', nookara_url: VURL, registered: true, instance_id: disc.instance_id, trusted: true, voice: { cap_minutes: null, used_minutes: 7 }, last_error: null });
   // the stub refuses another key claiming this url, and a url whose discovery does not publish the key
   const other = crypto.generateKeyPairSync('ed25519');
   const pk = other.publicKey.export({ format: 'jwk' }).x;
@@ -223,12 +223,12 @@ test('registration: key in discovery, url proof, signed relay requests verify wi
   await client.call('GET', '/bonfire/relay/rtc/ice?x=1');
   assert.deepEqual(V.authFailures, []);
   // manual re-register (admins only)
-  assert.equal((await alice.a.post('/api/v1/instance/velora/register', {})).body.velora.registered, true);
+  assert.equal((await alice.a.post('/api/v1/instance/nookara/register', {})).body.nookara.registered, true);
 });
 
-test('owner attestation: only the Velora owner, signed with the instance key, 5 minutes; no token ever sent to Velora', T, async () => {
-  const disc = (await api(IURL).get('/.well-known/bonfire')).body;
-  const bob0 = await veloraUser(3, 'bobby');
+test('owner attestation: only the Nookara owner, signed with the instance key, 5 minutes; no token ever sent to Nookara', T, async () => {
+  const disc = (await api(IURL).get('/.well-known/ember')).body;
+  const bob0 = await nookaraUser(3, 'bobby');
   assert.equal((await bob0.a.get('/api/v1/instance/owner-attestation')).status, 403); // not the owner
   assert.equal((await api(IURL).get('/api/v1/instance/owner-attestation')).status, 401);
   const r = await alice.a.get('/api/v1/instance/owner-attestation');
@@ -244,35 +244,35 @@ test('owner attestation: only the Velora owner, signed with the instance key, 5 
   assert.ok(Math.abs(claims.iat * 1000 - Date.now()) < 5000);
   assert.ok(claims.jti.length >= 16);
   assert.ok(crypto.verify(null, Buffer.from(h + '.' + c), R.publicKeyObject(disc.instance_key), Buffer.from(sg, 'base64url')));
-  // Velora's verifier accepts it for the owner only, once
+  // Nookara's verifier accepts it for the owner only, once
   const row = { key_hash: disc.instance_id, pubkey: disc.instance_key, url: IURL };
   assert.equal(R.attestationIssuer(r.body.attestation), disc.instance_id);
   assert.equal(R.verifyOwnerAttestation(r.body.attestation, row, 3).error, 'not_owner');
   assert.equal(R.verifyOwnerAttestation(r.body.attestation, row, 2).ok, true);
   assert.equal(R.verifyOwnerAttestation(r.body.attestation, row, 2).error, 'invalid_attestation'); // replay
   // a token in the register body is ignored; registration never sends Authorization
-  assert.equal((await alice.a.post('/api/v1/instance/velora/register', { token: 'secret-velora-token' })).status, 200);
+  assert.equal((await alice.a.post('/api/v1/instance/nookara/register', { token: 'secret-nookara-token' })).status, 200);
   assert.ok(V.regAuth.length > 0 && V.regAuth.every(a => a === null));
   assert.equal(fs.readFileSync(path.join(__dirname, '../src/relay/client.js'), 'utf8').includes('Bearer ${token}'), false);
 });
 
-test('import from Velora: ticket -> signed bundle download -> zip importer', T, async () => {
-  bob = await veloraUser(3, 'bob');
+test('import from Nookara: ticket -> signed bundle download -> zip importer', T, async () => {
+  bob = await nookaraUser(3, 'bob');
   const ticket = 'bit_' + crypto.randomBytes(32).toString('base64url');
   V.tickets.set(ticket, { aud: IURL, status: 'running', zip: bundle() });
-  assert.equal((await bob.a.post('/api/v1/import/velora', { ticket })).status, 403); // not an instance admin
-  assert.equal((await alice.a.post('/api/v1/import/velora', { ticket: 'nope' })).body.error, 'ticket_invalid');
-  let r = await alice.a.post('/api/v1/import/velora', { ticket });
+  assert.equal((await bob.a.post('/api/v1/import/nookara', { ticket })).status, 403); // not an instance admin
+  assert.equal((await alice.a.post('/api/v1/import/nookara', { ticket: 'nope' })).body.error, 'ticket_invalid');
+  let r = await alice.a.post('/api/v1/import/nookara', { ticket });
   assert.equal(r.status, 409); assert.equal(r.body.error, 'not_ready'); assert.equal(r.body.retry, true);
   const wrong = 'bit_' + crypto.randomBytes(32).toString('base64url');
   V.tickets.set(wrong, { aud: 'https://other.example', status: 'done', zip: bundle() });
-  assert.equal((await alice.a.post('/api/v1/import/velora', { ticket: wrong })).body.error, 'ticket_wrong_instance');
+  assert.equal((await alice.a.post('/api/v1/import/nookara', { ticket: wrong })).body.error, 'ticket_wrong_instance');
   V.tickets.get(ticket).status = 'done';
-  r = await alice.a.post('/api/v1/import/velora', { ticket });
+  r = await alice.a.post('/api/v1/import/nookara', { ticket });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   sid = r.body.sid;
   assert.equal(relayCalls('GET /import/bundle').at(-1).query.ticket, ticket);
-  r = await alice.a.post('/api/v1/import/velora', { ticket }); // one community per instance
+  r = await alice.a.post('/api/v1/import/nookara', { ticket }); // one community per instance
   assert.equal(r.body.error, 'community_exists');
   const d = (await alice.a.get(`/api/v1/servers/${sid}`)).body;
   assert.equal(d.server.name, 'Imported Guild');
@@ -282,7 +282,7 @@ test('import from Velora: ticket -> signed bundle download -> zip importer', T, 
   assert.equal((await bob.a.post(`/api/v1/servers/${sid}/join`)).status, 200);
 });
 
-test('push: offline Velora members, coalesced per user + channel, never when connected', T, async () => {
+test('push: offline Nookara members, coalesced per user + channel, never when connected', T, async () => {
   V.calls.length = 0;
   messages._sendLimit.reset?.();
   const post = text => alice.a.post(`/api/v1/channels/${general}/messages`, { message: text });
@@ -321,20 +321,20 @@ test('daily credits: first message of the UTC day, once, with the ephemeral noti
   await sleep(150);
   assert.deepEqual(relayCalls('POST /daily').map(c => c.body), [{ user_id: '3' }]);
   wb.close();
-  // Velora stops trusting the instance: re-registration says so, and nobody's message asks any more
+  // Nookara stops trusting the instance: re-registration says so, and nobody's message asks any more
   V.trusted = false;
-  await alice.a.post('/api/v1/instance/velora/register', {});
-  carol = await veloraUser(4, 'carol');
+  await alice.a.post('/api/v1/instance/nookara/register', {});
+  carol = await nookaraUser(4, 'carol');
   await carol.a.post(`/api/v1/servers/${sid}/join`);
   await carol.a.post(`/api/v1/channels/${general}/messages`, { message: 'hi' });
   await sleep(150);
   assert.equal(relayCalls('POST /daily').length, 1);
-  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.velora.trusted, false);
+  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.nookara.trusted, false);
   V.trusted = true;
-  await alice.a.post('/api/v1/instance/velora/register', {});
+  await alice.a.post('/api/v1/instance/nookara/register', {});
 });
 
-test('name sync: a rename on Velora reaches the instance without the person signing in again', T, async () => {
+test('name sync: a rename on Nookara reaches the instance without the person signing in again', T, async () => {
   V.calls.length = 0;
   const wa = await wsClient(IURL).login(alice.session);
   V.renames['3'] = 'thereal';
@@ -371,7 +371,7 @@ test('roles shop: pay request -> receipt verified offline -> role granted; bad r
   assert.equal(V.pays.size, 1);
   assert.equal((await bob.a.get(`/api/v1/channels/${shopCid}/shop/${roles.VIP}/status`)).body.status, 'pending');
   assert.equal((await bob.a.get(`/api/v1/channels/${shopCid}/shop`)).body.items[0].pending.id, payId);
-  // approved on Velora -> the poller verifies the receipt and grants the role
+  // approved on Nookara -> the poller verifies the receipt and grants the role
   Object.assign(req1, { status: 'paid', paid_at: Date.now() });
   const upd = await wb.waitFor(f => f.type === 'chat_member_update' && f.user_id === 'v:3', 4000);
   assert.ok(upd.member.roles.includes(roles.VIP));
@@ -399,7 +399,7 @@ test('roles shop: pay request -> receipt verified offline -> role granted; bad r
     assert.equal(s2.items[1].has, false);
   }
   V.receiptMode = 'good';
-  // declined on Velora
+  // declined on Nookara
   r = await bob.a.post(`/api/v1/channels/${shopCid}/shop/${roles.Gold}`);
   V.pays.get(r.body.pay_request.id).status = 'declined';
   assert.equal((await bob.a.get(`/api/v1/channels/${shopCid}/shop/${roles.Gold}/status`)).body.status, 'declined');
@@ -409,12 +409,12 @@ test('roles shop: pay request -> receipt verified offline -> role granted; bad r
   wb.close();
 });
 
-test('voice: backend selection (own keys > Velora broker > none), heartbeats, cap error', T, async () => {
+test('voice: backend selection (own keys > Nookara broker > none), heartbeats, cap error', T, async () => {
   V.calls.length = 0;
   const voice = require('../src/voice');
   await until(() => broker.available(), 3000, 'broker probe');
   assert.equal(voice.backendName(), 'broker');
-  assert.equal((await api(IURL).get('/.well-known/bonfire')).body.features.voice, true);
+  assert.equal((await api(IURL).get('/.well-known/ember')).body.features.voice, true);
   const room = 'bf_' + lounge;
   const wb = await wsClient(IURL).login(bob.session);
   const SDP = 'v=0\r\n' + 'a=x\r\n'.repeat(10);
@@ -436,12 +436,12 @@ test('voice: backend selection (own keys > Velora broker > none), heartbeats, ca
   wb.send({ type: 'chat_rtc_join', nonce: 'j2', room });
   const e = await wb.waitFor(f => f.nonce === 'j2' && f.type === 'chat_error');
   assert.equal(e.error, 'voice_cap_reached');
-  assert.equal((await api(IURL).get('/.well-known/bonfire')).body.features.voice, false);
+  assert.equal((await api(IURL).get('/.well-known/ember')).body.features.voice, false);
   V.capped = false;
   // own Cloudflare keys win
   await alice.a.patch('/api/v1/instance/settings', { voice: { cf_app_id: 'a', cf_app_secret: 'b', cf_turn_key_id: 'c', cf_turn_token: 'd' } });
   assert.equal(voice.backendName(), 'direct');
-  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.velora.voice_backend, 'direct');
+  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.nookara.voice_backend, 'direct');
   await alice.a.patch('/api/v1/instance/settings', { voice: { cf_app_id: '', cf_turn_key_id: '' } });
   assert.equal(voice.backendName(), 'broker');
   wb.close();
@@ -455,7 +455,7 @@ test('directory: listed toggle pushes the listing, unlisting removes it', T, asy
   await until(() => V.directory.length >= 1, 3000, 'directory push');
   const inv = (await alice.a.get(`/api/v1/servers/${sid}`)).body.server.invite;
   assert.deepEqual(V.directory.at(-1), { listed: true, name: 'Imported Guild', description: 'from discord', icon_url: null, banner_url: null, member_count: 3, invite_url: `${VURL}/chat#/i/${encodeURIComponent(IURL)}/invite/${inv}`, tags: ['gaming', 'chat'] });
-  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.velora.directory.listed, true);
+  assert.equal((await alice.a.get('/api/v1/instance/settings')).body.nookara.directory.listed, true);
   const n = V.directory.length;
   await directory.push(); // nothing changed: no push
   assert.equal(V.directory.length, n);
@@ -465,15 +465,15 @@ test('directory: listed toggle pushes the listing, unlisting removes it', T, asy
   assert.equal((await alice.a.get(`/api/v1/servers/${sid}`)).body.server.listed, false);
 });
 
-test('velora_registration "off": nothing contacts Velora; voice falls back to unavailable; "auto" registers again', T, async () => {
-  await alice.a.patch('/api/v1/instance/settings', { velora_registration: 'off' });
+test('nookara_registration "off": nothing contacts Nookara; voice falls back to unavailable; "auto" registers again', T, async () => {
+  await alice.a.patch('/api/v1/instance/settings', { nookara_registration: 'off' });
   const s = (await alice.a.get('/api/v1/instance/settings')).body;
-  assert.equal(s.velora.registered, false);
-  assert.equal(s.velora.registration, 'off');
+  assert.equal(s.nookara.registered, false);
+  assert.equal(s.nookara.registration, 'off');
   V.calls.length = 0;
   const voice = require('../src/voice');
   assert.equal(voice.backendName(), null);
-  assert.equal((await api(IURL).get('/.well-known/bonfire')).body.features.voice, false);
+  assert.equal((await api(IURL).get('/.well-known/ember')).body.features.voice, false);
   const wb = await wsClient(IURL).login(bob.session);
   wb.send({ type: 'chat_rtc_join', nonce: 'j9', room: 'bf_' + lounge });
   assert.equal((await wb.waitFor(f => f.nonce === 'j9')).error, 'voice_unavailable');
@@ -484,6 +484,6 @@ test('velora_registration "off": nothing contacts Velora; voice falls back to un
   assert.equal((await bob.a.post(`/api/v1/channels/${shopCid}/shop/${roles.Gold}`)).body.error, 'payment_unavailable');
   await sleep(700);
   assert.deepEqual(V.calls, []);
-  await alice.a.patch('/api/v1/instance/settings', { velora_registration: 'auto' });
+  await alice.a.patch('/api/v1/instance/settings', { nookara_registration: 'auto' });
   await until(() => client.registered(), 5000, 're-registration');
 });
