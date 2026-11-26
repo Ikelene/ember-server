@@ -341,6 +341,26 @@ test('a shared deny list: verified, followed, kept when a later copy is bad, and
   assert.equal((await fedPatch({ denylists: ['ftp://nope'] })).body.error, 'invalid_denylists');
 });
 
+test("Nookara's list shape: entries with kind and value, accounts by handle, expired entries left out", async () => {
+  fresh();
+  const list = await listServer();
+  const old = Date.now() - 1000;
+  list.body = { version: 3, generated_at: Date.now(), first_seen: {}, entries: [
+    { id: 1, kind: 'homeserver', value: 'evil.example', reason_category: 'spam', reason: 'spam', created_at: 1, expires_at: null },
+    { id: 2, kind: 'account', value: 'mallory@one.example', reason_category: 'abuse', reason: 'abuse', created_at: 1, expires_at: null },
+    { id: 3, kind: 'ip_range', value: '203.0.150.0/24', reason_category: 'other', reason: '', created_at: 1, expires_at: null },
+    { id: 4, kind: 'homeserver', value: 'over.example', reason_category: 'other', reason: '', created_at: 1, expires_at: old },
+  ] };
+  const r = await fedPatch({ denylists: [list.url] });
+  assert.deepEqual(r.body.denylists.map(l => [l.entries, l.error]), [[3, null]]);
+  assert.equal((await signIn('evil.example', { ip: '203.0.151.1' })).body.error, 'homeserver_denied');
+  assert.equal((await signIn('one.example', { id: 'l:7', name: 'Mallory' })).body.error, 'homeserver_denied');
+  assert.equal((await signIn('one.example', { id: 'l:8', name: 'alice' })).status, 200);
+  assert.equal((await signIn('fine.example', { ip: '203.0.150.9' })).body.error, 'homeserver_denied');
+  assert.equal((await signIn('over.example', { ip: '203.0.152.1' })).status, 200);
+  await fedPatch({ denylists: [] });
+});
+
 test('the deny entries of the homeserver itself: a domain, everything under one, a network, one account', async () => {
   fresh();
   const one = await signIn('one.example'), two = await signIn('two.example'), nine = await signIn('one.example', { id: 'l:9', name: 'nine' });

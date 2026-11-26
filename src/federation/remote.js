@@ -34,7 +34,7 @@ function domainAllowed(domain) {
 }
 const domainOf = u => u.domain || R.parseSub(u.principal)?.domain || '';
 // may this remote user's sessions be used right now? (asked on every request: auth.resolveSession)
-const sessionAllowed = u => { const d = domainOf(u); return !!d && domainAllowed(d) && !denylist.check({ domain: d, ips: seen.ipsOf(d), sub: u.principal }); };
+const sessionAllowed = u => { const d = domainOf(u); return !!d && domainAllowed(d) && !denylist.check({ domain: d, ips: seen.ipsOf(d), sub: u.principal, handle: u.username }); };
 
 // ---------- issuing (the account's own homeserver) ----------
 function audienceOf(raw) {
@@ -93,7 +93,8 @@ async function verify(token) {
   if (domain === config.domain()) throw err('own_homeserver', 400);
   checkClaims(claims);
   // rules that need nothing fetched come first: a refused homeserver is never contacted
-  if (denylist.check({ domain, sub: claims.sub })) throw refuseDenied();
+  const handle = typeof claims.preferred_username === 'string' ? `${claims.preferred_username}@${domain}` : null;
+  if (denylist.check({ domain, sub: claims.sub, handle })) throw refuseDenied();
   if (!domainAllowed(domain)) throw err('homeserver_not_allowed', 403, { domain });
   const hs = await resolve.homeserver(domain);
   if (normalizeOrigin(claims.iss) !== hs.origin) throw bad('invalid_issuer');
@@ -106,7 +107,7 @@ async function verify(token) {
   if (!db.run('INSERT OR IGNORE INTO jti_seen (jti, exp) VALUES (?, ?)', `r:${domain}:${claims.jti}`, claims.exp).changes) throw bad('token_replayed');
   const ips = await resolve.addresses(hs.origin);
   seen.touch(domain, { origin: hs.origin, ips });
-  if (denylist.check({ domain, ips, sub: claims.sub })) throw refuseDenied();
+  if (denylist.check({ domain, ips, sub: claims.sub, handle })) throw refuseDenied();
   return { claims, domain, origin: hs.origin, ips };
 }
 

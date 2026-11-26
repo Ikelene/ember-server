@@ -81,7 +81,7 @@ function cleanDeny(raw) {
 function compileDeny(entries) {
   const out = { domains: [], cidrs: [], accounts: new Set() };
   for (const e of entries || []) {
-    const t = cleanDeny(e);
+    const t = cleanDeny(e)?.replace(/^([^@]+)@/, (m, id) => (/^[a-z0-9._-]+$/i.test(id) && !id.includes(':') ? id.toLowerCase() + '@' : m));
     if (!t) continue;
     if (t.includes('@')) out.accounts.add(t);
     else if (isDomainRule(t) && !/^[0-9.]+$/.test(t)) out.domains.push(t);
@@ -90,9 +90,11 @@ function compileDeny(entries) {
   return out;
 }
 // -> 'domain' | 'network' | 'account' | null
-function denied(compiled, { domain, ips = [], sub = null }) {
+// an account entry may name the stable id (`l:5@a.example`) or the handle (`alice@a.example`, what Nookara's list holds)
+function denied(compiled, { domain, ips = [], sub = null, handle = null }) {
   if (domain && domainMatches(compiled.domains, domain)) return 'domain';
   if (sub && compiled.accounts.has(sub)) return 'account';
+  if (handle && compiled.accounts.has(String(handle).toLowerCase())) return 'account';
   for (const ip of ips) if (compiled.cidrs.some(c => inCidr(c, ip))) return 'network';
   return null;
 }

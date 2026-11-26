@@ -95,7 +95,10 @@ async function fetchList(url) {
   try { ok = crypto.verify(null, Buffer.from(canonical(body)), key, Buffer.from(signature.sig, 'base64url')); } catch { ok = false; }
   if (!ok) throw new Error('bad_signature');
   const arr = k => (Array.isArray(body[k]) ? body[k] : []);
-  const entries = [...new Set([...arr('deny'), ...arr('domains'), ...arr('networks'), ...arr('cidrs'), ...arr('accounts')].map(R.cleanDeny).filter(Boolean))].slice(0, 200000);
+  // Nookara's list: entries: [{ kind: homeserver | ip_range | account, value, expires_at }]; plain string arrays are also read
+  const fromEntries = arr('entries').filter(e => e && typeof e === 'object' && ['homeserver', 'ip_range', 'account'].includes(e.kind) && typeof e.value === 'string'
+    && !(timeOf(e.expires_at) && timeOf(e.expires_at) <= Date.now())).map(e => e.value);
+  const entries = [...new Set([...fromEntries, ...arr('deny'), ...arr('domains'), ...arr('networks'), ...arr('cidrs'), ...arr('accounts')].filter(x => typeof x === 'string').map(R.cleanDeny).filter(Boolean))].slice(0, 200000);
   const first = new Map();
   if (body.first_seen && typeof body.first_seen === 'object' && !Array.isArray(body.first_seen)) {
     for (const [d, v] of Object.entries(body.first_seen).slice(0, 200000)) { const t = timeOf(v), dom = String(d).toLowerCase(); if (t && R.isDomain(dom)) first.set(dom, t); }
