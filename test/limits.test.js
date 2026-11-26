@@ -180,6 +180,20 @@ test('uploads: size and storage are a server\'s own', async () => {
   await owner.a.patch(`/api/v2/homeserver/servers/${B}/limits`, { overrides: { emojis: 3, member_cap: null } });
 });
 
+test('admins list every server on the homeserver, newest first, in pages', async () => {
+  assert.equal((await (await login(101, 'one')).a.get('/api/v2/homeserver/servers')).status, 403);
+  const all = (await owner.a.get('/api/v2/homeserver/servers')).body;
+  assert.deepEqual(all.servers.map(s => s.sid), [B, A]);
+  assert.equal(all.has_more, false);
+  const b = all.servers[0];
+  assert.deepEqual([b.name, b.slug, b.address, b.icon_url, b.owner, b.member_count, b.listed, b.limits_override, b.tier], ['Beta', 'beta', 'beta@chat.test', null, { id: 'v:100', username: 'owner' }, 4, false, true, null]);
+  assert.equal(typeof b.created_at, 'number');
+  assert.equal(all.servers[1].limits_override, false);
+  const one = (await owner.a.get('/api/v2/homeserver/servers?limit=1')).body;
+  assert.deepEqual([one.servers.map(s => s.sid), one.has_more], [[B], true]);
+  assert.deepEqual((await owner.a.get(`/api/v2/homeserver/servers?limit=1&before=${B}`)).body, { servers: [all.servers[1]], has_more: false });
+});
+
 test('tiers are only sold by a homeserver registered with Nookara, and only to the owner', async () => {
   const r = await owner.a.post(`/api/v2/servers/${A}/tier`, { tier: 'plus' });
   assert.equal(r.status, 409);

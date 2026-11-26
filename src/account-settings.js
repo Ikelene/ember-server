@@ -59,6 +59,7 @@ function sanitizeMethod(m, { loose, allowHttp }) {
   const name = typeof m.name === 'string' ? m.name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) : '';
   const out = { id, kind: m.kind, name: name || { password: 'Password', nookara: 'Nookara', oidc: 'Single sign-on', oauth2: 'Single sign-on' }[m.kind], enabled: m.enabled !== false };
   if (m.kind === 'password') return out;
+  if (m.client_secret === null && !loose) out.client_secret = null; // a settings PATCH: forget the stored secret (merge)
   for (const k of ['client_id', 'client_secret']) if (m[k] !== undefined && m[k] !== null) { if (typeof m[k] === 'string' && m[k].length <= 500) out[k] = m[k].trim(); else bad('invalid_login_methods', { method: id, field: k }); }
   for (const k of URL_FIELDS) {
     if (m[k] === undefined || m[k] === null || m[k] === '') continue;
@@ -119,7 +120,7 @@ function sanitize(p, { loose = false, allowHttp = false } = {}) {
 }
 
 // a sanitized partial block over the stored one. A method keeps its stored secret unless a new one is sent
-// (an empty one, or the masked one read back from the admin view, means "unchanged").
+// (an empty one, or the masked one read back from the admin view, means "unchanged"; null removes it).
 function merge(cur, patch) {
   const out = { ...cur, ...patch };
   if (patch.remote_accounts) out.remote_accounts = { ...cur.remote_accounts, ...patch.remote_accounts };
@@ -128,6 +129,7 @@ function merge(cur, patch) {
     if (m.kind === 'password') return m;
     const kept = !m.client_secret || isMasked(m.client_secret);
     const next = { ...m };
+    if (m.client_secret === null) { delete next.client_secret; return next; }
     if (kept) { if (old?.client_secret) next.client_secret = old.client_secret; else delete next.client_secret; }
     return next;
   });

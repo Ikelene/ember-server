@@ -182,11 +182,29 @@ function changed(c = null) {
   }
 }
 
+// GET /api/v2/homeserver/servers?before=<sid>&limit= : every server here, newest first
+function serverList(q = {}) {
+  const auth = require('./auth'), d = db();
+  const n = Math.min(Math.max(Number.parseInt(q.limit, 10) || 50, 1), 200);
+  const before = q.before ? d.get('SELECT id FROM communities WHERE sid = ?', String(q.before))?.id ?? 0 : null;
+  const rows = before === null ? d.all('SELECT * FROM communities ORDER BY id DESC LIMIT ?', n + 1) : d.all('SELECT * FROM communities WHERE id < ? ORDER BY id DESC LIMIT ?', before, n + 1);
+  const servers = rows.slice(0, n).map(c => {
+    const o = auth.userById(c.owner_id), ov = overrideRow(c.id);
+    return {
+      sid: c.sid, slug: c.slug, address: `${c.slug}@${config().domain()}`, name: c.name, icon_url: c.icon_url || null, owner: o ? { id: o.principal, username: o.username } : null,
+      member_count: d.get('SELECT COUNT(*) AS n FROM members WHERE community_id = ?', c.id).n, listed: !!c.listed, created_at: c.created_at,
+      limits_override: !!ov && Object.keys(ov.overrides).length > 0, tier: activeTier(c.id)?.tier || null,
+    };
+  });
+  return { servers, has_more: rows.length > n };
+}
+
 function register(app) {
   const C = require('./communities');
   app.get('/api/v1/servers/:sid/limits', req => view(C.memberCommunity(req.params.sid, req.user).c));
   app.get('/api/v2/homeserver/limits', { admin: true }, () => adminView());
   app.patch('/api/v2/homeserver/limits', { admin: true }, req => adminPatch(req.body));
+  app.get('/api/v2/homeserver/servers', { admin: true }, req => serverList(req.query));
   app.get('/api/v2/homeserver/servers/:sid/limits', { admin: true }, req => serverView(C.findCommunity(req.params.sid)));
   app.patch('/api/v2/homeserver/servers/:sid/limits', { admin: true }, req => serverPatch(C.findCommunity(req.params.sid), req.user, req.body));
 }

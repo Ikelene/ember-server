@@ -217,7 +217,7 @@ function linkTicket(u, id, returnTo) {
 function adminView() {
   const cfg = config.get(), a = managed.active() ? cfg.accounts : config.saved();
   return {
-    domain: cfg.domain, hosts_accounts: a.hosts_accounts, registration: a.registration, remote_accounts: a.remote_accounts, link_verified_emails: a.link_verified_emails,
+    domain: cfg.domain, public_url: cfg.public_url, hosts_accounts: a.hosts_accounts, registration: a.registration, remote_accounts: a.remote_accounts, link_verified_emails: a.link_verified_emails,
     ember_clients: cfg.ember_clients,
     login_methods: a.login_methods.map(m => {
       const r = AS.resolve(m, cfg), { oidc, discovered_for, ...out } = r;
@@ -253,6 +253,7 @@ function register(app) {
   const clientOrigin = origin => config.get().ember_clients.includes(origin);
   app.cors('/api/v2/auth', clientOrigin);
   app.cors('/login', () => false);
+  app.cors('/login/link', clientOrigin); // a signed-in client asks for a link ticket from its own page
 
   app.get('/login', { auth: false }, (req, res) => {
     const a = request(req, res, req.query);

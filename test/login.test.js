@@ -647,6 +647,25 @@ test('linking and unlinking from a signed-in account; the last way in cannot be 
   assert.equal((await B.del('/api/v2/account/logins/corp')).status, 200);
 });
 
+test('the link route answers the ember_clients origins (preflight too), /login itself no origin; public_url; a secret can be cleared', async () => {
+  const pre = (p, o) => fetch(base + p, { method: 'OPTIONS', headers: { Origin: o, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization, content-type' } });
+  const ok = await pre('/login/link/hub', APP);
+  assert.equal(ok.status, 204);
+  assert.equal(ok.headers.get('access-control-allow-origin'), APP);
+  assert.match(ok.headers.get('access-control-allow-headers'), /Authorization, Content-Type/);
+  assert.equal((await pre('/login/link/hub', 'https://evil.example')).headers.get('access-control-allow-origin'), null);
+  assert.equal((await pre('/login', APP)).headers.get('access-control-allow-origin'), null);
+  assert.equal((await pre('/login/start/hub', APP)).headers.get('access-control-allow-origin'), null);
+  const view = (await alice.get('/api/v2/homeserver/accounts')).body;
+  assert.equal(view.public_url, config.get().public_url);
+  const r = await accounts({ login_methods: [PASSWORD, oidcMethod({ client_secret: undefined }), hubMethod({ client_secret: null })] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.login_methods[1].client_secret.slice(0, 8), '********'); // left out: kept
+  assert.equal(r.body.login_methods[2].client_secret, null);
+  assert.equal(config.get().accounts.login_methods[2].client_secret, undefined);
+  await accounts({ login_methods: [PASSWORD, oidcMethod({ client_secret: undefined }), hubMethod()] });
+});
+
 test('a homeserver that hosts no accounts: no login block, no /login', async () => {
   const d = tmpDir();
   fs.writeFileSync(path.join(d, 'config.json'), JSON.stringify({ accounts_mode: 'nookara' }));
