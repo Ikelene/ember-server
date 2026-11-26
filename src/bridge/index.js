@@ -54,6 +54,13 @@ function register(real) {
   app.delete(v1('/bridge/servers/:sid'), req => bridge.unlink(req.user, req.params.sid, s(req.body?.platform || req.query.platform)));
   app.put(v1('/bridge/servers/:sid/channels/:cid'), req => { if (req.body?.ext_channel_id) allowed(s(req.body?.platform), req.params.sid); return bridge.setChannel(req.user, req.params.sid, req.params.cid, s(req.body?.platform), req.body?.ext_channel_id ? s(req.body.ext_channel_id) : null); });
 
+  // ---- proof of control before a guild is linked (claims.js): a claim code, or Discord sign-in ----
+  const claims = require('./claims');
+  app.post(v1('/bridge/servers/:sid/claim'), req => { allowed(s(req.body?.platform), req.params.sid); return claims.start(bridge.manageable(req.user, req.params.sid).c, req.user, s(req.body?.platform), s(req.body?.guild_id)); });
+  app.get(v1('/bridge/servers/:sid/claim'), req => claims.view(bridge.manageable(req.user, req.params.sid).c, s(req.query.platform), s(req.query.guild_id)));
+  app.get(v1('/bridge/oauth/discord/start'), req => { allowed('discord', req.query.sid); return claims.oauthStart(bridge.manageable(req.user, s(req.query.sid)).c, req.user, s(req.query.guild_id)); });
+  real.get(v1('/bridge/oauth/discord/callback'), { auth: false }, async (req, res) => claims.sendPage(res, await claims.oauthCallback(req.query)));
+
   // ---- CloudLink bridge channels: connection status + reconnect (Manage channels) ----
   app.get(v1('/channels/:cid/cloudlink'), req => ({ status: cloudlink.status(cloudlink.bridgeChannel(req.params.cid, req.user)) }));
   app.post(v1('/channels/:cid/cloudlink/reconnect'), req => ({ status: cloudlink.reconnect(cloudlink.bridgeChannel(req.params.cid, req.user)) }));

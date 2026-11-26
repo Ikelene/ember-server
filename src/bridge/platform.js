@@ -17,7 +17,7 @@ const INTENTS = 1 | 128 | 512 | 2048 | 32768; // GUILDS | GUILD_VOICE_STATES | G
 
 const DEFAULTS = {
   discord: {
-    name: 'Discord', api: 'https://discord.com/api/v10', cdn: 'https://cdn.discordapp.com', gateway: null, version: 10, intents: INTENTS,
+    name: 'Discord', authorize: 'https://discord.com/oauth2/authorize', identifyGap: 5500, api: 'https://discord.com/api/v10', cdn: 'https://cdn.discordapp.com', gateway: null, version: 10, intents: INTENTS,
     invite: id => `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot&permissions=${BOT_PERMS}`,
     jump: (g, c, m) => `https://discord.com/channels/${g}/${c}/${m}`,
     media: /^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\//i,
@@ -99,8 +99,9 @@ async function gatewayUrl(p) {
 // ---- gateway client ----
 const FATAL = { 4004: 'invalid_token', 4010: 'invalid_shard', 4011: 'sharding_required', 4012: 'invalid_api_version', 4013: 'invalid_intents', 4014: 'disallowed_intents' };
 class GatewayClient {
-  constructor(p, token, onDispatch) {
-    this.p = p; this.token = token; this.onDispatch = onDispatch;
+  // shard: [i, n] when the bot's guilds are split over n connections (Discord), else null
+  constructor(p, token, onDispatch, shard = null) {
+    this.p = p; this.token = token; this.onDispatch = onDispatch; this.shard = shard;
     this.state = 'stopped'; this.error = null; this.user = null;
     this.seq = null; this.sessionId = null; this.resumeUrl = null; this.attempts = 0; this.stopped = false;
   }
@@ -140,7 +141,7 @@ class GatewayClient {
       if (this.sessionId && this.seq != null) this.send(ws, { op: 6, d: { token: this.token, session_id: this.sessionId, seq: this.seq } });
       else {
         const x = platform(this.p);
-        this.send(ws, { op: 2, d: { token: this.token, ...(x.intents != null ? { intents: x.intents } : {}), properties: { os: process.platform, browser: 'ember-server', device: 'ember-server' } } });
+        this.send(ws, { op: 2, d: { token: this.token, ...(x.intents != null ? { intents: x.intents } : {}), ...(this.shard ? { shard: this.shard } : {}), properties: { os: process.platform, browser: 'ember-server', device: 'ember-server' } } });
       }
     } else if (m.op === 11) this.acked = true;
     else if (m.op === 1) this.send(ws, { op: 1, d: this.seq });

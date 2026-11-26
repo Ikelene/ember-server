@@ -111,6 +111,20 @@ function sanitize(p, loose = false) {
     const d = typeof p.domain === 'string' ? p.domain.trim().toLowerCase() : null;
     if (p.domain === null || d === '') out.domain = null; else if (d && DOMAIN.test(d)) out.domain = d; else bad('invalid_domain');
   }
+  if (p.bridges !== undefined) { // PROTOCOL §16: Discord sign-in for the ownership check, and how many gateway connections the Discord bot uses
+    const v = p.bridges, b = {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) bad('invalid_bridges');
+    else {
+      if (v.discord_oauth === null) b.discord_oauth = null;
+      else if (v.discord_oauth !== undefined) {
+        const o = v.discord_oauth, ok = x => typeof x === 'string' && x.length <= 200 && !/\s/.test(x);
+        if (o && typeof o === 'object' && ok(o.client_id) && o.client_id && (o.client_secret === undefined || ok(o.client_secret))) b.discord_oauth = { client_id: o.client_id, ...(o.client_secret ? { client_secret: o.client_secret } : {}) };
+        else bad('invalid_bridges');
+      }
+      if (v.discord_shards !== undefined) { if (Number.isInteger(v.discord_shards) && v.discord_shards >= 1 && v.discord_shards <= 64) b.discord_shards = v.discord_shards; else bad('invalid_bridges'); }
+      out.bridges = b;
+    }
+  }
   if (p.limits !== undefined) out.limits = require('./limits').sanitize(p.limits, loose); // PROTOCOL §19: { defaults, tiers }
   if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
   if (p.creation !== undefined) {
@@ -135,6 +149,7 @@ function sanitize(p, loose = false) {
 // the effective settings: defaults < file < env. (Old community_creation / auto_join keys in config.json are ignored.)
 function get() {
   const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) }, creation: { ...DEFAULTS.creation, ...(data.creation || {}) } };
+  v.bridges = { discord_oauth: data.bridges?.discord_oauth || null, discord_shards: data.bridges?.discord_shards || 1 };
   v.limits = { defaults: data.limits?.defaults || {}, tiers: data.limits?.tiers || [] };
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
   v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
@@ -172,6 +187,11 @@ function update(patch) {
   }
   if (clean.youtube) clean.youtube = { ...(data.youtube || {}), ...clean.youtube };
   if (clean.creation) clean.creation = { ...(data.creation || {}), ...clean.creation };
+  if (clean.bridges) { // (the secret is write-only: left out, the stored one stays)
+    const cur = data.bridges || {}, o = clean.bridges.discord_oauth;
+    if (o && !o.client_secret && cur.discord_oauth?.client_secret) o.client_secret = cur.discord_oauth.client_secret;
+    clean.bridges = { ...cur, ...clean.bridges };
+  }
   if (clean.limits) clean.limits = { ...(data.limits || {}), ...clean.limits };
   if (clean.federation) clean.federation = FS.merge(data.federation || {}, clean.federation);
   // the old accounts_mode / registration settings edit the accounts block (a value that only repeats what the block already
@@ -229,6 +249,7 @@ function adminView() {
     accounts_mode_env: !!envMode(), // the env var wins over the saved setting
     nookara_url: v.nookara_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
     youtube: v.youtube, nookara_registration: v.nookara_registration, tags: v.tags, ember_clients: v.ember_clients,
+    bridges: { discord_oauth: v.bridges.discord_oauth ? { client_id: v.bridges.discord_oauth.client_id, has_secret: !!v.bridges.discord_oauth.client_secret } : null, discord_shards: v.bridges.discord_shards },
     voice: { cf_app_id: v.voice.cf_app_id, has_app_secret: !!v.voice.cf_app_secret, cf_turn_key_id: v.voice.cf_turn_key_id, has_turn_token: !!v.voice.cf_turn_token },
   });
 }

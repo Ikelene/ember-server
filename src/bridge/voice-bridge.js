@@ -174,7 +174,7 @@ const fail = (s, msg, e) => s.send(JSON.stringify({ type: 'chat_error', nonce: m
 
 async function onWorker(m) {
   if (m.t === 'log') return log(m.msg);
-  if (m.t === 'op4') { B().clients.get('discord')?.sendOp(4, m.d); return; }
+  if (m.t === 'op4') { B().clientFor('discord', m.d?.guild_id)?.sendOp(4, m.d); return; }
   if (m.t === 'leave') return closeSock(m.sock);
   const s = sockFor(m.sock);
   if (m.t === 'join') {

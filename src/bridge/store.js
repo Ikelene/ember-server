@@ -28,11 +28,22 @@ const SCHEMA = `
     eid TEXT PRIMARY KEY, platform TEXT NOT NULL, ext_id TEXT NOT NULL, name TEXT NOT NULL, animated INTEGER NOT NULL DEFAULT 0,
     file TEXT NOT NULL, guild_name TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS bridge_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL, guild_id TEXT NOT NULL, code TEXT UNIQUE, created_by INTEGER, expires_at INTEGER NOT NULL,
+    verified_at INTEGER, verified_by TEXT, how TEXT, UNIQUE (community_id, platform, guild_id)
+  );
+  CREATE TABLE IF NOT EXISTS matrix_bots (
+    community_id INTEGER PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE, homeserver TEXT NOT NULL, token TEXT NOT NULL,
+    user_id TEXT, next_batch TEXT, updated_by TEXT, updated_at INTEGER NOT NULL
+  );
 `;
 function ensure() {
   const raw = db.raw();
   if (!raw || made === raw) return;
   raw.exec(SCHEMA);
+  // links are proven now (claims.js): the ones made before that stay valid
+  if (!raw.prepare('PRAGMA table_info(bridge_guilds)').all().some(c => c.name === 'verified')) raw.exec('ALTER TABLE bridge_guilds ADD COLUMN verified INTEGER NOT NULL DEFAULT 0; UPDATE bridge_guilds SET verified = 1;');
   made = raw;
 }
 
@@ -55,4 +66,4 @@ function setFrom(messageId, src) {
   if (src) db.run('INSERT OR REPLACE INTO bridge_from (message_id, src) VALUES (?, ?)', Number(messageId), String(src).slice(0, 40));
 }
 
-module.exports = { ensure, setting, setSetting, fromOf, setFrom };
+module.exports = { _forget: () => { made = null; }, ensure, setting, setSetting, fromOf, setFrom };

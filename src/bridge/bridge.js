@@ -19,6 +19,7 @@ const { err, now, clean, normalizeOrigin, log } = require('../util');
 const M = () => require('../messages');
 const VB = () => require('./voice-bridge');
 const W = () => require('../webhooks');
+const CL = () => require('./claims'); // proof of control before a guild is linked
 const MX = () => require('./matrix'); // the Matrix bridge (matrix.js): same tables and routes, its own plumbing
 const MATRIX = 'matrix';
 const ZW = '\u200b';
@@ -27,17 +28,34 @@ const TEXTISH = [0, 5]; // text, announcement
 const origin = () => normalizeOrigin(config.publicUrl());
 
 // ---------------------------------------------------------------- gateway clients (one per configured platform)
-const clients = new Map(); // platform -> GatewayClient
+const clients = new Map(); // platform -> GatewayClient (the first shard)
+const shards = new Map(); // platform -> { list: [GatewayClient], timers }
 const selfUser = new Map(); // platform -> { at, user }
+// Discord may ask a big bot to split its guilds over several connections (bridges.discord_shards): one client each
+const shardCount = p => (p === 'discord' ? Math.max(1, Number(config.get().bridges.discord_shards) || 1) : 1);
 function startClient(p) {
   stopClient(p);
   const tok = PL.tokenOf(p);
   if (!tok) return;
-  const c = new PL.GatewayClient(p, tok, onEvent);
-  clients.set(p, c);
-  c.start();
+  const n = shardCount(p), gap = PL.platform(p).identifyGap || 0;
+  const list = Array.from({ length: n }, (_, i) => new PL.GatewayClient(p, tok, onEvent, n > 1 ? [i, n] : null));
+  // (Discord takes one identify every 5 s)
+  const timers = list.slice(1).map((c, i) => { const t = setTimeout(() => c.start(), (i + 1) * gap); t.unref?.(); return t; });
+  shards.set(p, { list, timers });
+  clients.set(p, list[0]);
+  list[0].start();
 }
-function stopClient(p) { const c = clients.get(p); if (c) c.stop(); clients.delete(p); selfUser.delete(p); }
+function stopClient(p) {
+  const s = shards.get(p);
+  if (s) { s.timers.forEach(clearTimeout); s.list.forEach(c => c.stop()); }
+  shards.delete(p); clients.delete(p); selfUser.delete(p);
+}
+// the connection a guild's events and voice state updates go through
+function clientFor(p, gid) {
+  const list = shards.get(p)?.list || [];
+  if (list.length < 2) return list[0] || null;
+  try { return list[Number((BigInt(gid) >> 22n) % BigInt(list.length))]; } catch { return list[0]; }
+}
 async function botUser(p) {
   const hit = selfUser.get(p);
   if (hit && Date.now() - hit.at < 3600e3) return hit.user;
@@ -58,11 +76,12 @@ const mask = t => (t ? `${'*'.repeat(8)}${String(t).slice(-4)}` : null);
 function settingsView() {
   const out = {};
   for (const p of PL.IDS) {
-    const c = clients.get(p);
+    const list = shards.get(p)?.list || [];
+    const c = list.find(x => x.state !== 'ready') || list[0]; // (the shard that is worst off speaks for all)
     out[p] = {
       configured: configured(p), token: mask(PL.tokenOf(p)), source: PL.tokenSource(p),
-      state: c ? c.state : 'off', error: c?.error || null,
-      bot: c?.user ? { id: String(c.user.id), username: c.user.username } : selfUser.get(p)?.user ? { id: String(selfUser.get(p).user.id), username: selfUser.get(p).user.username } : null,
+      state: c ? c.state : 'off', error: c?.error || null, ...(list.length > 1 ? { shards: list.length } : {}),
+      bot: clients.get(p)?.user ? { id: String(clients.get(p).user.id), username: clients.get(p).user.username } : selfUser.get(p)?.user ? { id: String(selfUser.get(p).user.id), username: selfUser.get(p).user.username } : null,
     };
   }
   out[MATRIX] = MX().settingsView();
@@ -329,6 +348,10 @@ function onEvent(p, t, d) {
   if (/^(GUILD_|VOICE_)/.test(t)) { if (p === 'discord') VB().onDispatch(t, d); return; } // voice links (voice-bridge.js)
   if (t === 'TYPING_START') { typingIn(p, d).catch(e => console.error('[bridge] typing', e.message)); return; }
   const key = `in:${p}:${d.channel_id}`;
+  if (t === 'MESSAGE_CREATE') {
+    const cmd = CL().command(d); // a claim code or !ember-unlink: ours, never bridged
+    if (cmd) return enqueue(`cmd:${p}:${d.guild_id}`, () => CL().run(p, d, cmd));
+  }
   if (t === 'MESSAGE_CREATE') { if (d.author?.id) typingStop(p, d.channel_id, String(d.author.id)); return enqueue(key, () => inbound(p, d)); }
   if (t === 'MESSAGE_UPDATE') {
     return enqueue(key, async () => {
@@ -484,7 +507,7 @@ async function platforms() {
     if (!configured(p)) { out.push({ id: p, name: x.name, ready: false, bot: null, invite: null, linked: true }); continue; }
     const bot = await botUser(p).catch(() => null);
     // `linked` is always true: it's the instance owner's own bot, there is no account to link (Nookara checks a linked account)
-    out.push({ id: p, name: x.name, ready: !!bot, bot: bot ? bot.username : null, invite: bot ? x.invite(bot.id) : null, linked: true });
+    out.push({ id: p, name: x.name, ready: !!bot, bot: bot ? bot.username : null, invite: bot ? x.invite(bot.id) : null, linked: true, ...(p === 'discord' && CL().oauthSettings() ? { oauth: true } : {}) });
   }
   // Matrix has no add-to-server link: the bot is invited to a room like anyone else (`rooms: true`), and accepts
   out.push({ id: MATRIX, name: 'Matrix', ready: configured(MATRIX) && !!MX().botId(), bot: configured(MATRIX) ? MX().botId() : null, invite: null, linked: true, rooms: true });
@@ -552,9 +575,14 @@ async function link(me, sid, p, gid, automap = true) {
   if (!/^\d{1,24}$/.test(String(gid))) throw err('bad_guild');
   store.ensure();
   if (db.get('SELECT 1 FROM bridge_guilds WHERE community_id = ? AND platform = ?', c.id, p)) throw err('already_bridged');
+  // the bot is shared by every server here: a guild goes to one server, and only to someone who showed they run it over there
+  const other = CL().linkedElsewhere(c.id, p, gid);
+  if (other) throw err('guild_already_linked', 409, { sid: other.sid });
+  if (!require('../auth').isAdmin(me) && !CL().verified(c.id, p, gid)) throw err('guild_not_verified', 403, { platform: p, guild_id: String(gid) });
   let g;
   try { g = await guildThing(p, gid, '', true); } catch (e) { if (e.status === 404 || e.status === 403) throw err('bot_not_in_server', 404); throw err('platform_unreachable', 502); }
-  const id = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)', c.id, p, String(gid), clean(g.name, 100), me.id, now()).lastInsertRowid);
+  const id = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, created_by, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 1)', c.id, p, String(gid), clean(g.name, 100), me.id, now()).lastInsertRowid);
+  CL().spend(c.id, p, gid);
   if (automap) { // same name (lowercase, letters and digits only) = linked
     const all = await guildThing(p, gid, 'channels', true).catch(() => []);
     for (const ch of snap.channels.filter(x => (x.type || 'text') === 'text' || (p === 'discord' && x.type === 'voice'))) {
@@ -587,13 +615,18 @@ async function unlink(me, sid, p) {
   const { c } = manageable(me, sid);
   const b = bridgeRow(c, p);
   if (!b) return status(me, sid);
+  await removeBridge(b);
+  return status(me, sid);
+}
+// a link goes (unlinked here, or `!ember-unlink` over there): its webhooks are deleted
+async function removeBridge(b) {
   for (const l of db.all('SELECT * FROM bridge_channels WHERE bridge_id = ?', b.id)) {
     if (l.hook_id && configured(b.platform)) await PL.rest(b.platform, 'DELETE', `/webhooks/${l.hook_id}/${l.hook_token}`, null, { auth: false }).catch(() => {});
   }
   db.run('DELETE FROM bridge_guilds WHERE id = ?', b.id);
-  C.channelsChanged(c);
+  const c = db.get('SELECT * FROM communities WHERE id = ?', b.community_id);
+  if (c) C.channelsChanged(c);
   VB().linksChanged();
-  return status(me, sid);
 }
 async function setChannel(me, sid, cid, p, extId) {
   const { c } = manageable(me, sid);
@@ -641,6 +674,7 @@ function init() {
   const M_ = M();
   unhook.forEach(f => f()); unhook = [M_.onPost(onPost), M_.onEdit(onEdit), M_.onDelete(onDelete)];
   for (const p of PL.IDS) if (configured(p)) startClient(p);
+  config.events.off('change', onConfig); config.events.on('change', onConfig);
   MX().init();
   VB().init();
   clearInterval(pruneTimer);
@@ -648,8 +682,11 @@ function init() {
   pruneTimer.unref();
   try { db.run('DELETE FROM bridge_msgs WHERE created_at < ?', now() - RETENTION); } catch { /* fine */ }
 }
+// bridges.discord_shards changed: the Discord bot connects again with the new count
+function onConfig() { const s = shards.get('discord'); if (s && s.list.length !== shardCount('discord')) startClient('discord'); }
 function shutdown() {
   clearInterval(pruneTimer);
+  config.events.off('change', onConfig);
   for (const p of [...clients.keys()]) stopClient(p);
   MX().shutdown();
   VB().shutdown();
@@ -660,5 +697,5 @@ const idle = () => Promise.all([...queues.values()]); // tests: wait for queued 
 
 module.exports = {
   init, shutdown, onEvent, onPost, onEdit, onDelete, channelTag, settingsView, saveSettings, platforms, guilds, status, link, setEnabled, unlink, setChannel,
-  hookName, textIn, textOut, idle, clients, RETENTION, foreignEmojiInfo, hostAvatar, enqueue, linkByExt, onTyping, typingStart, typingStop,
+  hookName, textIn, textOut, idle, clients, clientFor, removeBridge, manageable, RETENTION, foreignEmojiInfo, hostAvatar, enqueue, linkByExt, onTyping, typingStart, typingStop,
 };
