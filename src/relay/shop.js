@@ -95,7 +95,8 @@ async function status(cid, me, rid) {
 
 // ---------- receipts (§12.5), verified offline ----------
 // -> claims, or throws err(<why>)
-async function verifyReceipt(token, pr, user) {
+// used(rcp): was this receipt spent already (the roles shop's purchases by default; tiers.js passes its own)
+async function verifyReceipt(token, pr, user, used = rcp => !!db.get('SELECT 1 FROM role_purchases WHERE rcp = ?', rcp)) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3 || token.length > 4096) throw err('receipt_invalid');
   let head, claims;
@@ -115,7 +116,7 @@ async function verifyReceipt(token, pr, user) {
   if (claims.ref !== pr.ref) throw err('receipt_wrong_ref');
   if (String(claims.rcp) !== String(pr.pay_id)) throw err('receipt_wrong_request');
   if (!Number.isFinite(claims.exp) || claims.exp * 1000 < Date.now()) throw err('receipt_expired');
-  if (db.get('SELECT 1 FROM role_purchases WHERE rcp = ?', String(claims.rcp))) throw err('receipt_used');
+  if (used(String(claims.rcp))) throw err('receipt_used');
   return claims;
 }
 

@@ -34,7 +34,8 @@ function discovery() {
     features: { signing: mode === 'nookara', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
-    managed: managed.view(), // Nookara-hosted plan + limits (PROTOCOL §19), null on a normal instance
+    managed: managed.view(), // the old hosted containers' plan (old clients read it), null otherwise
+    ...require('../limits').discovery(), // PROTOCOL §19: the homeserver's default limits and the tiers a server can buy
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
     homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
     creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account }, // who may make a server here (admins / allowlist / request / anyone)
@@ -52,6 +53,7 @@ function discovery() {
 
 function register(app, { restart }) {
   require('../backups').register(app);
+  require('../limits').register(app); require('../tiers').register(app); // PROTOCOL §19
   require('../selfupdate').register(app); // GET/POST /api/v1/instance/update (asks hostd to rebuild + recreate this container)
   for (const p of [WELL_KNOWN, LEGACY_WELL_KNOWN]) app.get(p, { auth: false }, () => discovery());
   app.get('/health', { auth: false }, () => ({ ok: true }));

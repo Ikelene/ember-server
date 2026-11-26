@@ -102,9 +102,9 @@ function cleanEmbeds(list) {
 }
 // files sent with a webhook / bot message (multipart): stored in the instance uploads dir; embeds can point at them with
 // attachment://<filename> (like Discord - a file an embed uses isn't shown again as its own attachment)
-function withFiles(files, embeds, userId = null) {
+function withFiles(files, embeds, userId = null, communityId = null) {
   const saved = (Array.isArray(files) ? files : []).slice(0, 10).map(f => {
-    const u = uploads.storeUpload(f.buffer, f.filename, userId);
+    const u = uploads.storeUpload(f.buffer, f.filename, userId, { communityId });
     return { name: String(f.filename || ''), att: { url: u.url, type: u.type, name: u.name, size: u.size, width: u.width, height: u.height, sha256: u.sha256 } };
   });
   if (!saved.length) return { atts: [], embeds };
@@ -131,7 +131,7 @@ function execute(wid, tok, body, files) {
   hits.push(t); times.set(h.wid, hits);
   const ctx = M().ctxOf(db.get('SELECT * FROM channels WHERE id = ?', h.channel_id));
   body = body && typeof body === 'object' ? body : {};
-  const fl = withFiles(files, body.embeds);
+  const fl = withFiles(files, body.embeds, null, ctx.c.id);
   const embeds = cleanEmbeds(fl.embeds);
   const content = String(body.content ?? '').slice(0, M().MSG_MAX);
   if (!content.trim() && !embeds.length && !fl.atts.length) throw err('Cannot send an empty message', 400);

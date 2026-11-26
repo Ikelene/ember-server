@@ -5,10 +5,16 @@ const bridge = require('./bridge');
 const cloudlink = require('./cloudlink');
 const store = require('./store');
 const managed = require('../managed');
+const L = require('../limits');
+
+// a managed plan without bridges (PROTOCOL §19): nothing connects and every route is refused
+const allOff = () => managed.active() && !L.defaults().bridges.length;
+// which platforms a server may bridge to is one of its limits
+const allowed = (platform, sid) => { if (platform) L.assertBridge(platform, require('../communities').pickCommunity(sid)?.id ?? null); };
 
 function init() {
   store.ensure();
-  if (!managed.allows('bridges')) return; // Nookara-hosted starter plan (PROTOCOL §19): the bridges never connect
+  if (allOff()) return;
   bridge.init();
   cloudlink.init();
 }
@@ -20,8 +26,8 @@ function shutdown() {
 function register(real) {
   const v1 = p => '/api/v1' + p;
   const s = v => String(v ?? '');
-  // Every bridge route answers 403 plan_feature { what: 'bridges' } while the plan has none.
-  const gated = fn => (req, res) => { managed.assertAllows('bridges'); return fn(req, res); };
+  // Every bridge route answers 403 plan_feature { what: 'bridges' } while the plan has none; linking checks the server's own list.
+  const gated = fn => (req, res) => { if (allOff()) throw L.planFeature('bridges'); return fn(req, res); };
   const app = {};
   for (const m of ['get', 'post', 'put', 'patch', 'delete']) app[m] = (p, o, f) => (typeof o === 'function' ? real[m](p, gated(o)) : real[m](p, o, gated(f)));
 
@@ -41,12 +47,12 @@ function register(real) {
 
   // ---- Discord / Fluxer (same shapes as Nookara's /chat/bridge/*; Manage server) ----
   app.get(v1('/bridge/platforms'), () => bridge.platforms());
-  app.get(v1('/bridge/:platform/guilds'), req => bridge.guilds(req.user, req.params.platform, req.query.sid));
+  app.get(v1('/bridge/:platform/guilds'), req => { allowed(req.params.platform, req.query.sid); return bridge.guilds(req.user, req.params.platform, req.query.sid); });
   app.get(v1('/bridge/servers/:sid'), req => bridge.status(req.user, req.params.sid));
-  app.put(v1('/bridge/servers/:sid'), req => bridge.link(req.user, req.params.sid, s(req.body?.platform), s(req.body?.guild_id), req.body?.automap !== false));
-  app.patch(v1('/bridge/servers/:sid'), req => bridge.setEnabled(req.user, req.params.sid, s(req.body?.platform), !!req.body?.enabled));
+  app.put(v1('/bridge/servers/:sid'), req => { allowed(s(req.body?.platform), req.params.sid); return bridge.link(req.user, req.params.sid, s(req.body?.platform), s(req.body?.guild_id), req.body?.automap !== false); });
+  app.patch(v1('/bridge/servers/:sid'), req => { if (req.body?.enabled) allowed(s(req.body?.platform), req.params.sid); return bridge.setEnabled(req.user, req.params.sid, s(req.body?.platform), !!req.body?.enabled); });
   app.delete(v1('/bridge/servers/:sid'), req => bridge.unlink(req.user, req.params.sid, s(req.body?.platform || req.query.platform)));
-  app.put(v1('/bridge/servers/:sid/channels/:cid'), req => bridge.setChannel(req.user, req.params.sid, req.params.cid, s(req.body?.platform), req.body?.ext_channel_id ? s(req.body.ext_channel_id) : null));
+  app.put(v1('/bridge/servers/:sid/channels/:cid'), req => { if (req.body?.ext_channel_id) allowed(s(req.body?.platform), req.params.sid); return bridge.setChannel(req.user, req.params.sid, req.params.cid, s(req.body?.platform), req.body?.ext_channel_id ? s(req.body.ext_channel_id) : null); });
 
   // ---- CloudLink bridge channels: connection status + reconnect (Manage channels) ----
   app.get(v1('/channels/:cid/cloudlink'), req => ({ status: cloudlink.status(cloudlink.bridgeChannel(req.params.cid, req.user)) }));
@@ -56,6 +62,6 @@ function register(real) {
 const channelTag = channelId => bridge.channelTag(channelId);
 // someone here is typing in this channel (gateway.js): the linked channels see the bot typing
 const typing = (ch, on) => { try { bridge.onTyping(ch, on); } catch (e) { console.error('[bridge] typing', e.message); } };
-const features = () => { if (!managed.allows('bridges')) return false; const PL = require('./platform'); return { discord: !!PL.tokenOf('discord'), fluxer: !!PL.tokenOf('fluxer'), matrix: require('./matrix').configured(), cloudlink: true }; };
+const features = () => { if (allOff()) return false; const PL = require('./platform'); return { discord: !!PL.tokenOf('discord'), fluxer: !!PL.tokenOf('fluxer'), matrix: require('./matrix').configured(), cloudlink: true }; };
 
 module.exports = { init, shutdown, register, channelTag, typing, features, bridge, cloudlink };

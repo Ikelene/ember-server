@@ -111,6 +111,7 @@ function sanitize(p, loose = false) {
     const d = typeof p.domain === 'string' ? p.domain.trim().toLowerCase() : null;
     if (p.domain === null || d === '') out.domain = null; else if (d && DOMAIN.test(d)) out.domain = d; else bad('invalid_domain');
   }
+  if (p.limits !== undefined) out.limits = require('./limits').sanitize(p.limits, loose); // PROTOCOL §19: { defaults, tiers }
   if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
   if (p.creation !== undefined) {
     if (p.creation && typeof p.creation === 'object' && !Array.isArray(p.creation)) {
@@ -134,6 +135,7 @@ function sanitize(p, loose = false) {
 // the effective settings: defaults < file < env. (Old community_creation / auto_join keys in config.json are ignored.)
 function get() {
   const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) }, creation: { ...DEFAULTS.creation, ...(data.creation || {}) } };
+  v.limits = { defaults: data.limits?.defaults || {}, tiers: data.limits?.tiers || [] };
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
   v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
   v.nookara_url = normalizeOrigin(v.nookara_url);
@@ -170,6 +172,7 @@ function update(patch) {
   }
   if (clean.youtube) clean.youtube = { ...(data.youtube || {}), ...clean.youtube };
   if (clean.creation) clean.creation = { ...(data.creation || {}), ...clean.creation };
+  if (clean.limits) clean.limits = { ...(data.limits || {}), ...clean.limits };
   if (clean.federation) clean.federation = FS.merge(data.federation || {}, clean.federation);
   // the old accounts_mode / registration settings edit the accounts block (a value that only repeats what the block already
   // says changes nothing: old admin pages send whole forms back)
@@ -234,6 +237,6 @@ function publicView() {
   const v = get();
   return { name: v.name, description: v.description, icon_url: v.icon_url, registration: v.registration, max_upload_mb: v.max_upload_mb, accounts_mode: wireMode(mode()) };
 }
-const voiceConfigured = () => { if (!managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
+const voiceConfigured = () => { if (managed.active() && !managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
 
 module.exports = { init, get, mode, publicUrl, domain, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS, envMode, devHttp, saved: () => AS.complete(data.accounts || {}), _test: { allowHttp(on) { allowHttp = !!on; } } };

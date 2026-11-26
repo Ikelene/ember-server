@@ -5,7 +5,7 @@ const C = require('../communities');
 const M = require('../messages');
 const uploads = require('../uploads');
 const exp = require('../export');
-const managed = require('../managed');
+const L = require('../limits');
 const { err } = require('../util');
 
 function register(app) {
@@ -47,20 +47,21 @@ function register(app) {
       if (ch.community_id !== c.id) throw err('channel_not_found', 404);
       if (!(snap.chPerms(ch, req.user.id) & P.ATTACH)) throw err('no_attach_permission', 403);
     } else if (!snap.can(req.user.id, P.ATTACH)) throw err('no_attach_permission', 403);
-    if (managed.limit('max_upload_mb') === 0) throw managed.planFeature('max_upload_mb');
+    if (L.limit('max_upload_mb', c.id) === 0) throw L.planFeature('max_upload_mb', c.id);
     const rules = uploads.beforeUpload(c, snap, req.user); // Server settings > Uploads: per minute, files each member keeps, storage
     return { maxMb: C.effectiveUploadMax(c, snap, req.user), c, rules };
   }
-  function uploadError(maxMb) {
-    return managed.limit('max_upload_mb') === maxMb
-      ? managed.planLimit('max_upload_mb', maxMb, null)
+  // (the homeserver's own max_upload_mb with nothing else set is not a plan: that stays 413)
+  function uploadError(maxMb, c) {
+    return L.limit('max_upload_mb', c.id) === maxMb && L.source('max_upload_mb', c.id) !== 'builtin'
+      ? L.planLimit('max_upload_mb', maxMb, null, c.id)
       : err('file_too_large', 413, { max_mb: maxMb });
   }
   app.post(v1('/media/upload'), async req => {
     const { maxMb, c, rules } = uploadContext(req);
     let data;
     try { data = await uploads.readMultipart(req, { maxBytes: maxMb * 1024 * 1024 }); }
-    catch (e) { if (e.code === 'file_too_large') throw uploadError(maxMb); throw e; }
+    catch (e) { if (e.code === 'file_too_large') throw uploadError(maxMb, c); throw e; }
     const { buffer, filename, fields } = data;
     if (!buffer || !buffer.length) throw err('no_file');
     return uploads.acceptUpload(c, req.user, buffer, filename, rules, { expiresInDays: fields?.expires_in_days ?? req.query.expires_in_days });
@@ -74,7 +75,7 @@ function register(app) {
     let result;
     try { result = await require('../unfurl').fetchSafe(url.href, { maxBytes: maxMb * 1024 * 1024 }); }
     catch { throw err('media_import_failed', 422); }
-    if (result.cut) throw uploadError(maxMb);
+    if (result.cut) throw uploadError(maxMb, c);
     if (result.status !== 200 || !result.body.length) throw err('media_import_failed', 422);
     return uploads.acceptUpload(c, req.user, result.body, req.body?.name || 'attachment', rules, { expiresInDays: req.body?.expires_in_days });
   });

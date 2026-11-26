@@ -1,7 +1,7 @@
 'use strict';
 // Nookara relays, instance side (PROTOCOL §12, "Instance behaviour"): started by index.js once the HTTP server listens.
 const client = require('./client');
-const parts = () => [require('./push'), require('./daily'), require('./shop'), require('./broker'), require('./directory'), require('./gallery'), require('./identity')];
+const parts = () => [require('./push'), require('./daily'), require('./shop'), require('./broker'), require('./directory'), require('./gallery'), require('./identity'), require('../tiers')];
 
 function start() {
   client.loadKey();

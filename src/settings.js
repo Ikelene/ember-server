@@ -1,9 +1,8 @@
 'use strict';
 // Server settings: one JSON object per community (communities.settings) for joining, message rules, AutoMod, the audit log and
 // uploads. GET / PATCH /api/v1/servers/:sid/settings (Manage server). Two keys reach outside the chat, so only instance admins
-// change them: the link-preview proxy and AutoMod's word-list file on the server. On a Nookara-hosted server the plan caps a few
-// numbers (members, files per member, how long files are kept, total storage: managed.js); a saved number above the cap counts
-// as the cap.
+// change them: the link-preview proxy and AutoMod's word-list file on the server. The server's limits (limits.js) cap a few
+// numbers (members, files per member, how long files are kept, total storage); a saved number above the cap counts as the cap.
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -47,14 +46,15 @@ function raw(c) {
 }
 // a plan number caps a saved one: null (unlimited) on the plan = the saved value, null saved = the plan's
 const capped = (saved, plan) => (plan == null ? saved : saved == null ? plan : Math.min(saved, plan));
-const planCaps = () => ({
-  member_cap: managed.limit('member_cap'), files_per_member: managed.limit('files_per_member'), upload_expiry_days: managed.limit('upload_expiry_days') || null, // (0 days = keep forever)
-  storage_mb: managed.limit('storage_mb'), max_upload_mb: managed.limit('max_upload_mb'),
-});
+const planCaps = c => {
+  const l = require('./limits').effective(c?.id ?? null);
+  return { member_cap: l.member_cap, files_per_member: l.files_per_member, upload_expiry_days: l.upload_expiry_days || null, // (0 days = keep forever)
+    storage_mb: l.storage_mb, max_upload_mb: l.max_upload_mb };
+};
 
 // the settings in force (plan caps applied)
 function get(c) {
-  const s = raw(c), p = planCaps();
+  const s = raw(c), p = planCaps(c);
   s.join.max_members = capped(s.join.max_members, p.member_cap);
   s.uploads.files_per_member = capped(s.uploads.files_per_member, p.files_per_member);
   s.uploads.expire_days = capped(s.uploads.expire_days, p.upload_expiry_days);
@@ -72,7 +72,8 @@ function view(c, me) {
   return {
     join_policy: c.join_policy, has_password: !!password_hash, ...s, join,
     remote_min_age_floor_days: config.get().federation.min_age_floor_days, // the homeserver's floor under join.remote_min_age_days
-    spam_defaults: SPAM_DEFAULTS, plan: managed.active() ? planCaps() : null,
+    spam_defaults: SPAM_DEFAULTS, plan: managed.active() ? planCaps(c) : null, // (old clients; `limits` is what applies now, PROTOCOL §19)
+    ...(c?.id ? { limits: require('./limits').view(c) } : {}),
     image_compression_available: require('./images').available(),
     instance_admin: !!me && require('./auth').isAdmin(me), audit_categories: AUDIT_CATEGORIES, file_types: FILE_TYPES,
   };

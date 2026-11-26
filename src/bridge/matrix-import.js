@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const C = require('../communities');
 const uploads = require('../uploads');
-const managed = require('../managed');
+const canBridge = () => require('../limits').allowsBridge('matrix'); // (a new server starts on the homeserver's defaults)
 const config = require('../config');
 const { P, EVERYONE_DEFAULT } = require('../perms');
 const { err, clean, normalizeOrigin } = require('../util');
@@ -33,7 +33,7 @@ function sessionOf(me) {
   const s = sessions.get(me.id);
   if (s && Date.now() - s.at < TTL) return s;
   sessions.delete(me.id);
-  if (managed.allows('bridges') && MX.configured() && MX.botId()) {
+  if (canBridge() && MX.configured() && MX.botId()) {
     if (!saved || saved.bot !== MX.botId()) saved = { saved: true, bot: MX.botId(), snap: null };
     return saved;
   }
@@ -46,7 +46,7 @@ const call = (s, method, route, body, o = {}) => MX.api(method, route, body, { .
 function view(me) {
   C.assertMayCreate(me);
   const s = sessionOf(me);
-  return { ready: !!s, bot: s ? s.bot : null, saved: !!s?.saved, can_bridge: managed.allows('bridges') };
+  return { ready: !!s, bot: s ? s.bot : null, saved: !!s?.saved, can_bridge: canBridge() };
 }
 async function setBot(me, v) {
   C.assertMayCreate(me);
@@ -201,7 +201,7 @@ async function preview(me, gid) {
     groups: g.groups.map(x => ({ id: x.id, name: x.name, channels: x.channels.map(({ via, ...c }) => c) })),
     roles: ROLES.map(r => ({ id: r.id, name: r.name, color: null, admin: r.id === 'admin' })), everyone_send: true,
     emojis: g.emojis.slice(0, 100).map(e => ({ id: e.name, name: e.name, animated: false, url: null })), emoji_total: g.emojis.length,
-    can_bridge: managed.allows('bridges'),
+    can_bridge: canBridge(),
   };
 }
 function fail(e) {
@@ -265,7 +265,7 @@ async function run(me, body) {
     files['manifest.json'] = strToU8(JSON.stringify({ format: EXPORT_FORMAT, source: normalizeOrigin(config.publicUrl()), source_kind: 'matrix-import', exported_at: Date.now(), community: `matrix_${g.guild.id}` }));
     const c = require('../export').importCommunity(me, Buffer.from(zipSync(files, { level: 6 })));
     let bridged = 0;
-    if (body.bridge && managed.allows('bridges')) bridged = await bridgeRooms(me, s, c, picked).catch(e => { console.error('[import] matrix bridge', e.message); return 0; });
+    if (body.bridge && canBridge()) bridged = await bridgeRooms(me, s, c, picked).catch(e => { console.error('[import] matrix bridge', e.message); return 0; });
     sessions.delete(me.id);
     return { sid: c.sid, channels: picked.length, roles: extra.length, emojis: emojis.length, bridged };
   } finally { running.delete(me.id); }

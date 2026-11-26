@@ -2,6 +2,8 @@
 // Nookara-hosted ("managed") instances (PROTOCOL §19): the host (hostd) starts the container with EMBER_MANAGED=1,
 // EMBER_PLAN and EMBER_LIMITS (JSON), and this module turns them into limits the rest of the server asks about.
 // Everything reads the environment lazily, so a test can flip it between runs. Without EMBER_MANAGED nothing here limits anything.
+// Limits are per server now (limits.js): with EMBER_MANAGED set these plan numbers are that module's defaults, and it does the
+// enforcing. What is left here is the environment, the locked settings, read-only mode and the old `managed` / `plan` objects.
 const { env, WIRE_HOST, renameLegacySettings } = require('./compat');
 const { err, normalizeOrigin } = require('./util');
 

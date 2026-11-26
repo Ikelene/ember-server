@@ -276,6 +276,27 @@ const MIGRATIONS = [
       CREATE TABLE IF NOT EXISTS homeservers_seen (domain TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, origin TEXT, net TEXT, ips TEXT);
       CREATE TABLE IF NOT EXISTS homeserver_groups_seen (key TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);`);
   },
+  // v25: limits per server (PROTOCOL §19): a homeserver admin's overrides, the tier a server paid for and its pay requests;
+  // an upload belongs to the server it was sent to (older rows stay NULL: they count toward no server's storage)
+  d => {
+    if (!d.prepare('PRAGMA table_info(uploads)').all().some(c => c.name === 'community_id')) d.exec('ALTER TABLE uploads ADD COLUMN community_id INTEGER');
+    d.exec(`CREATE INDEX IF NOT EXISTS uploads_community ON uploads(community_id) WHERE community_id IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS server_limits (
+        community_id INTEGER PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE, overrides TEXT NOT NULL DEFAULT '{}',
+        note TEXT NOT NULL DEFAULT '', updated_by TEXT, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS server_tiers (
+        community_id INTEGER PRIMARY KEY REFERENCES communities(id) ON DELETE CASCADE, tier TEXT NOT NULL, until INTEGER NOT NULL,
+        receipt_jti TEXT, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS tier_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, tier TEXT NOT NULL, amount INTEGER NOT NULL, period_weeks INTEGER NOT NULL,
+        ref TEXT NOT NULL UNIQUE, pay_id TEXT, approve_url TEXT, rcp TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'creating', error TEXT,
+        expires_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS tier_payments_open ON tier_payments(status, expires_at);`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

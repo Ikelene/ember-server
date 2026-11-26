@@ -150,7 +150,7 @@ function register(app) {
     if (/^multipart\//i.test(req.headers['content-type'] || '')) { const f = await uploads.readForm(req); body = f.fields; files = f.files; }
     if (body.payload_json != null) { try { body = JSON.parse(body.payload_json); } catch { throw err('empty_message'); } }
     const text = B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions);
-    const fl = W.withFiles(files, body.embeds, bot.id);
+    const fl = W.withFiles(files, body.embeds, bot.id, ctx.c.id);
     const msg = await M.postMessage(bot, ctx, text, { replyTo: body.message_reference?.message_id || null, attachments: fl.atts, embeds: W.cleanEmbeds(fl.embeds), components: comps.clean(body.components), alias: body.alias });
     return B.messageObj(msg, ctx.c, ctx.snap);
   });

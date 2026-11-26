@@ -24,7 +24,10 @@ const botVoice = require('./bot-voice');
 
 const M = () => require('./messages');
 const ROLE_BASE = 1000000000, MAX_BOTS = 25, NAME = /^[A-Za-z0-9_.-]{2,32}$/, HEARTBEAT = 41250;
-const maxBots = () => Math.min(MAX_BOTS, managed.limit('bots') ?? MAX_BOTS);
+const L = require('./limits');
+// the server a bots limit is counted in: the one named, else the only one there is, else none (the homeserver's defaults)
+const limitCid = sid => (sid ? db.get('SELECT id FROM communities WHERE sid = ?', String(sid))?.id : C.communityCount() === 1 ? db.get('SELECT id FROM communities').id : null) ?? null;
+const maxBots = cid => Math.min(MAX_BOTS, L.limit('bots', cid) ?? MAX_BOTS);
 const origin = () => normalizeOrigin(config.publicUrl());
 const apiUrl = () => `${origin()}/bot/v1`;
 const gatewayUrl = () => origin().replace(/^http/, 'ws') + '/bot/gateway';
@@ -64,7 +67,7 @@ function own(me, ref) {
 const mine = (me, sid) => {
   guard(me, sid);
   const rows = managesAll(me) ? db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL ORDER BY user_id') : db.all('SELECT user_id FROM bots WHERE gallery_id IS NULL AND owner_id = ? ORDER BY user_id', me.id);
-  return { bots: rows.map(r => view(botRow(r.user_id))), max: maxBots(), used: managed.botCount() };
+  return { bots: rows.map(r => view(botRow(r.user_id))), max: maxBots(limitCid(sid)), used: managed.botCount(sid ? limitCid(sid) : null) };
 };
 function checkName(name, exceptId = 0) {
   if (!NAME.test(name)) throw err('bad_bot_name');
@@ -74,8 +77,8 @@ function create(me, { name, description, sid } = {}) {
   guard(me, sid);
   name = String(name || '').trim();
   checkName(name);
-  const have = managed.botCount();
-  managed.assertRoom('bots', have);
+  const cid = limitCid(sid);
+  L.assertRoom('bots', managed.botCount(sid ? cid : null), cid);
   if (db.get('SELECT COUNT(*) AS n FROM bots').n >= MAX_BOTS) throw err('too_many_bots');
   const id = db.tx(() => {
     const r = db.run("INSERT INTO users (principal, kind, username, display_name, username_lc, created_at) VALUES ('pending', 'bot', ?, ?, ?, ?)", name, name, name.toLowerCase(), now());

@@ -50,7 +50,8 @@ async function iceServers(ttl = 14400) { // credentials live 4h; hand out one se
 
 // ---------- backend: own Cloudflare keys, else Nookara's voice broker (PROTOCOL §12.7), else none ----------
 const broker = () => require('./relay/broker');
-const backendName = () => (configured() ? 'direct' : broker().usable() ? 'broker' : null);
+// cid: the server the call is in. A server whose limits leave out custom_voice_keys (PROTOCOL §19) never uses the homeserver's own keys
+const backendName = (cid = null) => (configured() && require('./limits').allows('custom_voice_keys', cid) ? 'direct' : broker().usable() ? 'broker' : null);
 const backendOf = p => (p?.backend === 'broker' ? broker().R : R);
 // discovery features.voice
 const available = () => configured() || broker().available();
@@ -168,7 +169,7 @@ async function handle(sock, me, msg, reply) {
       const room = String(msg.room || '');
       const denied = voiceDenied(me, room);
       if (denied) throw err(denied, 403);
-      const backend = backendName();
+      const backend = backendName(voiceChannelOf(room)?.community_id ?? null);
       if (!backend) throw err('voice_unavailable', 503);
       leave(sock);
       for (const q of [...(rtcRooms.get(room)?.values() || [])]) if (q.parked && q.userId === me.id) drop(q); // (joining afresh instead of resuming)
@@ -298,8 +299,9 @@ async function handle(sock, me, msg, reply) {
 // server's Manage server people linked. person = { principal, username, platform, name, avatar } (no account behind it).
 // After this, the usual chat_rtc_publish / _connected / _subscribe / _answer frames go through handle() like a bot's.
 async function virtualJoin(sock, person, room) {
-  if (!voiceChannelOf(room)) throw err('not_allowed', 403);
-  const backend = backendName();
+  const vch = voiceChannelOf(room);
+  if (!vch) throw err('not_allowed', 403);
+  const backend = backendName(vch.community_id);
   if (!backend) throw err('voice_unavailable', 503);
   leave(sock);
   let publish, receive = null, ice;

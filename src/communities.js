@@ -7,6 +7,7 @@ const db = require('./db');
 const perms = require('./perms');
 const auth = require('./auth');
 const managed = require('./managed');
+const L = () => require('./limits');
 const gateway = require('./gateway');
 const { P, ALL_PERMS, CHANNEL_BITS, EVERYONE_DEFAULT } = perms;
 const { err, clean, randId, now } = require('./util');
@@ -114,7 +115,7 @@ const humanCount = id => db.get("SELECT COUNT(*) AS n FROM members m JOIN users 
 const memberLimit = c => S().get(c).join.max_members;
 const assertRoomToJoin = (c, user) => {
   const free = user.kind === 'bot' || auth.isAdmin(user) || Number(c.owner_id) === Number(user.id);
-  if (managed.limit('member_cap') !== null) managed.assertCanJoin(humanCount(c.id), free);
+  L().assertCanJoin(c.id, humanCount(c.id), free);
   const cap = memberLimit(c);
   if (cap !== null && !free && humanCount(c.id) >= cap) throw err('server_full', 403, { cap });
 };
@@ -131,9 +132,10 @@ const roleView = r => ({
   upload_max_mb: r.upload_max_mb ?? null, permissions: Number(r.permissions), hoist: !!r.hoist, mentionable: !!r.mentionable, is_default: !!r.is_default,
 });
 const validUploadMax = v => Number.isInteger(v) && v > 0 ? v : null;
-const uploadCeiling = () => Math.min(validUploadMax(config.get().max_upload_mb) ?? 25, managed.limit('max_upload_mb') ?? Infinity);
+// the most one file may be on this server: its limit (PROTOCOL §19; the homeserver's max_upload_mb unless a tier or an override says otherwise), 500 MB when unlimited
+const uploadCeiling = c => L().limit('max_upload_mb', c.id) ?? 500;
 function effectiveUploadMax(c, snap, me) {
-  const ceiling = uploadCeiling();
+  const ceiling = uploadCeiling(c);
   if (me && snap.isOwner(me.id)) return ceiling;
   const ids = me && snap.isMember(me.id) ? snap.roleIds(me.id) : new Set();
   return Math.min(ceiling, Math.max(validUploadMax(c.upload_max_mb) ?? ceiling, ...snap.roles.filter(r => me && snap.isMember(me.id) && (r.is_default || ids.has(r.id))).map(r => r.upload_max_mb || 0)));
@@ -152,8 +154,8 @@ function serverView(c, snap, me) {
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
     invite: role ? c.invite_code : undefined, // every member can invite people
     join_policy: c.join_policy, allow_signing: config.mode() === 'nookara', // signing: always allowed in nookara mode, never required
-    upload_ceiling_mb: uploadCeiling(), ...(me ? { my_upload_max_mb: effectiveUploadMax(c, snap, me) } : {}),
-    allow_uploads: !!c.allow_uploads, upload_max_mb: Math.min(validUploadMax(c.upload_max_mb) ?? uploadCeiling(), uploadCeiling()), listed: !!c.listed, instance: instanceOrigin(),
+    upload_ceiling_mb: uploadCeiling(c), ...(me ? { my_upload_max_mb: effectiveUploadMax(c, snap, me) } : {}),
+    allow_uploads: !!c.allow_uploads, upload_max_mb: Math.min(validUploadMax(c.upload_max_mb) ?? uploadCeiling(c), uploadCeiling(c)), listed: !!c.listed, instance: instanceOrigin(),
   };
 }
 const starMin = cfg => Math.min(Math.max(Math.trunc(Number(cfg.min) || 3), 1), 100);
@@ -400,7 +402,7 @@ function updateServer(sid, me, body) {
     set.join_policy = body.join_policy;
   }
   if (body.allow_uploads !== undefined) set.allow_uploads = body.allow_uploads ? 1 : 0;
-  if (body.upload_max_mb !== undefined) { const n = Number(body.upload_max_mb); if (!Number.isInteger(n) || n < 1 || n > 500) throw err('invalid_upload_max_mb'); set.upload_max_mb = Math.min(n, managed.limit('max_upload_mb') ?? n); }
+  if (body.upload_max_mb !== undefined) { const n = Number(body.upload_max_mb); if (!Number.isInteger(n) || n < 1 || n > 500) throw err('invalid_upload_max_mb'); set.upload_max_mb = Math.min(n, L().limit('max_upload_mb', c.id) ?? n); }
   if (Object.keys(set).length) {
     db.run(`UPDATE communities SET ${Object.keys(set).map(k => k + ' = ?').join(', ')} WHERE id = ?`, ...Object.values(set), c.id);
     Object.assign(c, set);
@@ -433,7 +435,7 @@ const memberEvent = (communityId, userId, kind, why = null, at = now()) => db.ru
 function addMember(c, userId, { quiet = false, announce = true } = {}) {
   userId = Number(userId);
   if (db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, userId)) return false;
-  if (auth.userById(userId)?.kind === 'bot') managed.assertRoom('bots', managed.botCount(c.id));
+  if (auth.userById(userId)?.kind === 'bot') L().assertRoom('bots', managed.botCount(c.id), c.id);
   db.tx(() => {
     db.run('INSERT OR IGNORE INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', c.id, userId, now());
     memberEvent(c.id, userId, 'join');
@@ -932,7 +934,7 @@ function emojisChanged(c) {
 }
 function listEmojis(sid, me) {
   const { c } = emojiCommunity(sid, me, false);
-  return { emojis: db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(emojiView), max: managed.limit('emojis') ?? LIMITS.emojis };
+  return { emojis: db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(emojiView), max: Math.min(L().limit('emojis', c.id) ?? LIMITS.emojis, LIMITS.emojis) };
 }
 function allEmojis(me) {
   const out = [];
@@ -946,7 +948,7 @@ function createEmoji(sid, me, { buffer, name, filename, origin = null }) {
   const { c } = emojiCommunity(sid, me, true);
   if (!buffer) throw err('no_file');
   const have = db.get('SELECT COUNT(*) AS n FROM emojis WHERE community_id = ?', c.id).n;
-  managed.assertRoom('emojis', have);
+  L().assertRoom('emojis', have, c.id);
   if (have >= LIMITS.emojis) throw err('too_many_emojis');
   const up = require('./uploads');
   const eid = 'e' + require('./util').randHex(5);

@@ -138,12 +138,12 @@ async function hostAvatar(p, user) {
   return `${origin()}/uploads/${rel}`;
 }
 // an attachment over there -> an upload here (capped by the community's / instance's upload limit, 25 MB at most)
-async function hostFile(p, a, maxBytes) {
+async function hostFile(p, a, maxBytes, communityId = null) {
   const url = String(a.url || a.proxy_url || '');
   if (!PL.platform(p).media.test(url) || (Number(a.size) || 0) > maxBytes) return null;
   try {
     const buf = await download(url, maxBytes);
-    const up = uploads.storeUpload(buf, String(a.filename || 'file').replace(/[^\w.-]+/g, '_').slice(-80) || 'file', null);
+    const up = uploads.storeUpload(buf, String(a.filename || 'file').replace(/[^\w.-]+/g, '_').slice(-80) || 'file', null, { communityId });
     return { url: up.url, type: up.type, name: up.name, size: up.size, width: up.width || a.width || undefined, height: up.height || a.height || undefined };
   } catch { return null; }
 }
@@ -364,11 +364,11 @@ async function inbound(p, d) {
   const maxBytes = Math.min(25, c.upload_max_mb || 25, config.get().max_upload_mb || 25) * 1024 * 1024;
   const atts = [], extra = [];
   for (const x of (d.attachments || []).slice(0, 8)) {
-    const h = atts.length < 4 && c.allow_uploads ? await hostFile(p, x, maxBytes) : null;
+    const h = atts.length < 4 && c.allow_uploads ? await hostFile(p, x, maxBytes, c.id) : null;
     if (h) atts.push(h); else if (x.url) extra.push(String(x.url));
   }
   for (const s of (d.sticker_items || d.stickers || []).slice(0, 2)) {
-    const h = atts.length < 4 && c.allow_uploads ? await hostFile(p, { url: `${PL.platform(p).cdn}/stickers/${s.id}.png`, filename: `${s.name || 'sticker'}.png` }, maxBytes) : null;
+    const h = atts.length < 4 && c.allow_uploads ? await hostFile(p, { url: `${PL.platform(p).cdn}/stickers/${s.id}.png`, filename: `${s.name || 'sticker'}.png` }, maxBytes, c.id) : null;
     if (h) atts.push(h);
   }
   if (extra.length) body = [body, ...extra].filter(Boolean).join('\n');

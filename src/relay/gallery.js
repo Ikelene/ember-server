@@ -72,7 +72,7 @@ async function add(me, body = {}) {
   if (clash) throw err('token_conflict', 409);
   const pfp = httpsUrl(claims.bot.avatar_url);
   const desc = String(claims.bot.description || '').slice(0, 300);
-  require('../managed').assertRoom('bots', require('../managed').botCount(c.id));
+  require('../limits').assertRoom('bots', require('../managed').botCount(c.id), c.id);
   if (!row) {
     const name = freeName(String(claims.bot.username), gid);
     const id = db.tx(() => {

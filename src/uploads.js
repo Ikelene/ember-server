@@ -146,7 +146,8 @@ function removeFiles(rels) {
 }
 
 // a user upload (message attachment). -> the §11 response. expiresAt: when the sweeper deletes it (null = kept)
-function storeUpload(buf, originalName, userId, { expiresAt = null } = {}) {
+// communityId: the server it was sent to (its storage limit counts it, PROTOCOL §19)
+function storeUpload(buf, originalName, userId, { expiresAt = null, communityId = null } = {}) {
   const sn = sniff(buf);
   const media = !!sn;
   let ext = sn ? sn.ext : safeExt(originalName);
@@ -161,7 +162,7 @@ function storeUpload(buf, originalName, userId, { expiresAt = null } = {}) {
   const dim = media ? dimensions(buf, ext) : {};
   const name = cleanName(originalName);
   const mime = MIME[ext] || 'application/octet-stream';
-  db.run('INSERT INTO uploads (path, sha256, name, size, mime, type, width, height, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rel, hash, name, buf.length, mime, type, dim.width || null, dim.height || null, userId ?? null, now(), expiresAt);
+  db.run('INSERT INTO uploads (path, sha256, name, size, mime, type, width, height, user_id, created_at, expires_at, community_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rel, hash, name, buf.length, mime, type, dim.width || null, dim.height || null, userId ?? null, now(), expiresAt, communityId ?? null);
   return { url: `${normalizeOrigin(config.publicUrl())}/uploads/${rel}`, name, size: buf.length, mime, type, sha256: hash, ...(dim.width ? { width: dim.width, height: dim.height } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) };
 }
 
@@ -180,12 +181,13 @@ function kindOf(b, name) {
 const S = () => require('./settings');
 const MB = 1024 * 1024;
 const recent = new Map(); // user id -> upload times in the last minute
-const storageUsed = () => db.get('SELECT COALESCE(SUM(size), 0) AS n FROM uploads').n;
+// what one server's uploads take (uploads from before they were tied to a server belong to none); without one: everything
+const storageUsed = cid => (cid == null ? db.get('SELECT COALESCE(SUM(size), 0) AS n FROM uploads').n : db.get('SELECT COALESCE(SUM(size), 0) AS n FROM uploads WHERE community_id = ?', cid).n);
 const keptBy = userId => db.get('SELECT COUNT(*) AS n FROM uploads WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)', userId, now()).n;
 // before the file is read: uploads per minute, files each member can keep, total storage. -> the uploads settings
 function beforeUpload(c, snap, me) {
   const s = S().get(c).uploads;
-  const managed = require('./managed');
+  const L = require('./limits');
   if (!snap.isOwner(me.id)) {
     const t = now(), key = `${c.sid}:${me.id}`, list = (recent.get(key) || []).filter(x => t - x < 60000);
     if (recent.size > 5000) for (const [k, v] of recent) if (!v.length || t - v[v.length - 1] > 60000) recent.delete(k);
@@ -193,10 +195,10 @@ function beforeUpload(c, snap, me) {
     list.push(t); recent.set(key, list);
     if (s.files_per_member != null) {
       const used = keptBy(me.id);
-      if (used >= s.files_per_member) throw managed.limit('files_per_member') === s.files_per_member ? managed.planLimit('files_per_member', s.files_per_member, used) : err('upload_quota', 403, { limit: s.files_per_member, used });
+      if (used >= s.files_per_member) throw L.limit('files_per_member', c.id) === s.files_per_member ? L.planLimit('files_per_member', s.files_per_member, used, c.id) : err('upload_quota', 403, { limit: s.files_per_member, used });
     }
   }
-  if (s.storage_mb != null && storageUsed() >= s.storage_mb * MB) throw managed.limit('storage_mb') === s.storage_mb ? managed.planLimit('storage_mb', s.storage_mb, Math.ceil(storageUsed() / MB)) : err('storage_full', 403, { limit_mb: s.storage_mb });
+  if (s.storage_mb != null && storageUsed(c.id) >= s.storage_mb * MB) throw L.limit('storage_mb', c.id) === s.storage_mb ? L.planLimit('storage_mb', s.storage_mb, Math.ceil(storageUsed(c.id) / MB), c.id) : err('storage_full', 403, { limit_mb: s.storage_mb });
   return s;
 }
 // after: the file's type, the storage it would take, image compression, when it expires -> the §11 response
@@ -208,7 +210,7 @@ async function acceptUpload(c, me, buf, name, s, { expiresInDays } = {}) {
     const out = await require('./images').compress(buf, sn.ext, s, dimensions(buf, sn.ext));
     buf = out.buffer;
   }
-  if (s.storage_mb != null && storageUsed() + buf.length > s.storage_mb * MB) throw err('storage_full', 403, { limit_mb: s.storage_mb });
+  if (s.storage_mb != null && storageUsed(c.id) + buf.length > s.storage_mb * MB) throw err('storage_full', 403, { limit_mb: s.storage_mb });
   // the longest a file is kept; members can pick a shorter time. Members on a listed Nookara plan or with a listed role keep theirs.
   let days = s.expire_days;
   if (days != null && me.tier && s.never_expire_plans.includes(String(me.tier).toLowerCase())) days = null;
@@ -218,7 +220,7 @@ async function acceptUpload(c, me, buf, name, s, { expiresInDays } = {}) {
   }
   const pick = Number(expiresInDays);
   if (Number.isInteger(pick) && pick >= 1 && pick <= 3650 && (days == null || pick < days)) days = pick;
-  return storeUpload(buf, name, me.id, { expiresAt: days == null ? null : now() + days * 86400000 });
+  return storeUpload(buf, name, me.id, { expiresAt: days == null ? null : now() + days * 86400000, communityId: c.id });
 }
 
 // expired uploads: the file and its row go; messages that sent it keep a note that it expired

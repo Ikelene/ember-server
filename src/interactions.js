@@ -188,7 +188,7 @@ function push(it, op, message) {
 async function prepare(it, data, files) {
   const c = db.get('SELECT * FROM communities WHERE id = ?', it.communityId), snap = C.snapOf(c), bot = commUser(it.botId);
   data = data && typeof data === 'object' ? data : {};
-  const fl = W.withFiles(files, data.embeds, bot.id);
+  const fl = W.withFiles(files, data.embeds, bot.id, c.id);
   return {
     c, snap, bot, flags: Number(data.flags) || 0,
     text: data.content === undefined ? undefined : B().textIn(c, snap, data.content, data.allowed_mentions),
