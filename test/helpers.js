@@ -110,6 +110,7 @@ async function mockHomeserver(domain, { delegateTo = null } = {}) {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (req.url === '/.well-known/ember') { hs.discoveryFetches++; return send(200, hs.doc || (delegateTo ? { homeserver: delegateTo } : { homeserver: { domain }, jwks_uri: hs.origin + '/.well-known/ember/jwks.json' })); }
     if (req.url === '/.well-known/ember/jwks.json') { hs.jwksFetches++; return send(200, { keys: (hs.published || hs.keys).map(k => k.jwk) }); }
+    if (hs.handle) return hs.handle(req, res); // (set it to answer anything else)
     send(404, { error: 'not_found' });
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
