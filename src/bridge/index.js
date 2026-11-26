@@ -46,13 +46,24 @@ function register(real) {
   app.patch(v1('/bridge/settings'), { admin: true }, async req => ({ bridges: await bridge.saveSettings(req.body || {}) }));
 
   // ---- Discord / Fluxer (same shapes as Nookara's /chat/bridge/*; Manage server) ----
-  app.get(v1('/bridge/platforms'), () => bridge.platforms());
+  app.get(v1('/bridge/platforms'), req => bridge.platforms(req.user, req.query.sid));
   app.get(v1('/bridge/:platform/guilds'), req => { allowed(req.params.platform, req.query.sid); return bridge.guilds(req.user, req.params.platform, req.query.sid); });
   app.get(v1('/bridge/servers/:sid'), req => bridge.status(req.user, req.params.sid));
   app.put(v1('/bridge/servers/:sid'), req => { allowed(s(req.body?.platform), req.params.sid); return bridge.link(req.user, req.params.sid, s(req.body?.platform), s(req.body?.guild_id), req.body?.automap !== false); });
   app.patch(v1('/bridge/servers/:sid'), req => { if (req.body?.enabled) allowed(s(req.body?.platform), req.params.sid); return bridge.setEnabled(req.user, req.params.sid, s(req.body?.platform), !!req.body?.enabled); });
   app.delete(v1('/bridge/servers/:sid'), req => bridge.unlink(req.user, req.params.sid, s(req.body?.platform || req.query.platform)));
   app.put(v1('/bridge/servers/:sid/channels/:cid'), req => { if (req.body?.ext_channel_id) allowed(s(req.body?.platform), req.params.sid); return bridge.setChannel(req.user, req.params.sid, req.params.cid, s(req.body?.platform), req.body?.ext_channel_id ? s(req.body.ext_channel_id) : null); });
+
+  // ---- a server's own Matrix bot (Manage server); without one it uses the homeserver's ----
+  const MX = require('./matrix');
+  app.get(v1('/bridge/servers/:sid/matrix'), req => ({ matrix: MX.serverView(bridge.manageable(req.user, req.params.sid).c.id) }));
+  app.patch(v1('/bridge/servers/:sid/matrix'), async req => {
+    const { c } = bridge.manageable(req.user, req.params.sid);
+    allowed('matrix', c.sid);
+    const matrix = await MX.saveServer(c.id, req.body || {}, req.user.principal);
+    require('../communities').channelsChanged(c);
+    return { matrix };
+  });
 
   // ---- proof of control before a guild is linked (claims.js): a claim code, or Discord sign-in ----
   const claims = require('./claims');

@@ -63,7 +63,8 @@ async function botUser(p) {
   selfUser.set(p, { at: Date.now(), user });
   return user;
 }
-const configured = p => (p === MATRIX ? MX().configured() : !!PL.tokenOf(p));
+// cid: the server asking (Matrix: it may have its own bot, matrix.js)
+const configured = (p, cid = null) => (p === MATRIX ? MX().configured(cid) : !!PL.tokenOf(p));
 function needPlatform(p) {
   if (!PL.IDS.includes(p)) throw err('bad_platform', 404);
   if (!configured(p)) throw err('bridge_not_set_up', 503);
@@ -333,7 +334,7 @@ const typedOut = new Map(); // `${channel id}:${platform}` -> when
 function onTyping(ch, on = true) {
   if (!require('../managed').allows('bridges') || ch.type === 'voice') return;
   for (const link of linksOfChannel(ch.id)) {
-    if (!link.enabled || !configured(link.platform)) continue;
+    if (!link.enabled || !configured(link.platform, link.community_id)) continue;
     if (link.platform === MATRIX) { MX().typingOut(link, on); continue; }
     const k = `${ch.id}:${link.platform}`, t = Date.now();
     if (!on || t - (typedOut.get(k) || 0) < 8000) continue;
@@ -434,7 +435,7 @@ function onPost(msg, ctx, meta) {
   if (!links.length) return;
   if (ctx.ch.type === 'voice') return; // a voice link carries the voice only (voice-bridge.js)
   for (const link of links) {
-    if (!link.enabled || link.platform === meta.bridged || !configured(link.platform)) continue;
+    if (!link.enabled || link.platform === meta.bridged || !configured(link.platform, link.community_id)) continue;
     enqueue(`out:${ctx.ch.id}:${link.platform}`, () => (link.platform === MATRIX ? MX().outbound(link, ctx, msg) : outbound(link, ctx, msg)));
   }
 }
@@ -469,7 +470,7 @@ async function outbound(link, ctx, msg) {
 // messages.onEdit / onDelete: edits / deletes here go over too (deleting someone's Discord message needs Manage messages there)
 function onEdit(msg, ctx) {
   for (const link of linksOfChannel(ctx.ch.id)) {
-    if (!configured(link.platform)) continue;
+    if (!configured(link.platform, link.community_id)) continue;
     if (link.platform === MATRIX) { enqueue(`out:${ctx.ch.id}:${MATRIX}`, () => MX().editOut(link, ctx, msg)); continue; }
     enqueue(`out:${ctx.ch.id}:${link.platform}`, async () => {
       const m = db.get('SELECT ext_message_id, outbound FROM bridge_msgs WHERE message_id = ? AND platform = ?', Number(msg.id), link.platform);
@@ -481,7 +482,7 @@ function onEdit(msg, ctx) {
 }
 function onDelete({ id, ch }) {
   for (const link of linksOfChannel(ch.id)) {
-    if (!configured(link.platform)) continue;
+    if (!configured(link.platform, link.community_id)) continue;
     if (link.platform === MATRIX) { enqueue(`out:${ch.id}:${MATRIX}`, () => MX().deleteOut(link, id)); continue; }
     enqueue(`out:${ch.id}:${link.platform}`, async () => {
       const m = db.get('SELECT ext_message_id, outbound FROM bridge_msgs WHERE message_id = ? AND platform = ?', Number(id), link.platform);
@@ -500,7 +501,9 @@ function manageable(me, sid) {
   if (!snap.can(me.id, P.MANAGE_SERVER)) throw err('not_allowed', 403);
   return { c, snap };
 }
-async function platforms() {
+// sid: the server asking, when the client says (its own Matrix bot shows instead of the homeserver's)
+async function platforms(me, sid) {
+  const cid = sid ? manageable(me, sid).c.id : null;
   const out = [];
   for (const p of PL.IDS) {
     const x = PL.platform(p);
@@ -510,7 +513,7 @@ async function platforms() {
     out.push({ id: p, name: x.name, ready: !!bot, bot: bot ? bot.username : null, invite: bot ? x.invite(bot.id) : null, linked: true, ...(p === 'discord' && CL().oauthSettings() ? { oauth: true } : {}) });
   }
   // Matrix has no add-to-server link: the bot is invited to a room like anyone else (`rooms: true`), and accepts
-  out.push({ id: MATRIX, name: 'Matrix', ready: configured(MATRIX) && !!MX().botId(), bot: configured(MATRIX) ? MX().botId() : null, invite: null, linked: true, rooms: true });
+  out.push({ id: MATRIX, name: 'Matrix', ready: configured(MATRIX, cid) && !!MX().botId(cid), bot: configured(MATRIX, cid) ? MX().botId(cid) : null, invite: null, linked: true, rooms: true, ...(MX().hasOwn(cid) ? { own: true } : {}) });
   return { platforms: out };
 }
 // the bot's servers over there (any of them can be linked: the bot is the owner's)
@@ -519,8 +522,8 @@ async function guilds(me, p, sid) {
   if (!c) throw err('server_not_found', 404);
   manageable(me, c.sid);
   if (p === MATRIX) { // no servers over there: the one thing to link is "the rooms the bot is in"
-    if (!configured(p)) throw err('bridge_not_set_up', 503);
-    return { guilds: [{ id: 'rooms', name: `Rooms ${MX().botId() || 'the bot'} is in`, icon: null }] };
+    if (!configured(p, c.id)) throw err('bridge_not_set_up', 503);
+    return { guilds: [{ id: 'rooms', name: `Rooms ${MX().botId(c.id) || 'the bot'} is in`, icon: null }] };
   }
   const x = needPlatform(p);
   const list = await PL.rest(p, 'GET', '/users/@me/guilds');
@@ -533,9 +536,9 @@ async function status(me, sid) {
   const bridges = await Promise.all(rows.map(async b => {
     const links = db.all('SELECT bc.*, ch.cid, ch.type FROM bridge_channels bc JOIN channels ch ON ch.id = bc.channel_id WHERE bc.bridge_id = ?', b.id);
     let ext = [], problem = null;
-    if (!configured(b.platform)) problem = 'bridge_not_set_up';
+    if (!configured(b.platform, c.id)) problem = 'bridge_not_set_up';
     else if (b.platform === MATRIX) {
-      try { ext = (await MX().rooms()).map(r => ({ id: r.id, name: r.name, category: '', kind: 'text', ...(r.encrypted ? { encrypted: true } : {}) })); } catch { problem = 'unreachable'; }
+      try { ext = (await MX().rooms(false, c.id)).map(r => ({ id: r.id, name: r.name, category: '', kind: 'text', ...(r.encrypted ? { encrypted: true } : {}) })); } catch { problem = 'unreachable'; }
     } else {
       try {
         const chans = await guildThing(b.platform, b.guild_id, 'channels', true);
@@ -557,11 +560,11 @@ const norm = n => String(n).toLowerCase().replace(/[^a-z0-9]/g, '');
 async function link(me, sid, p, gid, automap = true) {
   const { c, snap } = manageable(me, sid);
   if (p === MATRIX) {
-    if (!configured(p)) throw err('bridge_not_set_up', 503);
+    if (!configured(p, c.id)) throw err('bridge_not_set_up', 503);
     store.ensure();
     if (db.get('SELECT 1 FROM bridge_guilds WHERE community_id = ? AND platform = ?', c.id, p)) throw err('already_bridged');
-    const all = await MX().rooms(true).catch(() => { throw err('platform_unreachable', 502); });
-    const id = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)', c.id, p, 'rooms', clean(MX().botId(), 100), me.id, now()).lastInsertRowid);
+    const all = await MX().rooms(true, c.id).catch(() => { throw err('platform_unreachable', 502); });
+    const id = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, created_by, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 1)', c.id, p, 'rooms', clean(MX().botId(c.id), 100), me.id, now()).lastInsertRowid);
     if (automap) { // a room and a text channel with the same name (lowercase, letters and digits only) = linked
       for (const ch of snap.channels.filter(x => (x.type || 'text') === 'text')) {
         const m = all.find(x => !x.encrypted && norm(x.name) && norm(x.name) === norm(ch.name));
@@ -638,9 +641,9 @@ async function setChannel(me, sid, cid, p, extId) {
   if (old?.hook_id && String(old.ext_channel_id) !== String(extId || '') && configured(b.platform)) await PL.rest(b.platform, 'DELETE', `/webhooks/${old.hook_id}/${old.hook_token}`, null, { auth: false }).catch(() => {});
   if (!extId) db.run('DELETE FROM bridge_channels WHERE channel_id = ? AND bridge_id = ?', ch.id, b.id);
   else if (b.platform === MATRIX) {
-    if (!configured(MATRIX)) throw err('bridge_not_set_up', 503);
+    if (!configured(MATRIX, c.id)) throw err('bridge_not_set_up', 503);
     if ((ch.type || 'text') !== 'text') throw err('text_channels_only');
-    const all = await MX().rooms(true).catch(() => { throw err('platform_unreachable', 502); });
+    const all = await MX().rooms(true, c.id).catch(() => { throw err('platform_unreachable', 502); });
     const x = all.find(r => r.id === String(extId));
     if (!x) throw err('channel_not_found', 404);
     if (x.encrypted) throw err('room_encrypted'); // the bot holds no keys: it could neither read nor be read there
