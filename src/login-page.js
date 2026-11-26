@@ -52,7 +52,8 @@ const MESSAGES = {
 };
 const message = code => MESSAGES[code] || 'Something went wrong. Try again.';
 
-function head(title) {
+// extraCss: more rules for a page that needs them (the account page)
+function head(title, extraCss = '') {
   const cfg = config.get();
   let icon = null;
   if (cfg.icon_url) { try { const x = new URL(String(cfg.icon_url), cfg.public_url + '/'); if (/^https?:$/.test(x.protocol)) icon = x.href; } catch { /* none */ } }
@@ -68,7 +69,7 @@ function head(title) {
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
 ${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
-<style>${CSS}</style>
+<style>${CSS}${extraCss}</style>
 </head>
 <body>
 <main class="wrap">
@@ -152,4 +153,4 @@ function redirect(res, url, cookies = []) {
   res.end();
 }
 
-module.exports = { loginPage, messagePage, send, redirect, message, esc };
+module.exports = { loginPage, messagePage, send, redirect, message, esc, head };

@@ -245,7 +245,7 @@ function discovery() {
   const cfg = config.get(), hosts = config.mode() === 'local';
   return {
     accounts: { hosts_accounts: hosts, registration: hosts ? (auth.registrationOpen() ? 'open' : cfg.accounts.registration) : 'closed', remote_accounts: { mode: cfg.accounts.remote_accounts.mode } },
-    ...(hosts ? { login: { authorize_url: `${cfg.public_url}/login`, token_url: `${cfg.public_url}/api/v2/auth/token`, revoke_url: `${cfg.public_url}/api/v2/auth/revoke`, methods: enabledMethods() } } : {}),
+    ...(hosts ? { login: { authorize_url: `${cfg.public_url}/login`, token_url: `${cfg.public_url}/api/v2/auth/token`, revoke_url: `${cfg.public_url}/api/v2/auth/revoke`, account_url: `${cfg.public_url}/account`, methods: enabledMethods() } } : {}),
   };
 }
 
@@ -284,4 +284,4 @@ function register(app) {
   app.patch('/api/v2/homeserver/accounts', { admin: true }, req => adminPatch(req.body));
 }
 
-module.exports = { register, discovery, adminView, _test: { pending, tickets } };
+module.exports = { register, discovery, adminView, logins, unlink, linkTicket, _test: { pending, tickets } };

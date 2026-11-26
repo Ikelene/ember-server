@@ -191,7 +191,7 @@ test('discovery: accounts, and the login block with the enabled methods', async 
   assert.equal(typeof d.homeserver, 'object');
   assert.equal(d.homeserver.domain, 'localhost');
   assert.deepEqual(d.accounts, { hosts_accounts: true, registration: 'open', remote_accounts: { mode: 'none' } });
-  assert.deepEqual(d.login, { authorize_url: pub + '/login', token_url: pub + '/api/v2/auth/token', revoke_url: pub + '/api/v2/auth/revoke', methods: [{ id: 'password', kind: 'password', name: 'Password' }] });
+  assert.deepEqual(d.login, { authorize_url: pub + '/login', token_url: pub + '/api/v2/auth/token', revoke_url: pub + '/api/v2/auth/revoke', account_url: pub + '/account', methods: [{ id: 'password', kind: 'password', name: 'Password' }] });
   assert.deepEqual((await api(base).get('/.well-known/bonfire')).body.login, d.login);
 });
 
