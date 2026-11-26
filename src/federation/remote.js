@@ -51,7 +51,7 @@ function pictureOf(u) {
 }
 // POST /api/v2/auth/remote-token { audience } -> { token, expires_in }
 function issue(user, body) {
-  if (config.mode() !== 'local' || user?.kind !== 'local') throw err('account_not_hosted_here', 403);
+  if (!require('../auth').hostedHere(user)) throw err('account_not_hosted_here', 403);
   const aud = audienceOf(body?.audience);
   if (!issueLimit.hit(user.id)) throw err('rate_limited', 429);
   const domain = config.domain(), iat = Math.floor(now() / 1000);

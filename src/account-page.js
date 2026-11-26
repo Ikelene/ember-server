@@ -36,7 +36,7 @@ const csrfOf = token => crypto.createHash('sha256').update('ember-account-csrf\n
 function session(req) {
   const token = cookies(req)[COOKIE];
   const s = token && /^[A-Za-z0-9_-]{20,200}$/.test(token) ? auth.resolveSession(token) : null;
-  return s && s.user.kind === 'local' && !s.user.banned ? { token, user: s.user, family: s.family, hash: s.hash } : null;
+  return s && auth.hostedHere(s.user) && !s.user.banned ? { token, user: s.user, family: s.family, hash: s.hash } : null;
 }
 const back = (res, q = '', set = []) => page.redirect(res, '/account' + q, set);
 
@@ -114,6 +114,8 @@ function render(s, { note, error } = {}) {
   const logins = require('./login').logins(u).logins;
   const h = page.head(`Your account on ${cfg.name || 'Ember'}`, CSS);
   const avatar = require('./social/people').absolute(u.pfp);
+  // a Nookara account (accounts.nookara_identity): name and picture follow Nookara; DM privacy is Nookara's when its social API is there
+  const nookara = u.kind !== 'local', elsewhere = require('./social/where').apiElsewhere(u);
   let body = '';
   if (error) body += `<p class="msg bad" role="alert">${esc(ERRORS[error] || page.message(error))}</p>`;
   else if (note && NOTES[note]) body += `<p class="msg" role="status">${esc(NOTES[note])}</p>`;
@@ -122,23 +124,24 @@ function render(s, { note, error } = {}) {
     <div><h2 style="margin:0">${esc(u.display_name || u.username)}</h2><div class="sub">${esc(u.username)}@${esc(cfg.domain)}</div></div></div>
 
   <section aria-labelledby="h-profile"><h2 id="h-profile">Profile</h2>
+  ${nookara ? '<p class="sub">Your name and picture come from your Nookara account and are updated each time you sign in.</p>' : ''}
   <form method="post" action="/account/profile">${hidden}
-    <label for="dn">Display name</label><input id="dn" type="text" name="display_name" maxlength="32" value="${esc(profile.display_name || '')}" placeholder="${esc(u.username)}">
+    ${nookara ? '' : `<label for="dn">Display name</label><input id="dn" type="text" name="display_name" maxlength="32" value="${esc(profile.display_name || '')}" placeholder="${esc(u.username)}">`}
     <label for="pr">Pronouns</label><input id="pr" type="text" name="pronouns" maxlength="40" value="${esc(profile.pronouns || '')}">
     <label for="bio">Bio</label><textarea id="bio" name="bio" maxlength="300">${esc(profile.bio || '')}</textarea>
     <button class="btn primary" type="submit">Save profile</button>
-  </form>
+  </form>${nookara ? '' : `
   <form method="post" action="/account/avatar" enctype="multipart/form-data">${hidden}
     <label for="pic">Picture (PNG, JPEG, GIF or WebP, up to 4 MB)</label><input id="pic" type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
     <div class="inline"><button class="btn" type="submit">Upload picture</button>${u.pfp ? `<button class="btn" type="submit" formaction="/account/avatar/remove" formenctype="application/x-www-form-urlencoded" formnovalidate>Remove picture</button>` : ''}</div>
-  </form></section>
-
+  </form>`}</section>
+${elsewhere ? '' : `
   <section aria-labelledby="h-dm"><h2 id="h-dm">DM privacy</h2>
   <form method="post" action="/account/dm-privacy">${hidden}
     <label for="dmf">Who can start a DM with you</label>
     <select id="dmf" name="dm_from">${Object.entries(DM_FROM).map(([k, v]) => `<option value="${k}"${settings.dm_from === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
     <button class="btn" type="submit">Save</button>
-  </form></section>
+  </form></section>`}
 
   <section aria-labelledby="h-logins"><h2 id="h-logins">Sign-in methods</h2>
   ${logins.filter(l => l.enabled || l.linked).map(l => `<div class="row"><div><div>${esc(l.name)}</div><div class="sub">${l.kind === 'password' ? (l.linked ? 'This account has a password' : 'No password set') : l.linked ? `Linked${l.email ? ' as ' + esc(l.email) : ''}` : 'Not linked'}</div></div>${
@@ -186,10 +189,11 @@ function register(app) {
   });
   const fail = code => Object.assign(new Error(code), { code });
   const AP = () => require('./account-profile');
-  post('/profile', (s, f) => { AP().update(s.user, { display_name: f.display_name ?? '', bio: f.bio ?? '', pronouns: f.pronouns ?? '' }); return 'profile'; });
-  post('/avatar', (s, f, res, file) => { if (!file || !file.length) throw fail('no_file'); AP().setImage(s.user, 'pfp', file); return 'avatar'; }, { multipart: true });
-  post('/avatar/remove', s => { AP().setImage(s.user, 'pfp', null); return 'avatar_removed'; });
-  post('/dm-privacy', (s, f) => { if (!DM_FROM[f.dm_from]) throw fail('invalid_dm_from'); require('./communities').setSettings(s.user, { dm_from: f.dm_from }); return 'dm'; });
+  post('/profile', (s, f) => { AP().update(s.user, { ...(s.user.kind === 'local' ? { display_name: f.display_name ?? '' } : {}), bio: f.bio ?? '', pronouns: f.pronouns ?? '' }); return 'profile'; });
+  const localOnly = s => { if (s.user.kind !== 'local') throw fail('local_accounts_only'); };
+  post('/avatar', (s, f, res, file) => { localOnly(s); if (!file || !file.length) throw fail('no_file'); AP().setImage(s.user, 'pfp', file); return 'avatar'; }, { multipart: true });
+  post('/avatar/remove', s => { localOnly(s); AP().setImage(s.user, 'pfp', null); return 'avatar_removed'; });
+  post('/dm-privacy', (s, f) => { if (require('./social/where').apiElsewhere(s.user)) throw fail('social_elsewhere'); if (!DM_FROM[f.dm_from]) throw fail('invalid_dm_from'); require('./communities').setSettings(s.user, { dm_from: f.dm_from }); return 'dm'; });
   post('/logins/unlink', (s, f) => { require('./login').unlink(auth.userById(s.user.id), String(f.method || '')); return 'unlinked'; });
   // linking goes through the provider and comes back here with ?linked= or ?link_error=
   // (a link, not a redirect: the page's form-action rule only lets forms end up on this homeserver)

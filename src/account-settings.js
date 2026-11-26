@@ -93,6 +93,8 @@ function sanitize(p, { loose = false, allowHttp = false } = {}) {
   if (p.hosts_accounts !== undefined) { if (typeof p.hosts_accounts === 'boolean') out.hosts_accounts = p.hosts_accounts; else bad('invalid_hosts_accounts'); }
   if (p.registration !== undefined) { if (REGISTRATION.includes(p.registration)) out.registration = p.registration; else bad('invalid_registration'); }
   if (p.link_verified_emails !== undefined) { if (typeof p.link_verified_emails === 'boolean') out.link_verified_emails = p.link_verified_emails; else bad('invalid_link_verified_emails'); }
+  // null: the default (on when this homeserver's domain is nookara_url's)
+  if (p.nookara_identity !== undefined) { if (typeof p.nookara_identity === 'boolean' || p.nookara_identity === null) out.nookara_identity = p.nookara_identity; else bad('invalid_nookara_identity'); }
   if (p.remote_accounts !== undefined) {
     const r = p.remote_accounts, v = {};
     if (r && typeof r === 'object' && !Array.isArray(r)) {
@@ -148,6 +150,9 @@ function resolve(m, cfg) {
   return { ...m };
 }
 
+// do Nookara accounts signed in with a `nookara` login method become the v:<id> accounts here (PROTOCOL §4a)?
+const nookaraIdentity = (a, cfg) => (typeof a.nookara_identity === 'boolean' ? a.nookara_identity : !!cfg.domain && hostOf(cfg.nookara_url) === cfg.domain);
+
 // ember_clients: the web origins an Ember client may be served from (login redirect targets, CORS on the token endpoint)
 function sanitizeClients(v) {
   if (!Array.isArray(v) || v.length > 100) return null;
@@ -160,4 +165,4 @@ function sanitizeClients(v) {
   return out;
 }
 
-module.exports = { REGISTRATION, REMOTE_MODES, KINDS, DEFAULT_CLIENTS, defaults, migrate, withMode, modeOf, legacyRegistration, sanitize, merge, complete, mask, isMasked, resolve, sanitizeClients, cleanUrl, passwordMethod, hostOf };
+module.exports = { REGISTRATION, REMOTE_MODES, KINDS, DEFAULT_CLIENTS, defaults, migrate, withMode, modeOf, legacyRegistration, sanitize, merge, complete, mask, isMasked, resolve, sanitizeClients, cleanUrl, passwordMethod, hostOf, nookaraIdentity };

@@ -103,7 +103,7 @@ function register(app, { restart }) {
   app.patch('/api/v1/me/profile', req => AP().update(req.user, req.body || {}));
   app.post('/api/v1/me/profile/:kind', async req => {
     if (!['pfp', 'banner'].includes(req.params.kind)) throw err('not_found', 404);
-    if (req.user.kind !== 'local') throw err('local_accounts_only', 400);
+    if (!auth.profileHere(req.user)) throw err('local_accounts_only', 400);
     const { buffer } = await require('../uploads').readMultipart(req, { maxBytes: 4 * 1024 * 1024 });
     if (!buffer) throw err('no_file');
     return AP().setImage(req.user, req.params.kind, buffer);

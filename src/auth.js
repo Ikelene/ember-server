@@ -63,6 +63,15 @@ function identityChanged(u, previousUsername) {
   for (const m of db.all('SELECT community_id FROM members WHERE user_id = ?', u.id)) gw.emit(m.community_id, { type: 'chat_identity_update', user: userView(u), previous_username: previousUsername });
 }
 
+// may this account (not a remote one) use the instance under the running accounts mode? Nookara accounts also may while
+// accounts.nookara_identity makes them accounts of this homeserver (PROTOCOL §4a)
+const signsInHere = u => u.kind === (config.mode() === 'nookara' ? KIND_NOOKARA : 'local') || (u.kind === KIND_NOOKARA && config.nookaraIdentity());
+// an account this homeserver hosts: friends, DMs, keys, profile and cross-homeserver tokens are its business
+const hostedHere = u => !!u && config.mode() === 'local' && (u.kind === 'local' || (u.kind === KIND_NOOKARA && config.nookaraIdentity()));
+
+// an account whose profile (§4.1) is kept here: a local one, or a Nookara one of this homeserver (nookara_identity)
+const profileHere = u => !!u && (u.kind === 'local' || (u.kind === KIND_NOOKARA && config.nookaraIdentity()));
+
 // ---------- sessions ----------
 // ttl + family: an access token from the token endpoint (PROTOCOL §4a): it ends after ttl ms and goes with its refresh family
 function createSession(userId, scopes, app = null, { ttl = null, family = null } = {}) {
@@ -82,7 +91,8 @@ function resolveSession(token) {
   if (!user) return null;
   // principals of the other account mode can no longer use the instance
   // (an account of another homeserver: while its homeserver is still let in, in either mode)
-  if (user.kind === 'remote' ? !require('./federation/remote').sessionAllowed(user) : user.kind !== (config.mode() === 'nookara' ? KIND_NOOKARA : 'local')) return null;
+  // (Nookara accounts next to local ones while accounts.nookara_identity is on)
+  if (user.kind === 'remote' ? !require('./federation/remote').sessionAllowed(user) : !signsInHere(user)) return null;
   if (t - s.last_used > 3600 * 1000) db.run('UPDATE sessions SET last_used = ? WHERE hash = ?', t, hash);
   let scopes = []; try { scopes = JSON.parse(s.scopes); } catch { /* none */ }
   let app = null; try { app = s.app ? JSON.parse(s.app) : null; } catch { /* none */ }
@@ -166,7 +176,7 @@ function finishLogin(user, scopes, app = null) {
   return { session: createSession(user.id, scopes, app), user: userView(userById(user.id)) };
 }
 async function loginNookara(token) {
-  if (config.mode() !== 'nookara') throw err('wrong_accounts_mode', 400);
+  if (config.mode() !== 'nookara' && !config.nookaraIdentity()) throw err('wrong_accounts_mode', 400);
   const c = await verifyNookaraJwt(token);
   const scp = Array.isArray(c.scp) ? c.scp.filter(x => ['chat', 'voice', 'media', 'sign'].includes(x)) : [];
   if (!scp.includes('chat')) throw err('insufficient_scope', 403);
@@ -261,7 +271,7 @@ const isOwner = u => !!u && String(db.metaGet('owner_user_id')) === String(u.id)
 const isAdmin = u => !!u && (isOwner(u) || !!db.get('SELECT 1 FROM instance_admins WHERE user_id = ?', u.id));
 // the owner is an account that can't sign in under the running accounts mode (a local account after switching to Nookara
 // accounts, or a Nookara one after switching to local): the instance takes a new owner with the setup code, like an unclaimed one
-const ownerStranded = () => { const o = ownerRow(); return !!o && o.kind !== (config.mode() === 'local' ? 'local' : KIND_NOOKARA); };
+const ownerStranded = () => { const o = ownerRow(); return !!o && !signsInHere(o); };
 // returns the previous owner's id when ownership moved from someone else (their communities moved with it), else null
 function setOwner(userId) {
   const old = db.metaGet('owner_user_id');
@@ -276,7 +286,7 @@ function setOwner(userId) {
 
 module.exports = {
   userView, botVerified, userById, userByPrincipal, upsertNookaraUser, refreshNookaraProfile, setRestricted, ensureNookaraPlaceholder,
-  createSession, resolveSession, revokeSession, revokeFamily, bearer, checkLocal, limits, passwordMethod, registrationOpen, LOCAL_SCOPES, USERNAME,
+  signsInHere, hostedHere, profileHere, createSession, resolveSession, revokeSession, revokeFamily, bearer, checkLocal, limits, passwordMethod, registrationOpen, LOCAL_SCOPES, USERNAME,
   verifyNookaraJwt, setJwksFetcher, keyFor, loginNookara, registerLocal, createLocalUser, localAdmins, loginLocal, hashPassword, checkPassword,
   claimed, ownerRow, ownerStranded, isOwner, isAdmin, setOwner, identityChanged, SESSION_TTL,
 };

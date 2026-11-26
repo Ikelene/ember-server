@@ -24,10 +24,10 @@ function stored(u) {
   if (o?.sync && isNookaraId(o.sync[NOOKARA_ID_FIELD])) out.sync = { [NOOKARA_ID_FIELD]: String(o.sync[NOOKARA_ID_FIELD]), stamp: typeof o.sync.stamp === 'string' ? o.sync.stamp.slice(0, STAMP_MAX) : '', at: Number(o.sync.at) || 0 };
   return out;
 }
-const mine = u => { if (u?.kind !== 'local') throw err('local_accounts_only', 400); return auth.userById(u.id); };
+const mine = u => { if (!auth.profileHere(u)) throw err('local_accounts_only', 400); return auth.userById(u.id); };
 // their look as the member object's `profile` carries it (§6.7 shape), null when they have set nothing
 function look(u) {
-  if (u?.kind !== 'local') return null;
+  if (!auth.profileHere(u)) return null;
   const s = stored(u), out = {};
   if (u.pfp) out.pfp = u.pfp;
   for (const k of FIELDS) if (s[k]) out[k] = s[k];
@@ -103,7 +103,7 @@ function setImage(me, kind, buffer) {
 
 // a moderator's reset (server-profile.js reset, Manage users): everything back to a plain account, and nothing follows Nookara any more
 function reset(u) {
-  if (u?.kind !== 'local') return false;
+  if (!auth.profileHere(u)) return false;
   const s = stored(u);
   if (!u.pfp && !Object.keys(s).length && u.display_name === u.username) return false;
   write(u, { display_name: u.username, pfp: null, data: {} });

@@ -171,7 +171,7 @@ async function verifyIdToken(token, m, nonce) {
 }
 
 // ---------- who signed in ----------
-// the provider's answer (code) -> { subject, username, name, email, email_verified }
+// the provider's answer (code) -> { subject, username, name, email, email_verified, picture }
 async function identify(m, code, s) {
   const tok = await exchange(m, code, s);
   let info, subject;
@@ -198,6 +198,7 @@ async function identify(m, code, s) {
     name: first('name', 'display_name', 'global_name'),
     email: email && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) ? email.toLowerCase() : null,
     email_verified: verified === true || verified === 'true',
+    picture: /^https?:\/\/[^\s"'<>]{1,500}$/.test(first('picture') || '') ? first('picture') : null,
   };
 }
 

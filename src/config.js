@@ -69,6 +69,15 @@ function fromFile(clean) {
 const devHttp = () => env('DEV') === '1' || allowHttp;
 let allowHttp = false; // tests
 
+// a social API base: https (http with EMBER_DEV=1), no credentials, query or fragment, no trailing slash
+function socialUrl(raw) {
+  if (typeof raw !== 'string' || raw.length > 500) return null;
+  let u; try { u = new URL(raw.trim()); } catch { return null; }
+  if (u.username || u.password || u.search || u.hash || raw.includes('?') || raw.includes('#')) return null;
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devHttp())) return null;
+  return u.href.replace(/\/+$/, '');
+}
+
 // validate a (partial) settings object. loose = ignore unknown keys / bad values quietly (hand-edited file)
 function sanitize(p, loose = false) {
   p = renameLegacySettings(p);
@@ -134,6 +143,18 @@ function sanitize(p, loose = false) {
   }
   if (p.limits !== undefined) out.limits = require('./limits').sanitize(p.limits, loose); // PROTOCOL §19: { defaults, tiers }
   if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
+  if (p.social !== undefined) { // PROTOCOL §4c: where the social API of this homeserver's Nookara accounts is (nookara_identity); null = here
+    const v = p.social, o = {};
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const k of ['api_url', 's2s_url']) {
+        if (v[k] === undefined) continue;
+        if (v[k] === null || v[k] === '') { o[k] = null; continue; }
+        const u = socialUrl(v[k]);
+        if (u) o[k] = u; else bad('invalid_social');
+      }
+      out.social = o;
+    } else bad('invalid_social');
+  }
   if (p.creation !== undefined) {
     if (p.creation && typeof p.creation === 'object' && !Array.isArray(p.creation)) {
       const c = {}, v = p.creation;
@@ -173,6 +194,7 @@ function get() {
   // the accounts settings (PROTOCOL §4a); accounts_mode and registration are what older clients read, derived from them
   v.accounts = AS.complete(data.accounts || {});
   v.federation = FS.complete(data.federation);
+  v.social = { api_url: data.social?.api_url || null, s2s_url: data.social?.s2s_url || null };
   if (forced && AS.modeOf(v.accounts) !== forced) v.accounts = AS.withMode(v.accounts, forced, v.nookara_url);
   v.accounts_mode = AS.modeOf(v.accounts);
   v.registration = AS.legacyRegistration(v.accounts);
@@ -186,6 +208,8 @@ function envMode() { const m = readMode(env('ACCOUNTS_MODE')); return ['nookara'
 const mode = () => runningMode || get().accounts_mode;
 const publicUrl = () => get().public_url;
 const domain = () => get().domain;
+// Nookara accounts are accounts of this homeserver (PROTOCOL §4a accounts.nookara_identity): only while it hosts accounts
+const nookaraIdentity = () => { if (mode() !== 'local') return false; const v = get(); return AS.nookaraIdentity(v.accounts, v); };
 
 function update(patch) {
   const clean = sanitize(patch || {});
@@ -202,6 +226,7 @@ function update(patch) {
   }
   if (clean.limits) clean.limits = { ...(data.limits || {}), ...clean.limits };
   if (clean.federation) clean.federation = FS.merge(data.federation || {}, clean.federation);
+  if (clean.social) clean.social = { ...(data.social || {}), ...clean.social };
   // the old accounts_mode / registration settings edit the accounts block (a value that only repeats what the block already
   // says changes nothing: old admin pages send whole forms back)
   let acc = AS.complete(data.accounts || {});
@@ -269,4 +294,4 @@ function publicView() {
 }
 const voiceConfigured = () => { if (managed.active() && !managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
 
-module.exports = { init, get, mode, publicUrl, domain, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS, envMode, devHttp, saved: () => AS.complete(data.accounts || {}), _test: { allowHttp(on) { allowHttp = !!on; } } };
+module.exports = { init, get, mode, publicUrl, domain, nookaraIdentity, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS, envMode, devHttp, saved: () => AS.complete(data.accounts || {}), _test: { allowHttp(on) { allowHttp = !!on; } } };

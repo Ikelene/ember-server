@@ -2,7 +2,7 @@
 // Homeserver accounts and login (PROTOCOL §4a): the /login page (the authorize endpoint), outside logins and the accounts
 // they are linked to, the token endpoint, and the admin's accounts settings.
 const crypto = require('crypto');
-const { wireMode } = require('./compat');
+const { wireMode, KIND_NOOKARA } = require('./compat');
 const config = require('./config');
 const db = require('./db');
 const auth = require('./auth');
@@ -146,6 +146,16 @@ async function callback(req, res) {
   let idn;
   try { idn = await P.identify(m, String(q.code), s); }
   catch (e) { if (!e.login) throw e; log(`[login] ${id}: ${e.login} (${e.why})`); return oops('provider_failed'); }
+  // a Nookara account is the v:<Nookara id> account here (accounts.nookara_identity): the row Nookara instance tokens made
+  // or a new one, never a local account with a login link
+  if (m.kind === 'nookara' && config.nookaraIdentity()) {
+    if (s.link_user) return linkDone(res, s, 'not_linkable');
+    if (!/^[1-9]\d{0,19}$/.test(String(idn.subject))) { log(`[login] ${id}: sub is not a Nookara user id`); return oops('provider_failed'); }
+    const had = auth.userByPrincipal('v:' + idn.subject);
+    if (had?.banned) return oops('banned', 403);
+    const user = auth.upsertNookaraUser({ id: idn.subject, username: idn.username, display_name: idn.name, pfp: idn.picture || had?.pfp || null });
+    return finish(res, user, a);
+  }
   const link = linkOf(id, idn.subject);
 
   if (s.link_user) { // a signed-in account adding this login
@@ -183,7 +193,7 @@ function logins(u) {
   return {
     logins: config.get().accounts.login_methods.map(m => {
       const l = links.find(x => x.method_id === m.id);
-      const linked = m.kind === 'password' ? !!u.password_hash : !!l;
+      const linked = m.kind === 'password' ? !!u.password_hash : (m.kind === 'nookara' && u.kind === KIND_NOOKARA) || !!l;
       return { id: m.id, kind: m.kind, name: m.name, enabled: m.enabled, linked, ...(l ? { email: l.email, created_at: l.created_at } : {}) };
     }),
   };
@@ -203,6 +213,7 @@ function unlink(u, id) {
 function linkTicket(u, id, returnTo) {
   const m = P.method(id);
   if (!m || m.kind === 'password' || u.kind !== 'local') throw err('unknown_method', 404);
+  if (m.kind === 'nookara' && config.nookaraIdentity()) throw err('not_linkable', 400); // a Nookara login is a v: account of its own
   let back = null;
   if (returnTo !== undefined && returnTo !== null && returnTo !== '') {
     let x; try { x = new URL(String(returnTo)); } catch { throw err('invalid_return_to'); }
@@ -218,6 +229,7 @@ function adminView() {
   const cfg = config.get(), a = managed.active() ? cfg.accounts : config.saved();
   return {
     domain: cfg.domain, public_url: cfg.public_url, hosts_accounts: a.hosts_accounts, registration: a.registration, remote_accounts: a.remote_accounts, link_verified_emails: a.link_verified_emails,
+    nookara_identity: AS.nookaraIdentity(a, cfg), nookara_identity_setting: typeof a.nookara_identity === 'boolean' ? a.nookara_identity : null,
     ember_clients: cfg.ember_clients,
     login_methods: a.login_methods.map(m => {
       const r = AS.resolve(m, cfg), { oidc, discovered_for, ...out } = r;
@@ -231,7 +243,7 @@ function adminView() {
 async function adminPatch(body) {
   const b = body && typeof body === 'object' ? body : {};
   const part = {};
-  for (const k of ['hosts_accounts', 'registration', 'remote_accounts', 'link_verified_emails', 'login_methods']) if (b[k] !== undefined) part[k] = b[k];
+  for (const k of ['hosts_accounts', 'registration', 'remote_accounts', 'link_verified_emails', 'nookara_identity', 'login_methods']) if (b[k] !== undefined) part[k] = b[k];
   if (managed.active() && part.hosts_accounts === true) throw err('managed_setting', 403, { setting: 'accounts_mode' });
   const clean = AS.sanitize(part, { allowHttp: safe.local() });
   if (clean.hosts_accounts === true && !config.saved().hosts_accounts && !auth.localAdmins().length) throw err('local_admin_required', 409);
@@ -244,7 +256,7 @@ async function adminPatch(body) {
 function discovery() {
   const cfg = config.get(), hosts = config.mode() === 'local';
   return {
-    accounts: { hosts_accounts: hosts, registration: hosts ? (auth.registrationOpen() ? 'open' : cfg.accounts.registration) : 'closed', remote_accounts: { mode: cfg.accounts.remote_accounts.mode } },
+    accounts: { hosts_accounts: hosts, registration: hosts ? (auth.registrationOpen() ? 'open' : cfg.accounts.registration) : 'closed', remote_accounts: { mode: cfg.accounts.remote_accounts.mode }, ...(config.nookaraIdentity() ? { nookara_identity: true } : {}) },
     ...(hosts ? { login: { authorize_url: `${cfg.public_url}/login`, token_url: `${cfg.public_url}/api/v2/auth/token`, revoke_url: `${cfg.public_url}/api/v2/auth/revoke`, account_url: `${cfg.public_url}/account`, methods: enabledMethods() } } : {}),
   };
 }

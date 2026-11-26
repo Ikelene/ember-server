@@ -78,7 +78,7 @@ function accountView(u) {
 function usable(userId) {
   const u = auth.userById(userId);
   // an account hosted here, or one of another homeserver that is still let in (PROTOCOL §4b: its refresh tokens work the same)
-  const ok = u && (u.kind === 'remote' ? require('./federation/remote').sessionAllowed(u) : u.kind === 'local' && config.mode() === 'local');
+  const ok = u && (u.kind === 'remote' ? require('./federation/remote').sessionAllowed(u) : auth.hostedHere(u));
   if (!ok) throw oauthErr('invalid_grant', 'This account cannot sign in here.');
   if (u.banned) throw oauthErr('access_denied', 'This account is banned.', 403);
   return u;
