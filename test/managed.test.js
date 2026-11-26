@@ -40,6 +40,8 @@ test('well-known and settings carry the managed object; the server shows its mem
   const wk = (await api(base).get('/.well-known/ember')).body;
   assert.deepEqual(wk.managed, { plan: 'starter', limits: LIMITS, host: 'velora' });
   assert.equal(wk.features.bridges, false);
+  // EMBER_MANAGED is an alias now: the plan's numbers are the homeserver's default limits (PROTOCOL §19), and nobody here can change them
+  assert.deepEqual(wk.limits, { defaults: { member_cap: 3, voice_minutes: null, max_upload_mb: 1, storage_mb: null, files_per_member: null, upload_expiry_days: null, emojis: 1, sounds: 1, bots: 1, bridges: [], custom_voice_keys: false }, tiers: [] });
   assert.equal(wk.max_upload_mb, 1);
   owner = await login(100, 'owner');
   const s = (await owner.a.get('/api/v1/instance/settings')).body;
@@ -48,6 +50,13 @@ test('well-known and settings carry the managed object; the server shows its mem
   assert.equal(s.max_upload_mb, 1);
   const d = (await owner.a.post('/api/v1/servers', { name: 'Hosted', join_policy: 'open' })).body;
   sid = d.server.sid;
+  for (const [p, body] of [['/api/v2/homeserver/limits', { defaults: { emojis: null } }], [`/api/v2/homeserver/servers/${sid}/limits`, { overrides: { emojis: null } }]]) {
+    const r = await owner.a.patch(p, body);
+    assert.deepEqual([r.status, r.body.error, r.body.setting], [403, 'managed_setting', 'limits']);
+  }
+  assert.equal((await owner.a.post(`/api/v2/servers/${sid}/tier`, { tier: 'plus' })).body.error, 'tiers_unavailable');
+  const lim = (await owner.a.get(`/api/v1/servers/${sid}/limits`)).body;
+  assert.deepEqual([lim.limits.emojis, lim.limits.member_cap, lim.tiers], [1, 3, []]);
   assert.equal(d.server.member_cap, 3);
   assert.equal(d.server.upload_max_mb, 1);
 });
