@@ -242,6 +242,13 @@ const MIGRATIONS = [
   `ALTER TABLE users RENAME COLUMN velora_id TO nookara_id;
   UPDATE meta SET k = 'nookara_reg' WHERE k = 'velora_reg';
   UPDATE meta SET k = 'nookara_dir' WHERE k = 'velora_dir';`,
+  // v22: many servers per homeserver: every server gets a slug (its address is slug@domain), and a backup belongs to one server
+  d => {
+    d.exec('ALTER TABLE communities ADD COLUMN slug TEXT; CREATE UNIQUE INDEX communities_slug ON communities(slug); ALTER TABLE instance_backups ADD COLUMN community_id INTEGER;');
+    const slug = require('./slug'), taken = new Set(), set = d.prepare('UPDATE communities SET slug = ? WHERE id = ?');
+    for (const c of d.prepare('SELECT id, name FROM communities ORDER BY id').all()) { const s = slug.derive(c.name, x => taken.has(x)); taken.add(s); set.run(s, c.id); }
+    d.exec('UPDATE instance_backups SET community_id = (SELECT id FROM communities ORDER BY id LIMIT 1)');
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
@@ -259,7 +266,7 @@ function open() {
   db = new DatabaseSync(path.join(config.dir(), DB_FILE));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;');
   const have = db.prepare('PRAGMA user_version').get().user_version;
-  for (let v = have; v < MIGRATIONS.length; v++) tx(() => { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); });
+  for (let v = have; v < MIGRATIONS.length; v++) tx(() => { const m = MIGRATIONS[v]; if (typeof m === 'function') m(db); else db.exec(m); db.exec(`PRAGMA user_version = ${v + 1}`); });
   return db;
 }
 function close() { if (db) { try { db.close(); } catch { /* closed */ } } db = null; cache.clear(); depth = 0; }
