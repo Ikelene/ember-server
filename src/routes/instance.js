@@ -35,6 +35,7 @@ function discovery() {
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
     managed: managed.view(), // the old hosted containers' plan (old clients read it), null otherwise
+    ...require('../push').discovery(), // PROTOCOL §20: where a client registers its pushers
     ...require('../limits').discovery(), // PROTOCOL §19: the homeserver's default limits and the tiers a server can buy
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
     homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
@@ -54,6 +55,7 @@ function discovery() {
 function register(app, { restart }) {
   require('../backups').register(app);
   require('../limits').register(app); require('../tiers').register(app); // PROTOCOL §19
+  require('../push').register(app); // PROTOCOL §20
   require('../selfupdate').register(app); // GET/POST /api/v1/instance/update (asks hostd to rebuild + recreate this container)
   for (const p of [WELL_KNOWN, LEGACY_WELL_KNOWN]) app.get(p, { auth: false }, () => discovery());
   app.get('/health', { auth: false }, () => ({ ok: true }));

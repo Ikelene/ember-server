@@ -8,7 +8,12 @@ const gateway = require('./gateway');
 let offline = () => {};
 const setOfflineHandler = fn => { offline = typeof fn === 'function' ? fn : () => {}; };
 // notifyOffline(userIds: number[], payload: the chat_mention object)
-const notifyOffline = (userIds, payload) => { try { return offline(userIds, payload); } catch (e) { console.error('[notify] offline hook', e.message); } };
+// more listeners for the same thing (push.js: the push gateway). -> a function that takes it off again
+const others = new Set();
+const onOffline = fn => { others.add(fn); return () => others.delete(fn); };
+function notifyOffline(userIds, payload) {
+  for (const fn of [offline, ...others]) { try { fn(userIds, payload); } catch (e) { console.error('[notify] offline hook', e.message); } }
+}
 
 function effective(prefs, sid, cid) {
   const sv = prefs.get(sid) || {}, ch = prefs.get(cid) || {}, t = Date.now();
@@ -55,4 +60,4 @@ function deliver(ctx, msg, authorId) {
   if (off.length) notifyOffline(off, payload);
 }
 
-module.exports = { effective, deliver, notifyOffline, setOfflineHandler, plainBody };
+module.exports = { effective, deliver, notifyOffline, setOfflineHandler, onOffline, plainBody };

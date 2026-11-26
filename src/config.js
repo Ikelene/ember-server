@@ -111,6 +111,13 @@ function sanitize(p, loose = false) {
     const d = typeof p.domain === 'string' ? p.domain.trim().toLowerCase() : null;
     if (p.domain === null || d === '') out.domain = null; else if (d && DOMAIN.test(d)) out.domain = d; else bad('invalid_domain');
   }
+  if (p.push !== undefined) { // PROTOCOL §20: the gateway a pusher uses when its client names none
+    const g = p.push && typeof p.push === 'object' ? p.push.default_gateway : undefined;
+    let u = null; try { u = typeof g === 'string' ? new URL(g) : null; } catch { u = null; }
+    if (g === null || g === '') out.push = { default_gateway: null };
+    else if (u && !u.username && !u.password && g.length <= 500 && (u.protocol === 'https:' || (u.protocol === 'http:' && devHttp()))) out.push = { default_gateway: u.href };
+    else bad('invalid_push');
+  }
   if (p.bridges !== undefined) { // PROTOCOL §16: Discord sign-in for the ownership check, and how many gateway connections the Discord bot uses
     const v = p.bridges, b = {};
     if (!v || typeof v !== 'object' || Array.isArray(v)) bad('invalid_bridges');
@@ -149,6 +156,7 @@ function sanitize(p, loose = false) {
 // the effective settings: defaults < file < env. (Old community_creation / auto_join keys in config.json are ignored.)
 function get() {
   const v = { ...DEFAULTS, ...data, voice: { ...DEFAULTS.voice, ...(data.voice || {}) }, youtube: { ...DEFAULTS.youtube, ...(data.youtube || {}) }, creation: { ...DEFAULTS.creation, ...(data.creation || {}) } };
+  v.push = { default_gateway: data.push?.default_gateway || 'https://nookara.cc/_ember/push/v1/notify' };
   v.bridges = { discord_oauth: data.bridges?.discord_oauth || null, discord_shards: data.bridges?.discord_shards || 1 };
   v.limits = { defaults: data.limits?.defaults || {}, tiers: data.limits?.tiers || [] };
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
@@ -249,6 +257,7 @@ function adminView() {
     accounts_mode_env: !!envMode(), // the env var wins over the saved setting
     nookara_url: v.nookara_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
     youtube: v.youtube, nookara_registration: v.nookara_registration, tags: v.tags, ember_clients: v.ember_clients,
+    push: v.push,
     bridges: { discord_oauth: v.bridges.discord_oauth ? { client_id: v.bridges.discord_oauth.client_id, has_secret: !!v.bridges.discord_oauth.client_secret } : null, discord_shards: v.bridges.discord_shards },
     voice: { cf_app_id: v.voice.cf_app_id, has_app_secret: !!v.voice.cf_app_secret, cf_turn_key_id: v.voice.cf_turn_key_id, has_turn_token: !!v.voice.cf_turn_token },
   });

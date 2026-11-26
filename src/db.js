@@ -297,6 +297,12 @@ const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS tier_payments_open ON tier_payments(status, expires_at);`);
   },
+  // v26: push through a gateway (PROTOCOL §20): the devices of an account that want notifications
+  `CREATE TABLE IF NOT EXISTS pushers (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, pushkey TEXT NOT NULL, app_id TEXT NOT NULL, gateway_url TEXT NOT NULL,
+    device_name TEXT, show_preview INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, last_ok_at INTEGER, PRIMARY KEY (user_id, pushkey)
+  );
+  CREATE INDEX IF NOT EXISTS pushers_key ON pushers(pushkey);`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
