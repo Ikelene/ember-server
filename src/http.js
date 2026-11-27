@@ -33,6 +33,12 @@ class App {
 
   ip(req) {
     if (this.trustProxy) { const x = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim(); if (x) return x; }
+    // a request that came through a proxy while EMBER_TRUST_PROXY is off: every limit per address sees only the proxy, so one
+    // client can use them all up for everyone. Said once
+    if (!this.warnedProxy && req.headers['x-forwarded-for']) {
+      this.warnedProxy = true;
+      console.warn('[http] requests arrive with X-Forwarded-For but EMBER_TRUST_PROXY is not 1: every per-address limit (sign-in, s2s, uploads) sees only the proxy. Behind a reverse proxy, set EMBER_TRUST_PROXY=1.');
+    }
     return req.socket.remoteAddress || '?';
   }
 

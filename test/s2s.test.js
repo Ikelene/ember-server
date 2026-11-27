@@ -141,26 +141,30 @@ test('requests are counted per homeserver', async () => {
   limits.reset();
 });
 
-test('made-up keyIds cannot make this homeserver fetch for them: lookups of unknown domains are limited per address and in number', async () => {
+test('made-up keyIds cannot make this homeserver fetch for them, and cannot crowd out the homeservers it deals with', async () => {
   accept('all');
   const s2s = require('../src/social/s2s');
-  s2s._test.lookupLimit.reset(); s2s._test.ipLimit.reset();
+  const reset = () => { s2s._test.lookupLimit.reset(); s2s._test.ipLimit.reset(); s2s._test.allLookups.reset(); s2s._test.forgetPeers(); };
+  reset();
   const known = await mock('known.example');
-  assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200); // (now known)
-  // too many lookups running at once: 503 busy, while known domains go on
+  assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200); // (seen now: a peer)
+  // too many lookups running at once: 503 busy, while known peers go on
   s2s._test.setMaxLookups(0);
   let r = await known.s2s(base, 'POST', '/ping', {}, { signAs: 'nowhere-a.example' });
   assert.deepEqual([r.status, r.body.error], [503, 'busy']);
   assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200);
-  s2s._test.setMaxLookups(16); s2s._test.lookupLimit.reset();
-  // 30 unknown domains in ten minutes from one address, then 429; a failed lookup is remembered and not counted again
+  s2s._test.setMaxLookups(32); reset();
+  // endless names under one registered domain (wildcard DNS): 10 lookups in ten minutes from one address, then 429
   const codes = [];
-  for (let i = 0; i < 31; i++) codes.push((await known.s2s(base, 'POST', '/ping', {}, { signAs: `made-up-${i}.example` })).status);
-  assert.deepEqual([codes.slice(0, 30).every(c => c !== 429), codes[30]], [true, 429]);
-  r = await known.s2s(base, 'POST', '/ping', {}, { signAs: 'made-up-0.example' });
-  assert.notEqual(r.status, 429);
+  for (let i = 0; i < 11; i++) codes.push((await known.s2s(base, 'POST', '/ping', {}, { signAs: `x${i}.wild.example` })).status);
+  assert.deepEqual([codes.slice(0, 10).every(c => c !== 429), codes[10]], [true, 429]);
+  assert.notEqual((await known.s2s(base, 'POST', '/ping', {}, { signAs: 'other-zone.example' })).status, 429); // another registered domain
+  assert.notEqual((await known.s2s(base, 'POST', '/ping', {}, { signAs: 'x0.wild.example' })).status, 429); // a remembered failure
+  // a peer already dealt with is not held back by any of it, even with the address's request budget used up
+  for (let i = 0; i < 700; i++) s2s._test.ipLimit.hit('127.0.0.1') && s2s._test.ipLimit.hit('::ffff:127.0.0.1') && s2s._test.ipLimit.hit('::1');
   assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200);
-  s2s._test.lookupLimit.reset();
+  assert.equal((await known.s2s(base, 'POST', '/ping', {}, { signAs: 'x99.wild.example' })).status, 429);
+  reset();
 });
 
 test('the outbox: kept in the database until answered, carried on after a restart, the newest of a key replaces one waiting, given up when too old', async () => {
@@ -206,4 +210,17 @@ test('the outbox: kept in the database until answered, carried on after a restar
   s2s.start(); await s2s.idle();
   assert.deepEqual([got.length, rows().length], [n + 1, 0]);
   s2s._test.setMaxAge(24 * 3600 * 1000); s2s._test.setRetry([2000, 15000]);
+});
+
+test('a proxy in front without EMBER_TRUST_PROXY: said once, since every per-address limit would see only the proxy', () => {
+  const { App } = require('../src/http');
+  const said = [], warn = console.warn;
+  console.warn = m => said.push(String(m));
+  try {
+    const off = new App(), req = { headers: { 'x-forwarded-for': '203.0.113.9' }, socket: { remoteAddress: '10.0.0.2' } };
+    assert.equal(off.ip(req), '10.0.0.2'); off.ip(req);
+    assert.equal(said.filter(m => /EMBER_TRUST_PROXY/.test(m)).length, 1);
+    assert.equal(new App({ trustProxy: true }).ip(req), '203.0.113.9');
+    assert.equal(said.length, 1);
+  } finally { console.warn = warn; }
 });

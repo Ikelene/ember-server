@@ -87,7 +87,7 @@ Everything was renamed: Bonfire is Ember and Velora is Nookara. An existing inst
 | `EMBER_ACCEPT_OPERATOR_TERMS` | `1` = you accept the [Ember Server Operator Terms](https://nookara.cc/operator-terms) (same as `--accept-operator-terms`); needed for a headless setup, and records the acceptance on an existing instance |
 | `EMBER_OPERATOR_TERMS_AT`, `EMBER_OPERATOR_TERMS_BY` | Nookara-hosted instances: when / by whom Nookara collected the acceptance (set by bonfire-hostd) |
 | `EMBER_NOOKARA_REGISTRATION` | overrides `nookara_registration` (`auto` / `off`) |
-| `EMBER_TRUST_PROXY` | `1` = take the client IP from `X-Forwarded-For` (set this behind a reverse proxy, otherwise per-IP rate limits see only the proxy) |
+| `EMBER_TRUST_PROXY` | `1` = take the client IP from `X-Forwarded-For`. **Set this behind a reverse proxy** (see below): otherwise every per-address limit (sign-in, registration, server-to-server key lookups) sees only the proxy, and one client can use them up for everyone. The server warns once in its log when requests arrive with `X-Forwarded-For` while it is off. Only set it when a proxy you control always sets the header, or clients can pick their own address |
 | `EMBER_DISCORD_TOKEN`, `EMBER_FLUXER_TOKEN` | bridge bot tokens, used when none is saved in the instance settings (`PATCH /api/v1/bridge/settings`) |
 | `EMBER_MANAGED`, `EMBER_PLAN`, `EMBER_LIMITS` | Nookara-hosted ("managed") instances: plan limits (member cap, upload size, emojis, sounds, bots, bridges, own voice keys) and locked settings. See "Nookara-hosted" below, PROTOCOL §19 |
 | `EMBER_READ_ONLY` | `1` = refuse every write (reading, signing in and the export still work) |
@@ -95,7 +95,7 @@ Everything was renamed: Bonfire is Ember and Velora is Nookara. An existing inst
 | `EMBER_IMPORT_ON_BOOT` | path of a `bonfire-export-v1` zip: imported once, as the owner, on a boot where the instance has no community yet, then deleted |
 | `EMBER_DEV` | `1` = development only: CloudLink bridges may connect to `ws://localhost`, private addresses and any port |
 
-Put it behind a TLS-terminating reverse proxy (nginx, Caddy, Cloudflare Tunnel…). WebSocket paths are `/gateway`, `/bot/gateway` and `/game-gateway` (Minecraft); both HTTP and WS must be proxied.
+Put it behind a TLS-terminating reverse proxy (nginx, Caddy, Cloudflare Tunnel…), and set `EMBER_TRUST_PROXY=1` so per-address limits see your visitors' addresses (`X-Forwarded-For`) instead of the proxy's. WebSocket paths are `/gateway`, `/bot/gateway` and `/game-gateway` (Minecraft); both HTTP and WS must be proxied.
 
 ### Nookara mode
 

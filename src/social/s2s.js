@@ -18,6 +18,7 @@ const resolve = require('../federation/resolve');
 const remote = require('../federation/remote');
 const denylist = require('../federation/denylist');
 const seen = require('../federation/seen');
+const { registeredDomain } = require('../federation/psl');
 const limits = require('../federation/limits');
 const where = require('./where');
 
@@ -148,24 +149,40 @@ function parseHeader(v) {
   return { domain, kid, created: Number(p.created), sig: Buffer.from(p.sig, 'base64url') };
 }
 // Before a signature can be checked the sender's keys have to be found (its /.well-known/ember, its JWKS), and that is work
-// anyone can ask for with a made-up keyId. So: signed requests are limited per address, a domain nothing is known about yet
-// may be looked up only so often per address, and only so many such lookups run at once
-const ipLimit = limiter(600, 60 * 1000), lookupLimit = limiter(30, 10 * 60 * 1000);
-let MAX_LOOKUPS = 16, lookups = 0;
+// anyone can ask for with a made-up keyId. Homeservers this one already deals with (signed in before, friends or DMs there,
+// calls waiting for them) are never held back by what strangers do. For the rest: signed requests are limited per address,
+// lookups of a domain nothing is known about are limited per address and registered domain (wildcard DNS makes endless
+// names under one) and overall, and only so many run at once, per address and overall.
+// (Behind a reverse proxy the address is the proxy's unless EMBER_TRUST_PROXY=1: http.js warns about that.)
+const ipLimit = limiter(600, 60 * 1000), lookupLimit = limiter(10, 10 * 60 * 1000), allLookups = limiter(600, 10 * 60 * 1000);
+let MAX_LOOKUPS = 32, MAX_LOOKUPS_PER_IP = 4, lookups = 0;
+const lookupsBy = new Map(); // ip -> running
+const peerCache = new Map(); // domain -> { at, known }
+function knownPeer(domain) {
+  const hit = peerCache.get(domain), t = now();
+  if (hit && t - hit.at < 60 * 1000) return hit.known;
+  const like = '%@' + domain;
+  const known = !!(seen.row(domain) || db.get('SELECT 1 FROM s2s_outbox WHERE domain = ? LIMIT 1', domain) || db.get('SELECT 1 FROM friends WHERE peer LIKE ? LIMIT 1', like)
+    || db.get('SELECT 1 FROM dm_pointers WHERE host_domain = ? LIMIT 1', domain) || db.get("SELECT 1 FROM users WHERE kind = 'remote' AND domain = ? LIMIT 1", domain));
+  if (peerCache.size > 20000) peerCache.clear();
+  peerCache.set(domain, { at: t, known });
+  return known;
+}
 async function lookedUp(domain, ip, fn) {
-  if (resolve.known(domain)) return fn();
-  if (!lookupLimit.hit(ip)) throw err('rate_limited', 429);
-  if (lookups >= MAX_LOOKUPS) throw err('busy', 503);
-  lookups++;
-  try { return await fn(); } finally { lookups--; }
+  if (resolve.known(domain) || knownPeer(domain)) return fn();
+  if (!lookupLimit.hit(ip + '|' + registeredDomain(domain)) || !allLookups.hit('all')) throw err('rate_limited', 429);
+  const mine = lookupsBy.get(ip) || 0;
+  if (lookups >= MAX_LOOKUPS || mine >= MAX_LOOKUPS_PER_IP) throw err('busy', 503);
+  lookups++; lookupsBy.set(ip, mine + 1);
+  try { return await fn(); } finally { lookups--; const n = (lookupsBy.get(ip) || 1) - 1; if (n) lookupsBy.set(ip, n); else lookupsBy.delete(ip); }
 }
 // who sent this request. -> { domain, origin, ips }. Throws the errors of §4c, in its order: nothing is fetched for a
 // homeserver that is not let in
 async function verify(req) {
-  if (!ipLimit.hit(req.ip || '')) throw err('rate_limited', 429);
   const p = parseHeader(req.headers['ember-signature']);
   if (!p) throw err('invalid_signature_header', 401);
   const { domain } = p, named = req.headers['x-ember-homeserver'];
+  if (!knownPeer(domain) && !ipLimit.hit(req.ip || '')) throw err('rate_limited', 429);
   if (named !== undefined && String(named).trim().toLowerCase() !== domain) throw err('homeserver_mismatch', 401);
   const t = Math.floor(now() / 1000);
   if (t - p.created > MAX_AGE || p.created - t > MAX_AHEAD) throw err('signature_expired', 401);
@@ -221,5 +238,5 @@ const discovery = () => ({ social: where.urls() });
 
 module.exports = {
   PREFIX, MAX_AGE, canonical, digest, sign, request, call, later, after, start, stop, idle, verify, parties, localAccount, on, register, discovery, assertPeer,
-  _test: { setRetry(list) { RETRY = list; }, setMaxAge(ms) { MAX_QUEUE_AGE = ms; }, ipLimit, lookupLimit, setMaxLookups(n) { MAX_LOOKUPS = n; } },
+  _test: { setRetry(list) { RETRY = list; }, setMaxAge(ms) { MAX_QUEUE_AGE = ms; }, ipLimit, lookupLimit, allLookups, setMaxLookups(n, perIp = 4) { MAX_LOOKUPS = n; MAX_LOOKUPS_PER_IP = perIp; }, forgetPeers() { peerCache.clear(); } },
 };
