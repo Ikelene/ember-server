@@ -43,6 +43,9 @@ const MESSAGES = {
   password_mismatch: 'The two passwords are not the same.',
   username_taken: 'That username is taken.',
   registration_closed: 'New accounts cannot be made here right now.',
+  invite_required: 'New accounts here need an invite code. Ask an admin of this homeserver for one.',
+  invalid_invite: 'That invite code is not valid, has been used up or has expired.',
+  account_pending: 'Thanks! An admin of this homeserver looks at new accounts before they can be used. Try signing in again once yours is approved.',
   password_login_disabled: 'Password sign-in is switched off here.',
   not_linked: 'No account here is linked to this login.',
   login_already_linked: 'That login is already linked to another account.',
@@ -87,7 +90,7 @@ ${meta}${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
 const hidden = o => Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('');
 const query = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
 
-// { authz, csrf, view: 'login' | 'register', methods: [{ id, kind, name }], canRegister, error, notice, link, to }
+// { authz, csrf, view: 'login' | 'register', methods: [{ id, kind, name }], canRegister, registration (the mode), invite, error, notice, link, to }
 function loginPage(p) {
   const h = head(`Sign in to ${config.get().name || 'Ember'}`);
   const password = p.methods.find(m => m.kind === 'password');
@@ -104,7 +107,9 @@ function loginPage(p) {
   <form method="post" action="/login" autocomplete="on">${hidden({ ...carry, csrf: p.csrf, action: 'register' })}
     <label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required value="${esc(p.username || '')}">
     <label for="p">Password</label><input id="p" type="password" name="password" autocomplete="new-password" minlength="8" maxlength="200" required>
-    <label for="p2">Password again</label><input id="p2" type="password" name="password2" autocomplete="new-password" minlength="8" maxlength="200" required>
+    <label for="p2">Password again</label><input id="p2" type="password" name="password2" autocomplete="new-password" minlength="8" maxlength="200" required>${p.registration === 'invite' ? `
+    <label for="i">Invite code</label><input id="i" type="text" name="invite" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" required value="${esc(p.invite || '')}">` : ''}${p.registration === 'approval' ? `
+    <p class="msg">An admin looks at new accounts here before they can be used.</p>` : ''}
     <button class="btn primary" type="submit">Create account</button>
   </form>`;
   } else {

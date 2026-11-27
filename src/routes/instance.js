@@ -91,7 +91,7 @@ function register(app, { restart }) {
   });
   app.post('/api/v1/auth/register', { auth: false }, async req => {
     if (!registerLimit.hit(req.ip)) throw err('rate_limited', 429);
-    return auth.registerLocal(req.body?.username, req.body?.password);
+    return auth.registerLocal(req.body?.username, req.body?.password, req.body?.invite);
   });
   app.post('/api/v1/auth/login', { auth: false }, async req => {
     if (!loginLimit.hit(req.ip)) throw err('rate_limited', 429);

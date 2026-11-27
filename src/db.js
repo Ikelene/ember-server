@@ -371,6 +371,18 @@ const MIGRATIONS = [
     challenge TEXT NOT NULL, exp INTEGER NOT NULL, family TEXT
   );
   CREATE TABLE IF NOT EXISTS oauth_grace (hash TEXT PRIMARY KEY, sealed TEXT NOT NULL, exp INTEGER NOT NULL);`,
+  // v31: registration by invite and by approval (PROTOCOL §4a, registration.js): the codes admins make, an account that waits
+  // for an admin (users.approval = 'pending') and the code it was made with
+  d => {
+    const has = c => d.prepare('PRAGMA table_info(users)').all().some(x => x.name === c);
+    if (!has('approval')) d.exec('ALTER TABLE users ADD COLUMN approval TEXT');
+    if (!has('registered_with')) d.exec('ALTER TABLE users ADD COLUMN registered_with TEXT');
+    d.exec(`CREATE TABLE IF NOT EXISTS registration_invites (
+        code TEXT PRIMARY KEY, note TEXT NOT NULL DEFAULT '', max_uses INTEGER, uses INTEGER NOT NULL DEFAULT 0, expires_at INTEGER,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS users_approval ON users(approval) WHERE approval IS NOT NULL;`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

@@ -173,6 +173,7 @@ async function verifyNookaraJwt(token, nowMs = Date.now()) {
 // ---------- login flows ----------
 function finishLogin(user, scopes, app = null) {
   if (user.banned) throw err('banned', 403);
+  require('./registration').assertNotPending(user); // an account that waits for an admin (registration: approval)
   return { session: createSession(user.id, scopes, app), user: userView(userById(user.id)) };
 }
 async function loginNookara(token) {
@@ -217,13 +218,16 @@ const claimed = () => !!db.metaGet('owner_user_id');
 
 // the password way in, when the accounts settings have one switched on
 const passwordMethod = () => config.get().accounts.login_methods.find(m => m.kind === 'password' && m.enabled) || null;
-// anyone may make an account: registration is open, or nobody has claimed the homeserver yet (its first account)
+// anyone may make an account: registration is open, or nobody has claimed the homeserver yet (its first account).
+// (invite / approval: registration.js canRegister)
 const registrationOpen = () => config.get().accounts.registration === 'open' || !claimed();
-async function registerLocal(username, password) {
+// POST /api/v1/auth/register { username, password, invite? } -> { session, user } | { pending: true, user } (registration: approval)
+async function registerLocal(username, password, invite = null) {
   if (config.mode() !== 'local') throw err('wrong_accounts_mode', 400);
   if (!passwordMethod()) throw err('password_login_disabled', 403);
-  if (!registrationOpen()) throw err('registration_closed', 403);
-  return finishLogin(userById(await createLocalUser(username, password)), LOCAL_SCOPES);
+  const r = await require('./registration').createAccount({ username, password, invite });
+  if (r.pending) return { pending: true, user: userView(r.user) };
+  return finishLogin(r.user, LOCAL_SCOPES);
 }
 // a username + password account (also made by an admin while still on Nookara accounts: the way back in after switching to local)
 // noPassword: an account that signs in through a linked outside login only (PROTOCOL §4a)

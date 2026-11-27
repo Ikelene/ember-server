@@ -87,6 +87,7 @@ function usable(userId) {
   const ok = u && (u.kind === 'remote' ? require('./federation/remote').sessionAllowed(u) : auth.hostedHere(u));
   if (!ok) throw oauthErr('invalid_grant', 'This account cannot sign in here.');
   if (u.banned) throw oauthErr('access_denied', 'This account is banned.', 403);
+  if (require('./registration').isPending(u)) throw oauthErr('access_denied', 'This account is waiting for an admin.', 403);
   return u;
 }
 function issueTokens(u, clientId, family = randHex(16)) {

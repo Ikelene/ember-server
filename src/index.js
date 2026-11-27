@@ -29,6 +29,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   });
   require('./routes/instance').register(app, { restart: doRestart });
   require('./login').register(app); // homeserver accounts and login (PROTOCOL §4a)
+  require('./registration').register(app); // registration by invite / approval, account passwords (PROTOCOL §4a)
   require('./account-page').register(app); // the account page (GET /account)
   require('./invite-page').register(app); // client-neutral invite links (GET /i/<slug>/<code>)
   require('./federation').register(app); // cross-homeserver sign-in and federation safety (PROTOCOL §4b)

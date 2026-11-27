@@ -9,6 +9,7 @@ const auth = require('./auth');
 const managed = require('./managed');
 const AS = require('./account-settings');
 const O = require('./oauth');
+const REG = require('./registration');
 const P = require('./login-providers');
 const page = require('./login-page');
 const safe = require('./safe-http');
@@ -60,7 +61,8 @@ async function uniqueUsername(wanted) {
 const enabledMethods = () => config.get().accounts.login_methods.filter(m => m.enabled).map(m => ({ id: m.id, kind: m.kind, name: m.name }));
 function showLogin(req, res, a, extra = {}, status = 200) {
   const c = csrf(req);
-  const body = page.loginPage({ authz: a.authz, csrf: c.token, methods: enabledMethods(), canRegister: auth.registrationOpen(), to: a.redirect.origin, view: 'login', ...extra });
+  const mode = REG.mode();
+  const body = page.loginPage({ authz: a.authz, csrf: c.token, methods: enabledMethods(), canRegister: REG.canRegister(), registration: mode, to: a.redirect.origin, view: 'login', ...extra });
   page.send(res, status, body, { cookies: c.set, formTo: a.redirect.origin });
 }
 const showError = (res, status, title, text, links) => page.send(res, status, page.messagePage({ title, text, bad: true, links }));
@@ -73,8 +75,10 @@ function request(req, res, src) {
   else showError(res, 400, 'This sign-in link is not valid', a.description);
   return null;
 }
+const waiting = res => page.send(res, 200, page.messagePage({ title: 'Your account is waiting', text: page.message('account_pending') }));
 // signed in: back to the client with a one-time code
 function finish(res, user, a) {
+  if (REG.isPending(user)) return waiting(res);
   db.run('UPDATE users SET last_login = ? WHERE id = ?', now(), user.id);
   page.redirect(res, O.redirectWith(a.redirect, { code: O.issueCode(user, a.authz), state: a.authz.state }));
 }
@@ -90,16 +94,18 @@ async function postLogin(req, res) {
   try {
     if (register) {
       if (!auth.limits.register.hit(req.ip)) throw err('rate_limited', 429);
-      if (!auth.registrationOpen()) throw err('registration_closed', 403);
+      if (!REG.canRegister()) throw err('registration_closed', 403);
       if (b.password !== b.password2) throw err('password_mismatch', 400);
-      user = auth.userById(await auth.createLocalUser(b.username, b.password));
+      const made = await REG.createAccount({ username: b.username, password: b.password, invite: typeof b.invite === 'string' ? b.invite : null });
+      if (made.pending) return waiting(res);
+      user = made.user;
     } else {
       if (!auth.limits.login.hit(req.ip)) throw err('rate_limited', 429);
       user = await auth.checkLocal(b.username, b.password);
     }
   } catch (e) {
     if (!e.code) throw e;
-    return again(e.code, e.status || 400, register ? { view: 'register' } : {});
+    return again(e.code, e.status || 400, register ? { view: 'register', invite: typeof b.invite === 'string' ? b.invite.slice(0, 40) : '' } : {});
   }
   // signed in with a password to link the outside login that had no account
   const p = register ? null : pending.take(b.link);
@@ -173,8 +179,11 @@ async function callback(req, res) {
     const owners = db.all('SELECT DISTINCT user_id FROM login_links WHERE email = ? AND email_verified = 1', idn.email);
     if (owners.length === 1) { user = auth.userById(owners[0].user_id); if (user) addLink(user.id, id, idn); }
   }
-  if (!user && auth.registrationOpen()) {
-    user = auth.userById(await auth.createLocalUser(await uniqueUsername(idn.username), null, { noPassword: true, displayName: idn.name }));
+  // a new account for this login: when anyone may make one, or (approval) one that waits for an admin. Invite mode has
+  // no place for a code here: they make the account with a password first, then link this login
+  if (!user && (auth.registrationOpen() || REG.mode() === 'approval')) {
+    const made = await REG.createAccount({ username: await uniqueUsername(idn.username), password: null, noPassword: true, displayName: idn.name });
+    user = made.user;
     addLink(user.id, id, idn);
   }
   if (!user) {
@@ -256,7 +265,7 @@ async function adminPatch(body) {
 function discovery() {
   const cfg = config.get(), hosts = config.mode() === 'local';
   return {
-    accounts: { hosts_accounts: hosts, registration: hosts ? (auth.registrationOpen() ? 'open' : cfg.accounts.registration) : 'closed', remote_accounts: { mode: cfg.accounts.remote_accounts.mode }, ...(config.nookaraIdentity() ? { nookara_identity: true } : {}) },
+    accounts: { hosts_accounts: hosts, registration: hosts ? REG.mode() : 'closed', remote_accounts: { mode: cfg.accounts.remote_accounts.mode }, ...(config.nookaraIdentity() ? { nookara_identity: true } : {}) },
     ...(hosts ? { login: { authorize_url: `${cfg.public_url}/login`, token_url: `${cfg.public_url}/api/v2/auth/token`, revoke_url: `${cfg.public_url}/api/v2/auth/revoke`, account_url: `${cfg.public_url}/account`, methods: enabledMethods() } } : {}),
   };
 }
@@ -271,7 +280,7 @@ function register(app) {
     const a = request(req, res, req.query);
     if (!a) return;
     const link = pending.peek(req.query.link) ? req.query.link : null;
-    showLogin(req, res, a, { view: req.query.view === 'register' ? 'register' : 'login', link });
+    showLogin(req, res, a, { view: req.query.view === 'register' ? 'register' : 'login', link, invite: typeof req.query.invite === 'string' ? req.query.invite.slice(0, 40) : '' });
   });
   app.post('/login', { auth: false, form: true }, postLogin);
   // "Cancel" on the page: the client hears access_denied
