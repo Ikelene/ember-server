@@ -53,6 +53,8 @@ async function buy(sid, me, body = {}) {
       out = await client().call('POST', relayPath('/pay-request'), { user_id: String(p.payer_nookara_id || payer.nookara_id), ...(payer.account ? { account: payer.account } : {}), amount: p.amount, reason: `${def.name} for ${c.name}, ${def.period_weeks} week${def.period_weeks === 1 ? '' : 's'}`.slice(0, 200), ref: p.ref });
     } catch (e) {
       if (!(e.code === ERR.unreachable || e.status === 429 || e.status >= 500)) set(p.id, { status: 'failed', error: e.code || 'payment_failed' });
+      // Nookara no longer has the link (removed there): forget it here too, so the person is asked to link again
+      if (e.code === 'payment_link_missing' && payer.account) { require('./payments').clearLink(me.id); throw require('./payments').requireLink(); }
       throw err(e.code === ERR.notRegistered || e.code === ERR.off ? 'tiers_unavailable' : e.code || 'payment_failed', e.status === 503 ? 409 : e.status || 502, e.extra);
     }
     if (typeof out?.id !== 'string' || typeof out.approve_url !== 'string') { set(p.id, { status: 'failed', error: ERR.badResponse }); throw err('payment_failed', 502); }

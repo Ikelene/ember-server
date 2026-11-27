@@ -81,16 +81,35 @@ async function finish(req, res) {
 function unlink(me) {
   const u = auth.userById(me.id);
   if (!u.payment_nookara_id) throw err('not_linked', 404);
-  db.run('UPDATE users SET payment_nookara_id = NULL, payment_linked_at = NULL WHERE id = ?', u.id);
+  clearLink(u.id);
   if (client().registered()) client().call('POST', relayPath('/payment-link/revoke'), { account: accountId(u), user_id: String(u.payment_nookara_id) }).catch(() => {});
   return view(auth.userById(u.id));
 }
 
+// Nookara says the person removed the link on its side (their account settings): POST /api/v2/account/payments/revoked { token }.
+// The token is Nookara's (IdP key, typ ember-payment-unlink+jwt, aud = this homeserver, sub = the Nookara id, account). Clients
+// of the account hear account_payments_update with the view.
+const UNLINK_TYP = 'ember-payment-unlink+jwt';
+async function revokedByNookara(body = {}) {
+  const claims = await auth.verifyNookaraJwt(String(body.token || ''), now(), { typ: UNLINK_TYP });
+  if (typeof claims.account !== 'string') throw err('invalid_token', 401);
+  const u = db.all('SELECT * FROM users WHERE payment_nookara_id = ?', String(claims.sub)).find(x => accountId(x) === claims.account);
+  if (!u) return { ok: true, unlinked: false };
+  clearLink(u.id);
+  return { ok: true, unlinked: true };
+}
+// the link is gone (here, or on Nookara's side): forget it and tell the account's clients
+function clearLink(userId) {
+  db.run('UPDATE users SET payment_nookara_id = NULL, payment_linked_at = NULL WHERE id = ?', userId);
+  try { require('./gateway').pushToUser(userId, { type: 'account_payments_update', payments: view(auth.userById(userId)) }); } catch { /* no gateway (tests) */ }
+}
+
 function register(app) {
+  app.post('/api/v2/account/payments/revoked', { auth: false }, req => revokedByNookara(req.body || {}));
   app.get('/api/v2/account/payments', req => view(auth.userById(req.user.id)));
   app.post('/api/v2/account/payments/link', req => start(req.user, req.body || {}));
   app.delete('/api/v2/account/payments/link', req => unlink(req.user));
   app.get('/account/payments/linked', { auth: false }, finish);
 }
 
-module.exports = { register, payerOf, requireLink, accountId, view, TYP, _test: { states } };
+module.exports = { register, payerOf, requireLink, accountId, view, clearLink, TYP, UNLINK_TYP, _test: { states } };

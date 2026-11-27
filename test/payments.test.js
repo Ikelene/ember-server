@@ -16,7 +16,7 @@ const auth = require('../src/auth');
 
 const dir = tmpDir();
 const idp = fakeIdp({ iss: 'http://nookara.test', aud: 'http://chat.test' });
-let inst, base, alice, sid;
+let inst, base, alice, sid, client;
 
 const relay = { on: true, calls: [], pays: new Map(), n: 0 };
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -47,7 +47,7 @@ test.before(async () => {
   inst = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', restart: () => {} });
   base = inst.url;
   auth.setJwksFetcher(idp.jwks);
-  const client = require('../src/relay/client');
+  client = require('../src/relay/client');
   client.registered = () => relay.on;
   client.call = relayCall;
 });
@@ -113,4 +113,26 @@ test('unlinking: at once here, and Nookara is told', async () => {
   assert.deepEqual(told.body, { account: acc(), user_id: '777' });
   assert.equal((await alice.a.del('/api/v2/account/payments/link')).body.error, 'not_linked');
   assert.equal((await alice.a.post(`/api/v2/servers/${sid}/tier`, { tier: 'plus' })).body.error, 'nookara_link_required');
+});
+
+test('removed on Nookara: Nookara\'s signed notice ends the link here at once; a pay request Nookara refuses for it does too', async () => {
+  const link = async () => { const st = stateOf((await alice.a.post('/api/v2/account/payments/link', {})).body.url); assert.equal((await back(st, linkToken())).status, 200); };
+  const notice = (over = {}, typ = 'ember-payment-unlink+jwt') => api(base).post('/api/v2/account/payments/revoked', { token: linkToken(over, typ) });
+  await link();
+  // a link token is not a notice; a notice for another Nookara account or account changes nothing
+  assert.equal((await notice({}, 'ember-payment-link+jwt')).status, 401);
+  assert.deepEqual((await notice({ sub: '778' })).body, { ok: true, unlinked: false });
+  assert.deepEqual((await notice({ account: 'l:99@chat.test' })).body, { ok: true, unlinked: false });
+  assert.equal((await alice.a.get('/api/v2/account/payments')).body.linked, true);
+  assert.deepEqual((await notice()).body, { ok: true, unlinked: true });
+  assert.equal((await alice.a.get('/api/v2/account/payments')).body.linked, false);
+  // Nookara lost its side some other way: the purchase is refused with payment_link_missing, the link goes, the person is asked again
+  await link();
+  const before = client.call;
+  client.call = async (method, path, body) => { if (path.endsWith('/pay-request') && method === 'POST') throw Object.assign(new Error('payment_link_missing'), { code: 'payment_link_missing', status: 403 }); return before(method, path, body); };
+  try {
+    const r = await alice.a.post(`/api/v2/servers/${sid}/tier`, { tier: 'plus' });
+    assert.deepEqual([r.status, r.body.error], [402, 'nookara_link_required']);
+    assert.equal((await alice.a.get('/api/v2/account/payments')).body.linked, false);
+  } finally { client.call = before; }
 });
