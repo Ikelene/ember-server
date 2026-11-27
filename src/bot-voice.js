@@ -73,9 +73,10 @@ const stateObj = (c, ch, uidOf, u, present) => ({
   mute: false, deaf: false, self_mute: !!u.muted, self_deaf: !!u.deafened, suppress: false, member: { user: { id: String(uidOf(u.principal) ?? 0), username: u.username, bot: String(u.principal).startsWith('b:') } },
 });
 
-function voiceStates(c, snap, uidOf) {
+// viewer: a bot's user id: only the voice channels it can see (PROTOCOL §6.5)
+function voiceStates(c, snap, uidOf, viewer = null) {
   const out = [];
-  for (const ch of snap.channels.filter(x => x.type === 'voice'))
+  for (const ch of snap.channels.filter(x => x.type === 'voice' && (viewer == null || snap.canView(x, viewer))))
     for (const u of V().voiceIn.get(`bf_${ch.cid}`)?.values() || []) out.push(stateObj(c, ch, uidOf, { principal: u.id, username: u.username, muted: u.muted, deafened: u.deafened }, true));
   return out;
 }

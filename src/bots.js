@@ -192,7 +192,7 @@ const roleObj = (c, r) => ({ id: roleId(c, r), name: r.name, color: r.color ? pa
 const channelObj = (ch, c, snap = null) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: snap ? discordOverwrites(snap, c, ch) : [], [BOT_API.channelType]: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
 const guildObj = (c, snap, full, bot) => {
   const out = { id: String(c.id), name: c.name, icon: c.icon_url ? BOT_API.avatar : null, icon_url: c.icon_url || null, owner_id: String(c.owner_id), description: c.description || null, member_count: C.memberCount(c.id), roles: snap.roles.map(r => roleObj(c, r)) };
-  if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c, snap)); out.voice_states = botVoice.voiceStates(c, snap, uidOf); }
+  if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c, snap)); out.voice_states = botVoice.voiceStates(c, snap, uidOf, bot ? bot.id : null); }
   return out;
 };
 const mimeOf = a => (a.type === 'gif' ? 'image/gif' : a.type === 'image' ? (/\.webp(\?|$)/i.test(a.url) ? 'image/webp' : /\.jpe?g(\?|$)/i.test(a.url) ? 'image/jpeg' : 'image/png') : a.type === 'video' ? 'video/mp4' : a.type === 'audio' ? 'audio/mpeg' : 'application/octet-stream');

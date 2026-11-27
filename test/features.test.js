@@ -208,7 +208,7 @@ test('webhooks: manage, execute with the token, embeds, files, rate limit', asyn
 
 test('soundboard: CRUD, upload checks, playing in a voice room', async () => {
   const voice = require('../src/voice');
-  const SDP = 'v=0\r\n' + 'a=x\r\n'.repeat(10);
+  const SDP = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8);
   voice.setFetch(async (url, init) => {
     const body = init.body ? JSON.parse(init.body) : {};
     const out = /sessions\/new$/.test(url) ? { sessionId: 's' + Math.random() } : /generate-ice-servers$/.test(url) ? { iceServers: [] } : /tracks\/new$/.test(url) ? { sessionDescription: { type: 'answer', sdp: SDP }, tracks: (body.tracks || []).map((t, i) => ({ trackName: t.trackName, mid: String(i) })) } : {};

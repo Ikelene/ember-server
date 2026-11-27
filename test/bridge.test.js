@@ -331,7 +331,7 @@ test('voice links: Discord people show up in the Ember voice channel as themselv
     let out = {};
     if (/sessions\/new$/.test(url)) out = { sessionId: `vs${Date.now()}${Math.random()}` };
     else if (/generate-ice-servers$/.test(url)) out = { iceServers: [{ urls: ['stun:stun.example:3478'] }] };
-    else if (/tracks\/new$/.test(url)) out = { sessionDescription: { type: 'answer', sdp: 'v=0\r\n' + 'a=x\r\n'.repeat(10) }, tracks: [{ trackName: 'audio', mid: '0' }] };
+    else if (/tracks\/new$/.test(url)) out = { sessionDescription: { type: 'answer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8) }, tracks: [{ trackName: 'audio', mid: '0' }] };
     else if (/\/sessions\/[^/]+$/.test(url)) out = { tracks: [] };
     return { ok: true, status: 200, json: async () => out };
   });
@@ -343,7 +343,7 @@ test('voice links: Discord people show up in the Ember voice channel as themselv
     const person = { principal: 'd:62', username: 'discord:62', platform: 'discord', name: 'eli', avatar: null };
     await VB._test.onWorker({ t: 'join', sock: 't1', room, person, nonce: 'n1' });
     assert.equal(got.at(-1).type, 'chat_rtc_joined', JSON.stringify(got.at(-1)));
-    await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_publish', nonce: 'n2', room, sessionDescription: { type: 'offer', sdp: 'v=0\r\n' + 'a=x\r\n'.repeat(10) }, tracks: [{ mid: '0', trackName: 'audio' }] } });
+    await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_publish', nonce: 'n2', room, sessionDescription: { type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8) }, tracks: [{ mid: '0', trackName: 'audio' }] } });
     assert.equal(got.at(-1).type, 'chat_rtc_published');
     await VB._test.onWorker({ t: 'rtc', sock: 't1', msg: { type: 'chat_rtc_connected', room } });
     const people = [...voice.rtcRooms.get(room).values()];

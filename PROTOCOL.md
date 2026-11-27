@@ -1082,14 +1082,14 @@ Like Discord's. An **overwrite** is `{ type: "role" | "member", id, allow, deny 
 | `mention_everyone` | MENTION_EVERYONE 128 | `@everyone` / `@here` and roles that are not mentionable |
 | `manage_messages` | MANAGE_MESSAGES 64 | delete others' messages; pin |
 | `pin_messages` | PIN_MESSAGES | pin and unpin |
-| `read_message_history` | READ_HISTORY | history, pins and search (without it: `messages: []`, `read_history: false`; live messages still arrive) |
+| `read_message_history` | READ_HISTORY | history, pins, search and starboard entries (without it: `messages: []`, `read_history: false`). Live messages still arrive, but a reply comes with `reply: { id, earlier: true }` and no text of the earlier message. Edits of messages are not sent, and a pin comes only as `chat_message_pinned { server, channel, id, pinned }`. Bots get `403 missing_access` for one message |
 | `use_external_emojis` | USE_EXTERNAL_EMOJIS | other servers' custom emojis in messages (`403 no_external_emojis { emojis }` otherwise) |
 | `connect` | CONNECT | join the voice channel |
 | `speak` | SPEAK | publish the microphone (`audio` track) |
 | `video` | VIDEO | publish the camera (`camera`) |
-| `stream` | STREAM | share the screen (`screen`, `screen_audio`); `403 no_voice_permission { tracks }` for what is not allowed |
+| `stream` | STREAM | share the screen (`screen`, `screen_audio`); `403 no_voice_permission { tracks }` for what is not allowed. A track must be what its SDP `m=` section says (audio for `audio` / `screen_audio`, video for `camera` / `screen`): `400 track_kind_mismatch { tracks }` otherwise. Losing a voice permission during a call takes effect at once: no Connect ends the call (`chat_rtc_left { room, reason: "not_allowed" }`); no Speak / Video / Stream closes those tracks (`chat_rtc_tracks_closed { room, tracks, reason: "not_allowed" }`) |
 | `use_soundboard` | USE_SOUNDBOARD | play soundboard sounds there (`voice_sound_failed { reason: "no_soundboard_permission" }`) |
-| `manage_channel` | MANAGE_CHANNELS 2 | (channel-level Manage channels) |
+| `manage_channel` | MANAGE_CHANNELS 2 | edit and delete this channel (`PATCH` / `DELETE /channels/:cid`), and move it in the layout |
 | `manage_permissions` | MANAGE_ROLES 8 | edit this channel's overwrites |
 
 Server-wide bits (Administrator, Manage server, kick, ban, nicknames, ...) are not channel permissions: `400 not_a_channel_permission { bits, names }`. `GET /api/v1/permissions` (no session) -> `{ channel: { name: bit }, role: { name: bit }, channel_bits, all }`.
@@ -1106,8 +1106,11 @@ The owner and Administrator skip all of it. Seeing is required for everything el
 - `GET /api/v1/servers/:sid/channels/:cid/overwrites` -> `{ overwrites (those that apply), own (the channel's own), perms_synced, category }`. Each overwrite is `{ type, id, name, everyone? (roles), display_name? (members), allow, deny, allow_names, deny_names }`.
 - `PUT …/overwrites { overwrites: [ { type, id, allow, deny } ] }` replaces them all (at most 200).
 - `PUT …/overwrites/:type/:id { allow, deny }` sets one, and `DELETE …/overwrites/:type/:id` removes it. An overwrite with nothing in it is removed too.
-- `POST …/overwrites/sync` makes the channel follow its category again; its own overwrites go. Editing a channel that follows its category first gives it its own copy of the category's overwrites, and it stops following.
-- `/api/v1/servers/:sid/categories/:name/overwrites[/:type/:id]` works the same for a category (no sync). A category that is removed from the layout takes its overwrites with it.
+- `POST …/overwrites/sync` makes the channel follow its category again; its own overwrites go. That is checked like replacing them with the category's: every entry that changes, removed or inherited, must be one you could set (`cannot_grant`, `role_too_high`, ...). Editing a channel that follows its category first gives it its own copy of the category's overwrites, and it stops following.
+- **No layout change ever makes a channel more visible.** A channel that moves to another category (`PATCH /channels/:cid { category }`, `PUT /servers/:sid/layout`, or because its category was removed) keeps the overwrites it had as its own and stops following. Following the new category is an explicit sync. A category renamed keeps its overwrites and its channels keep following it. Rename with `PUT /api/v1/servers/:sid/categories/:name { name }` (`category_taken` 409), or in the layout: `renames: { old: new }`, or a new name in the place of one that is gone. Channels you cannot `manage_channel` stay where they are in a layout change.
+- `/api/v1/servers/:sid/categories/:name/overwrites[/:type/:id]` works the same for a category (no sync). Reading a category's overwrites needs `manage_permissions` / `manage_channel` there, or a channel of it you can see (`404 category_not_found` otherwise). A category that is removed from the layout takes its overwrites with it, after its channels got their own copies.
+- **Member overwrites name people**, so they are shown only to who may edit the channel's permissions: everyone else gets the role and @everyone entries only, in channel views (`permission_overwrites`), `GET …/overwrites` and `chat_channels_update`.
+- An entry that does not change is not checked: a list sent back whole may name overwrites of roles above you as they are. An overwrite on the owner can always be removed.
 - `GET /api/v1/servers/:sid/channels/:cid/permissions/:principal` -> `{ member, channel, view, post, owner, administrator, allow, names, server, server_names }`, what the member may do there. Allowed for the member themselves and for whoever manages the channel's permissions.
 - The older `PUT /api/v1/channels/:cid/perms { overwrites: [ { rid, allow, deny } ] }` still works. It replaces the role overwrites and keeps the member ones.
 - Channel views carry `permission_overwrites` (the full list that applies) and `perms_synced`, next to the older `overwrites: [ { rid, allow, deny } ]` (role ones). Changes send `chat_channels_update` and `chat_perms_changed { server, channel | category }`, and are recorded in the audit log: `channel_overwrite_update`, `channel_overwrite_delete`, `channel_overwrites_replace`, `channel_overwrites_sync`.

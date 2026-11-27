@@ -80,17 +80,21 @@ function assertMayEdit(snap, scope, me) {
   const p = permsIn(snap, scope, me.id);
   if (!(p & (P.MANAGE_ROLES | P.MANAGE_CHANNELS))) throw err('not_allowed', 403);
 }
-// one change, checked: -> { allow, deny } to store (or null to remove)
+// one change, checked: -> { allow, deny } to store (or null to remove). An entry that does not change is not checked (a list sent
+// back whole may name overwrites of roles above you as they are); removing one on the owner is always fine
 function checked(snap, scope, me, t, want, existing) {
-  if (!isBoss(snap, me.id)) {
-    if (t.type === 'role' && !t.role.is_default && t.role.position >= snap.top(me.id)) throw err('role_too_high', 403);
-    if (t.type === 'member' && Number(t.id) !== Number(me.id) && (snap.isOwner(t.id) || snap.top(t.id) > snap.top(me.id))) throw err('member_too_high', 403); // (someone above you)
-  }
-  if (t.type === 'member' && snap.isOwner(t.id)) throw err('owner_not_affected', 400); // (the owner is never limited: nothing to set)
   const allow = perms.bitsFrom(want?.allow), deny = perms.bitsFrom(want?.deny);
   if (allow === null || deny === null) throw err('invalid_permissions');
   if ((allow | deny) & ~CHANNEL_BITS) throw err('not_a_channel_permission', 400, { bits: (allow | deny) & ~CHANNEL_BITS, names: perms.namesOf((allow | deny) & ~CHANNEL_BITS, perms.SERVER_NAMES) });
   const next = { allow: allow & ~deny, deny };
+  const was0 = existing || { allow: 0, deny: 0 };
+  if (next.allow === was0.allow && next.deny === was0.deny) return next.allow || next.deny ? next : null; // (unchanged)
+  const removing = !next.allow && !next.deny;
+  if (t.type === 'member' && snap.isOwner(t.id) && !removing) throw err('owner_not_affected', 400); // (the owner is never limited: nothing to set)
+  if (!isBoss(snap, me.id)) {
+    if (t.type === 'role' && !t.role.is_default && t.role.position >= snap.top(me.id)) throw err('role_too_high', 403);
+    if (t.type === 'member' && Number(t.id) !== Number(me.id) && !snap.isOwner(t.id) && snap.top(t.id) > snap.top(me.id)) throw err('member_too_high', 403); // (someone above you)
+  }
   if (!isBoss(snap, me.id)) {
     const mine = permsIn(snap, scope, me.id) | P.VIEW;
     const was = existing || { allow: 0, deny: 0 };
@@ -151,6 +155,20 @@ function setOne(sid, me, where_, type, id, body = {}) {
   return answer(c, scope);
 }
 const removeOne = (sid, me, where_, type, id) => setOne(sid, me, where_, type, id, { allow: 0, deny: 0 });
+// from the overwrites there now (`from`) to `wanted` (Map "type:id" -> { t, x }): every entry that changes is checked like a
+// single edit, the ones that go included. -> [[t, o]]
+function plan(snap, scope, me, from, wanted) {
+  const ops = [];
+  for (const { t, x } of wanted.values()) ops.push([t, checked(snap, scope, me, t, x, from?.[t.type === 'role' ? 'roles' : 'members'].get(Number(t.id)) || null)]);
+  for (const [kind, map] of [['role', from?.roles], ['member', from?.members]]) for (const [id, o] of map || []) {
+    if (wanted.has(`${kind}:${id}`)) continue;
+    const t = kind === 'role' ? { type: 'role', id, role: snap.roles.find(r => r.id === id) } : { type: 'member', id, user: require('./auth').userById(id) };
+    if (!t.role && !t.user) continue;
+    ops.push([t, checked(snap, scope, me, t, { allow: 0, deny: 0 }, o)]);
+  }
+  return ops;
+}
+const asWanted = set => new Map([...[...(set?.roles || [])].map(([id, o]) => [`role:${id}`, { t: { type: 'role', id }, x: o }]), ...[...(set?.members || [])].map(([id, o]) => [`member:${id}`, { t: { type: 'member', id }, x: o }])]);
 // the whole list: [{ type, id, allow, deny }] (ones not named go)
 function replaceAll(sid, me, where_, list) {
   const scope = scopeOf(sid, me, where_);
@@ -160,24 +178,23 @@ function replaceAll(sid, me, where_, list) {
   const set = scope.ch ? snap.owFor(scope.ch) : snap.kow.get(scope.category);
   const wanted = new Map();
   for (const x of list) { const t = target(snap, x?.type, x?.id); wanted.set(`${t.type}:${t.id}`, { t, x }); }
-  const ops = [];
-  for (const { t, x } of wanted.values()) ops.push([t, checked(snap, scope, me, t, x, set?.[t.type === 'role' ? 'roles' : 'members'].get(Number(t.id)) || null)]);
-  for (const [kind, map] of [['role', set?.roles], ['member', set?.members]]) for (const [id, o] of map || []) {
-    if (wanted.has(`${kind}:${id}`)) continue;
-    const t = kind === 'role' ? { type: 'role', id, role: snap.roles.find(r => r.id === id) } : { type: 'member', id, user: require('./auth').userById(id) };
-    if (!t.role && !t.user) continue;
-    ops.push([t, checked(snap, scope, me, t, { allow: 0, deny: 0 }, o)]);
-  }
+  const ops = plan(snap, scope, me, set, wanted);
   db.tx(() => { unsync(scope, c); for (const [t, o] of ops) put(scope, c, t, o); assertNotLockedOut(c, scope, me); });
   changed(c, scope, me, 'channel_overwrites_replace', { count: ops.filter(([, o]) => o).length });
   return answer(c, scope);
 }
-// follow the category again: the channel's own overwrites go
+// follow the category again: the channel's own overwrites go and the category's apply. That is a change from one set to the other,
+// checked entry by entry like any edit (nobody drops a deny they could not set, or inherits something they could not grant)
 function sync(sid, me, cid) {
   const scope = scopeOf(sid, me, { cid });
   const { c, snap } = scope;
   assertMayEdit(snap, scope, me);
   if (!scope.ch.category) throw err('no_category');
+  if (!scope.ch.perms_synced) {
+    const cat = snap.kow.get(scope.ch.category), wanted = asWanted(cat);
+    for (const w of wanted.values()) { const r = w.t.type === 'role' ? snap.roles.find(x => x.id === w.t.id) : null; w.t = w.t.type === 'role' ? { ...w.t, role: r } : { ...w.t, user: require('./auth').userById(w.t.id) }; if (!w.t.role && !w.t.user) wanted.delete(`${w.t.type}:${w.t.id}`); }
+    plan(snap, scope, me, snap.cow.get(scope.ch.id), wanted);
+  }
   db.tx(() => {
     db.run('DELETE FROM perm_overwrites WHERE channel_id = ?', scope.ch.id);
     db.run('UPDATE channels SET perms_synced = 1 WHERE id = ?', scope.ch.id);
@@ -188,7 +205,12 @@ function sync(sid, me, cid) {
 }
 function list(sid, me, where_) {
   const scope = scopeOf(sid, me, where_);
-  return answer(scope.c, scope);
+  const may = isBoss(scope.snap, me.id) || !!(permsIn(scope.snap, scope, me.id) & (P.MANAGE_ROLES | P.MANAGE_CHANNELS));
+  if (!scope.ch && !may && !scope.snap.channels.some(ch => ch.category === scope.category && scope.snap.canView(ch, me.id))) throw err('category_not_found', 404);
+  const out = answer(scope.c, scope);
+  if (may) return out;
+  const roles = l => (l || []).filter(o => o.type !== 'member');
+  return { ...out, overwrites: roles(out.overwrites), ...(out.own ? { own: roles(out.own) } : {}) };
 }
 // what a member may do in a channel: { allow, names, view, post }. Themselves, or people who manage the channel's permissions
 function effective(sid, me, cid, principal) {

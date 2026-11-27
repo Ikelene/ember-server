@@ -12,7 +12,7 @@ const voice = require('../src/voice');
 
 const dir = tmpDir();
 let inst, calls = [], n = 0;
-const SDP = 'v=0\r\n' + 'a=x\r\n'.repeat(10);
+const SDP = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8);
 const stub = async (url, init) => {
   calls.push(`${init.method} ${url.replace('https://rtc.live.cloudflare.com/v1', '')} auth=${init.headers.Authorization}`);
   const body = init.body ? JSON.parse(init.body) : {};
@@ -153,4 +153,39 @@ test('a dropped socket parks the call; a new socket resumes it with the token, o
   await wd.waitFor(f => f.type === 'chat_voice_state' && f.channel === vc && f.users.length === 0 && wd.frames.filter(x => x.type === 'chat_voice_state' && x.channel === vc && x.users.length === 0).length >= 2);
   voice._setResumeGraceMs(30000);
   wd.close();
+});
+
+test('channel permissions in a call (PROTOCOL §6.5): a track must be what its m= section is; losing Speak closes the track, losing Connect ends the call', async () => {
+  const reg = async u => { const r = await api(inst.url).post('/api/v1/auth/register', { username: u, password: 'password123' }); return { ...r.body, a: api(inst.url, r.body.session) }; };
+  const erin = await reg('erin');
+  const owner = (await api(inst.url).post('/api/v1/auth/login', { username: 'alice', password: 'password123' })).body;
+  const oa = api(inst.url, owner.session);
+  const sid = (await oa.get('/api/v1/servers')).body.servers[0].sid;
+  const vc = (await oa.get(`/api/v1/servers/${sid}`)).body.channels.find(c => c.type === 'voice').cid, room = 'bf_' + vc;
+  await erin.a.post(`/api/v1/servers/${sid}/join`);
+  const we = await wsClient(inst.url).login(erin.session);
+  we.send({ type: 'chat_rtc_join', nonce: 'e1', room });
+  await we.waitFor(f => f.type === 'chat_rtc_joined' && f.nonce === 'e1');
+  // a camera track on an audio m= section is refused
+  we.send({ type: 'chat_rtc_publish', nonce: 'bad', room, sessionDescription: { type: 'offer', sdp: SDP }, tracks: [{ mid: '0', trackName: 'camera' }] });
+  const bad = await we.waitFor(f => f.nonce === 'bad');
+  assert.deepEqual([bad.error, bad.tracks], ['track_kind_mismatch', ['camera']]);
+  assert.deepEqual([...voice.mediaByMid('v=0\r\nm=audio 9 X 1\r\na=mid:0\r\nm=video 9 X 2\r\na=mid:1\r\n')], [['0', 'audio'], ['1', 'video']]);
+  we.send({ type: 'chat_rtc_publish', nonce: 'ok', room, sessionDescription: { type: 'offer', sdp: SDP }, tracks: [{ mid: '0', trackName: 'audio' }] });
+  await we.waitFor(f => f.type === 'chat_rtc_published' && f.nonce === 'ok');
+  we.send({ type: 'chat_rtc_connected', room });
+  // Speak taken away: the microphone track is closed
+  const ow = `/api/v1/servers/${sid}/channels/${vc}/overwrites/member/${encodeURIComponent(erin.user.id)}`;
+  assert.equal((await oa.put(ow, { deny: ['speak'] })).status, 200);
+  const closed = await we.waitFor(f => f.type === 'chat_rtc_tracks_closed');
+  assert.deepEqual([closed.tracks, closed.reason], [['audio'], 'not_allowed']);
+  // and publishing it again is refused
+  we.send({ type: 'chat_rtc_publish', nonce: 'again', room, sessionDescription: { type: 'offer', sdp: SDP }, tracks: [{ mid: '0', trackName: 'audio' }] });
+  assert.equal((await we.waitFor(f => f.nonce === 'again')).error, 'no_voice_permission');
+  // Connect taken away: out of the call
+  await oa.put(ow, { deny: ['speak', 'connect'] });
+  assert.equal((await we.waitFor(f => f.type === 'chat_rtc_left')).reason, 'not_allowed');
+  await new Promise(r => setTimeout(r, 50));
+  assert.ok(!voice.voiceIn.get(room)?.has(Number(erin.user.id.slice(2))));
+  we.close();
 });

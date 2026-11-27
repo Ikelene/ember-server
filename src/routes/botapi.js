@@ -143,7 +143,7 @@ function register(app) {
     const h = M.history(ctx.ch.cid, bot, { before: req.query.before, after: req.query.after, limit: req.query.limit });
     return h.messages.map(m => B.messageObj(m, ctx.c, ctx.snap)).reverse(); // newest first, like Discord
   });
-  get('/channels/:cid/messages/:mid', (req, bot) => { const ctx = channel(bot, req.params.cid); return B.messageObj(full(ctx, inChannel(ctx, req.params.mid)), ctx.c, ctx.snap); });
+  get('/channels/:cid/messages/:mid', (req, bot) => { const ctx = channel(bot, req.params.cid); if (!ctx.snap.chCan(ctx.ch, bot.id, require('../perms').P.READ_HISTORY)) throw err('missing_access', 403); return B.messageObj(full(ctx, inChannel(ctx, req.params.mid)), ctx.c, ctx.snap); });
   post('/channels/:cid/messages', async (req, bot) => {
     const ctx = channel(bot, req.params.cid);
     let body = req.body || {}, files = [];

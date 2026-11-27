@@ -415,7 +415,7 @@ test('voice: backend selection (own keys > Nookara broker > none), heartbeats, c
   assert.equal((await api(IURL).get('/.well-known/ember')).body.features.voice, true);
   const room = 'bf_' + lounge;
   const wb = await wsClient(IURL).login(bob.session);
-  const SDP = 'v=0\r\n' + 'a=x\r\n'.repeat(10);
+  const SDP = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8);
   wb.send({ type: 'chat_rtc_join', nonce: 'j1', room });
   const joined = await wb.waitFor(f => f.type === 'chat_rtc_joined');
   assert.equal(joined.iceServers[0].urls[0], 'stun:broker.stub:3478');

@@ -12,7 +12,7 @@ const { startServer } = require('../src/index');
 const voice = require('../src/voice');
 
 const dir = tmpDir();
-const SDP = 'v=0\r\n' + 'a=x\r\n'.repeat(10);
+const SDP = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n' + 'a=x\r\n'.repeat(8);
 let n = 0;
 const stub = async url => {
   let out = {};

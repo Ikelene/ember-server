@@ -36,7 +36,7 @@ function entryViews(board, snap, me, rows) {
   const out = [];
   for (const r of rows) {
     const m = byId.get(r.message_id), ch = m && snap.channel(m.channel_id);
-    if (!ch || !snap.canView(ch, me.id)) continue;
+    if (!ch || !snap.chCan(ch, me.id, require('./perms').P.READ_HISTORY)) continue; // (seeing the channel and reading its history, PROTOCOL §6.5)
     out.push({ ...messageView(m, snap), channel_name: ch.name, starred_at: r.starred_at });
   }
   withReactions(out);

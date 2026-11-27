@@ -59,12 +59,15 @@ function unsubscribe(userId, communityId) {
 const dropCommunity = id => subs.delete(id);
 
 // everyone subscribed to the community who may see the event (channel events go only to members who can view that channel)
-function emit(communityId, obj, { except = null, filter = null } = {}) {
+// quiet: a second copy of an event for other viewers (messages.js emitByHistory): no wake-up pings, no bot dispatch again
+function emit(communityId, obj, { except = null, filter = null, quiet = false } = {}) {
   // `__via` (which client a message was sent from) rides along to every member who gets the message; bots get the event without it
-  if (obj.type === 'chat_message') { try { require('./wake').onMessage(communityId, obj.message); } catch (e) { console.error('[gateway] wake', e.message); } }
+  if (obj.type === 'chat_message' && !quiet) { try { require('./wake').onMessage(communityId, obj.message); } catch (e) { console.error('[gateway] wake', e.message); } }
   let via = null;
   if (obj.__via !== undefined) { via = obj.__via; const { __via, ...rest } = obj; obj = rest; }
-  try { require('./bots').dispatch(communityId, obj); } catch (e) { console.error('[gateway] bots', e.message); } // bots get the same events (Discord shape)
+  // permissions or channels changed: voice calls there are checked again (voice.js recheck: Connect / Speak / Video / Stream)
+  if (!quiet && (obj.type === 'chat_perms_changed' || obj.type === 'chat_channels_update')) setImmediate(() => require('./voice').recheck(communityId).catch(e => console.error('[gateway] voice recheck', e.message)));
+  if (!quiet) { try { require('./bots').dispatch(communityId, obj); } catch (e) { console.error('[gateway] bots', e.message); } } // bots get the same events (Discord shape)
   const set = subs.get(communityId);
   if (!set?.size) return;
   const isChannels = obj.type === 'chat_channels_update';
@@ -87,7 +90,7 @@ function emit(communityId, obj, { except = null, filter = null } = {}) {
     if (isChannels) {
       if (!memo.has(uid)) memo.set(uid, snap.isMember(uid) ? new Set(snap.visible(uid).map(x => x.cid)) : new Set());
       const vis = memo.get(uid);
-      send(sock, { ...obj, channels: obj.channels.filter(x => vis.has(x.cid)) });
+      send(sock, { ...obj, channels: obj.channels.filter(x => vis.has(x.cid)).map(x => C().viewForWire(x, snap, uid)) }); // (member overwrites only for who manages them)
       continue;
     }
     if (via && obj.message) { send(sock, { ...obj, message: { ...obj.message, via } }); continue; }
@@ -95,7 +98,13 @@ function emit(communityId, obj, { except = null, filter = null } = {}) {
   }
 }
 const emitWhere = (communityId, obj, pred) => emit(communityId, obj, { filter: pred });
-function pushToUser(userId, obj) { for (const sock of byUser.get(Number(userId)) || []) send(sock, obj); }
+function pushToUser(userId, obj) {
+  for (const sock of byUser.get(Number(userId)) || []) send(sock, obj);
+  if (obj?.type === 'chat_perms_changed' && obj.server) { // (their roles changed: their voice calls there are checked again)
+    const c = db.get('SELECT id FROM communities WHERE sid = ?', String(obj.server));
+    if (c) setImmediate(() => require('./voice').recheck(c.id).catch(e => console.error('[gateway] voice recheck', e.message)));
+  }
+}
 function pushToAdmins(obj) { for (const [uid, set] of byUser) { const u = set.values().next().value?.bf?.user; if (u && auth.isAdmin(u)) for (const sock of set) send(sock, obj); } }
 function broadcastAll(obj) { for (const sock of all) if (authed(sock)) send(sock, obj); }
 

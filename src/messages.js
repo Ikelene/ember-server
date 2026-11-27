@@ -289,7 +289,7 @@ function insertMessage(ctx, f) {
   ch.last_message_id = id;
   if (f.userId && !f.system) db.run('INSERT INTO read_state (user_id, channel_id, last_read_id) VALUES (?, ?, ?) ON CONFLICT(user_id, channel_id) DO UPDATE SET last_read_id = excluded.last_read_id', f.userId, ch.id, id);
   const msg = viewById(id, snap);
-  gateway.emit(c.id, { type: 'chat_message', message: msg, __via: publicVia(f.via) });
+  emitByHistory(c, ch, snap, { type: 'chat_message', message: msg, __via: publicVia(f.via) });
   afterPost(ctx, msg, f);
   return msg;
 }
@@ -451,7 +451,10 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
   if (Number(r.user_id) !== Number(me.id)) throw err('not_allowed', 403);
   const aliasRow = cleanAlias(me, alias);
   const body = text === undefined ? r.body : normBody(text);
-  const nextEmbeds = embeds === undefined ? json(r.embeds, []) : embeds, nextComps = components === undefined ? json(r.components, []) : components;
+  const here = snap.chPerms(ch, me.id); // (the channel permissions of §6.5 hold for edits too)
+  const noEmbeds = !(here & P.EMBED_LINKS);
+  const nextEmbeds = noEmbeds ? [] : embeds === undefined ? json(r.embeds, []) : embeds, nextComps = components === undefined ? json(r.components, []) : components;
+  if (text !== undefined && !(here & P.USE_EXTERNAL_EMOJIS) && externalEmojis(body, c).length) throw err('no_external_emojis', 403, { emojis: externalEmojis(body, c) });
   if (!body.trim() && !r.sticker_id && !r.attachments && !attachments?.length && !nextEmbeds?.length && !nextComps?.length) throw err('empty_message');
   if (text !== undefined) assertLength(c, text);
   if (body !== r.body) mod().beforePost({ ch, c, snap }, me, body, { edit: true });
@@ -461,11 +464,23 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
     body, silent ? r.edited_at : Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null,
     nextEmbeds?.length ? JSON.stringify(nextEmbeds) : null, nextComps?.length ? JSON.stringify(nextComps) : null,
     interaction === undefined ? r.interaction : interaction ? JSON.stringify(interaction) : null, atts.length ? JSON.stringify(atts) : null, r.id);
+  if (noEmbeds) db.run('UPDATE messages SET suppress_embeds = 1 WHERE id = ?', r.id);
   if (aliasRow !== undefined) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', aliasRow?.name ?? null, aliasRow?.avatar ?? null, r.id);
   const msg = viewById(r.id, snap);
-  gateway.emit(c.id, { type: 'chat_message_update', message: msg, __via: parseVia(r.via) });
+  emitByHistory(c, ch, snap, { type: 'chat_message_update', message: msg, __via: parseVia(r.via) });
   runHooks(editHooks, msg, { ch, c, snap });
   return msg;
+}
+// a message event for everyone who can see the channel, as each may see it (PROTOCOL §6.5). Without Read message history:
+// a new message comes without the text of the earlier one it replies to (reply: { id, earlier: true }); an edit or a pin of a
+// message is only chat_message_pinned { server, channel, id, pinned } for a pin, nothing for an edit
+function emitByHistory(c, ch, snap, obj) {
+  if (c.kind === 'dm') return gateway.emit(c.id, obj);
+  const reads = uid => snap.chCan(ch, uid, P.READ_HISTORY);
+  gateway.emit(c.id, obj, { filter: reads });
+  const m = obj.message;
+  if (obj.type === 'chat_message') gateway.emit(c.id, { ...obj, message: { ...m, reply: m.reply ? { id: m.reply.id, earlier: true } : null } }, { filter: uid => !reads(uid), quiet: true });
+  else if (obj.pinned_change) gateway.emit(c.id, { type: 'chat_message_pinned', server: c.sid, channel: ch.cid, id: m.id, pinned: !!m.pinned }, { filter: uid => !reads(uid), quiet: true });
 }
 function deleteMessage(id, me) {
   const { r, ch, c, snap } = messageCtx(id, me);
@@ -551,7 +566,7 @@ function attachVia(rows, snap, me, msgs) {
 const readsHistory = (snap, ch, uid) => snap.chCan(ch, uid, P.READ_HISTORY);
 function history(cid, me, { before, after, limit, kids } = {}) {
   const ctx = C.findChannel(cid, me);
-  if (!readsHistory(ctx.snap, ctx.ch, me.id)) return { channel: C.channelView(ctx.snap, ctx.ch), messages: [], has_more: false, read_history: false };
+  if (!readsHistory(ctx.snap, ctx.ch, me.id)) return { channel: C.viewFor(ctx.snap, ctx.ch, me.id), messages: [], has_more: false, read_history: false };
   limit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
   let where = 'm.channel_id = ?';
   const params = [ctx.ch.id];
@@ -559,7 +574,7 @@ function history(cid, me, { before, after, limit, kids } = {}) {
   if (after && /^\d{1,15}$/.test(String(after))) { where += ' AND m.id > ?'; params.push(Number(after)); }
   const rows = db.all(`${SELECT_MSG} WHERE ${where} ORDER BY m.id ${after ? 'ASC' : 'DESC'} LIMIT ?`, ...params, limit);
   if (!after) rows.reverse();
-  return { channel: C.channelView(ctx.snap, ctx.ch), messages: onlyWraps(attachVia(rows, ctx.snap, me, withReactions(rows.map(r => messageView(r, ctx.snap)))), kids), has_more: rows.length === limit };
+  return { channel: C.viewFor(ctx.snap, ctx.ch, me.id), messages: onlyWraps(attachVia(rows, ctx.snap, me, withReactions(rows.map(r => messageView(r, ctx.snap)))), kids), has_more: rows.length === limit };
 }
 const likeEsc = s => s.replace(/[\\%_]/g, x => '\\' + x);
 function search(cid, me, q) {
@@ -612,7 +627,7 @@ function pinMessage(id, me, on) {
   else return;
   const author = r.user_id ? auth.userById(r.user_id) : null;
   audit().record(c, me, on ? 'message_pin' : 'message_unpin', { target: { kind: 'message', id: r.id, name: author?.username || r.author_name || null }, details: { channel: ch.name } });
-  gateway.emit(c.id, { type: 'chat_message_update', message: viewById(r.id, snap) });
+  { const ev = { type: 'chat_message_update', message: viewById(r.id, snap) }; Object.defineProperty(ev, 'pinned_change', { value: true }); emitByHistory(c, ch, snap, ev); }
   gateway.emit(c.id, { type: 'chat_pins_update', server: c.sid, channel: ch.cid });
   if (on) systemMessage({ ch, c, snap }, `@${me.username} pinned a message to this channel.`, { sysKind: 'pin', replyTo: r.id, subjectId: me.id, subjectParts: [null, ' pinned a message to this channel.'] });
 }

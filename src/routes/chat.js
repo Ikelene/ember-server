@@ -104,6 +104,7 @@ function register(app) {
   app.post(v1('/servers/:sid/channels'), req => ({ channel: C.createChannel(req.params.sid, req.user, req.body) }));
   app.patch(v1('/channels/:cid'), req => ({ channel: C.updateChannel(req.params.cid, req.user, req.body) }));
   app.delete(v1('/channels/:cid'), req => { C.deleteChannel(req.params.cid, req.user); });
+  app.put(v1('/servers/:sid/categories/:name'), req => C.renameCategoryRoute(req.params.sid, req.user, req.params.name, req.body)); // (its overwrites and channels go along)
   app.put(v1('/channels/:cid/perms'), req => ({ channel: C.setChannelPerms(req.params.cid, req.user, req.body?.overwrites) }));
   app.post(v1('/channels/:cid/icon'), async req => {
     C.findChannel(req.params.cid, req.user);

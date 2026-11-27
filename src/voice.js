@@ -122,6 +122,39 @@ function park(sock) {
   p.parkTimer = setTimeout(() => { if (p.parked) drop(p); }, RESUME_GRACE_MS);
   p.parkTimer.unref?.();
 }
+// the media of each m= section of an SDP by its mid: Map(mid -> 'audio' | 'video' | ...)
+const TRACK_MEDIA = { audio: 'audio', screen_audio: 'audio', camera: 'video', screen: 'video' };
+function mediaByMid(sdp) {
+  const out = new Map();
+  let kind = null;
+  for (const line of String(sdp || '').split(/\r?\n/)) {
+    if (line.startsWith('m=')) kind = line.slice(2).split(' ')[0];
+    else if (line.startsWith('a=mid:') && kind) out.set(line.slice(6).trim(), kind);
+  }
+  return out;
+}
+// permissions changed in a community (PROTOCOL §6.5): everyone in its voice channels is checked again. No Connect any more: out
+// of the call (chat_rtc_left { room, reason: "not_allowed" }); a track they may no longer send (Speak / Video / Stream) is
+// closed (chat_rtc_tracks_closed { room, tracks })
+const TRACK_BIT = () => ({ audio: P.SPEAK, camera: P.VIDEO, screen: P.STREAM, screen_audio: P.STREAM });
+async function recheck(communityId) {
+  const snap = C.snapById(communityId);
+  if (!snap) return;
+  for (const [room, people] of [...rtcRooms]) {
+    const ch = voiceChannelOf(room);
+    if (!ch || ch.community_id !== communityId) continue;
+    for (const p of [...people.values()]) {
+      if (p.virtual || !p.userId) continue;
+      if (!snap.chCan(ch, p.userId, P.CONNECT)) { gw().send(p.sock, { type: 'chat_rtc_left', room, reason: 'not_allowed' }); drop(p); continue; }
+      const bits = TRACK_BIT(), off = (p.tracks || []).filter(t => bits[t.trackName] && !snap.chCan(ch, p.userId, bits[t.trackName]));
+      if (!off.length) continue;
+      try { await backendOf(p).closeTracks(p.publish, off.map(t => t.mid)); } catch (e) { console.error('[voice] close tracks', e.message); }
+      p.tracks = p.tracks.filter(t => !off.includes(t));
+      gw().send(p.sock, { type: 'chat_rtc_tracks_closed', room, tracks: off.map(t => t.trackName), reason: 'not_allowed' });
+      if (p.connected) rtcBroadcast(room);
+    }
+  }
+}
 function leave(sock) {
   const p = rtcBySocket.get(sock);
   if (!p) return;
@@ -222,6 +255,10 @@ async function handle(sock, me, msg, reply) {
       const tracks = msg.tracks.slice(0, 4).map(t => ({ location: 'local', mid: clean(t?.mid, 32), trackName: clean(t?.trackName, 40) }))
         .filter(t => t.mid && /^(audio|camera|screen|screen_audio)$/.test(t.trackName) && !names.has(t.trackName) && names.add(t.trackName));
       if (!tracks.length) throw err('no_tracks', 400);
+      // each track is what its name says: the SDP's m= section for its mid is audio for audio / screen_audio, video for camera / screen
+      { const kinds = mediaByMid(msg.sessionDescription.sdp);
+        const wrong = tracks.filter(t => kinds.get(t.mid) !== TRACK_MEDIA[t.trackName]).map(t => t.trackName);
+        if (wrong.length) throw err('track_kind_mismatch', 400, { tracks: wrong }); }
       // what this member may send in this channel: Speak (microphone), Video (camera), Stream (screen and its sound)
       { const ch = voiceChannelOf(p.room), snap = ch && C.snapById(ch.community_id);
         const need = { audio: P.SPEAK, camera: P.VIDEO, screen: P.STREAM, screen_audio: P.STREAM };
@@ -348,4 +385,4 @@ const watchRooms = fn => { roomWatchers.add(fn); return () => roomWatchers.delet
 const roomOf = sock => rtcBySocket.get(sock)?.room || null;
 const socketsIn = room => [...(rtcRooms.get(room)?.keys() || [])];
 
-module.exports = { handle, leave, park, endCalls, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf, virtualJoin, setVirtualPresence, realPeopleIn, watchRooms };
+module.exports = { recheck, mediaByMid, handle, leave, park, endCalls, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf, virtualJoin, setVirtualPresence, realPeopleIn, watchRooms };

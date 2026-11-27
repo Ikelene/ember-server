@@ -209,9 +209,9 @@ test('categories: a channel following its category gets its overwrites; editing 
   assert.equal((await post(ben, a.cid, 'x')).status, 200);
   assert.equal((await owner.a.get(CAT('Nope'))).body.error, 'category_not_found');
   // a category that goes takes its overwrites along
-  await owner.a.patch(`/api/v1/servers/${sid}/layout`, { categories: ['Text channels', 'Voice channels', 'Extra'] });
+  await owner.a.put(`/api/v1/servers/${sid}/layout`, { categories: ['Text channels', 'Voice channels', 'Extra'] });
   await owner.a.put(CAT('Extra', '/role/everyone'), { deny: ['add_reactions'] });
-  await owner.a.patch(`/api/v1/servers/${sid}/layout`, { categories: ['Text channels', 'Voice channels'] });
+  await owner.a.put(`/api/v1/servers/${sid}/layout`, { categories: ['Text channels', 'Voice channels'] });
   assert.equal(db.get("SELECT COUNT(*) AS n FROM perm_overwrites WHERE category = 'Extra'").n, 0);
 });
 
@@ -263,6 +263,151 @@ test('export / import keep them; an export from before them is upgraded', async 
   const imp2 = await (await fetch(`${base}/api/v1/import`, { method: 'POST', headers: { Authorization: 'Bearer ' + owner.session }, body: f2 })).json();
   const k2 = (await owner.a.get(`/api/v1/servers/${imp2.sid}`)).body.channels.find(x => x.name === 'kept');
   assert.deepEqual(k2.permission_overwrites.map(o => o.type).sort(), ['member', 'role']);
+});
+
+// ---------- the review of f320d50 (each a regression test) ----------
+const seesIt = async (who, cid) => (await who.a.get(`/api/v1/servers/${sid}`)).body.channels.some(c => c.cid === cid);
+const layoutNow = async () => (await owner.a.get(`/api/v1/servers/${sid}`)).body;
+
+test('review 1: renaming or removing a category never makes its hidden channels visible', async () => {
+  const sec = await newChannel('secret', { category: 'Staff' });
+  await owner.a.put(CAT('Staff', '/role/everyone'), { deny: ['view_channel'] });
+  assert.equal(await seesIt(amy, sec.cid), false);
+  // a rename in the layout (the same place, a new name): the overwrites go along, the channel still follows them
+  let lay = await layoutNow();
+  let r = await owner.a.put(`/api/v1/servers/${sid}/layout`, { categories: lay.categories.map(c => (c === 'Staff' ? 'Staff team' : c)), channels: lay.channels.map(c => ({ cid: c.cid, category: c.category === 'Staff' ? 'Staff team' : c.category })) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await seesIt(amy, sec.cid), false, 'still hidden after the rename');
+  assert.equal((await owner.a.get(OW(sec.cid))).body.perms_synced, true);
+  // the rename route
+  r = await owner.a.put(`/api/v1/servers/${sid}/categories/${encodeURIComponent('Staff team')}`, { name: 'Crew' });
+  assert.ok(r.body.categories.includes('Crew') && !r.body.categories.includes('Staff team'));
+  assert.equal(await seesIt(amy, sec.cid), false, 'still hidden after the rename route');
+  // removed: the channel moves to a neighbour with no such overwrites, keeps its own copy and stays hidden
+  lay = await layoutNow();
+  r = await owner.a.put(`/api/v1/servers/${sid}/layout`, { categories: lay.categories.filter(c => c !== 'Crew') });
+  assert.equal(r.status, 200);
+  assert.equal(await seesIt(amy, sec.cid), false, 'still hidden after its category went');
+  const now = (await owner.a.get(OW(sec.cid))).body;
+  assert.deepEqual([now.perms_synced, now.overwrites.map(o => [o.id, o.deny_names])], [false, [[everyoneRid, ['view_channel']]]]);
+  // moving a following channel to another category (PATCH) keeps what it had too
+  const moved = await newChannel('moved', { category: 'Voice channels' });
+  await owner.a.put(CAT('Voice channels', '/role/everyone'), { deny: ['view_channel'] });
+  assert.equal(await seesIt(amy, moved.cid), false);
+  await owner.a.patch(`/api/v1/channels/${moved.cid}`, { category: 'Text channels' });
+  assert.equal(await seesIt(amy, moved.cid), false, 'still hidden after the move');
+  await owner.a.del(CAT('Voice channels', '/role/everyone'));
+});
+
+test('review 2: following the category again is checked like an edit (no dropping denies you could not set)', async () => {
+  const chan = await newChannel('priv2', { category: 'Text channels' });
+  await owner.a.put(OW(chan.cid, '/role/everyone'), { deny: ['view_channel', 'send_messages'] });
+  const rid = (await owner.a.post(`/api/v1/servers/${sid}/roles`, { name: 'Chan', permissions: ['manage_channels'] })).body.role.rid;
+  await owner.a.put(`/api/v1/servers/${sid}/members/${encodeURIComponent(ben.user.id)}/roles/${rid}`);
+  let r = await ben.a.post(OW(chan.cid, '/sync'));
+  assert.deepEqual([r.status, r.body.error], [403, 'cannot_grant']);
+  assert.equal(await seesIt(amy, chan.cid), false, 'still private');
+  r = await ben.a.put(OW(chan.cid, '/role/everyone'), { deny: [] });
+  assert.equal(r.body.error, 'cannot_grant');
+  await owner.a.del(`/api/v1/servers/${sid}/members/${encodeURIComponent(ben.user.id)}/roles/${rid}`);
+});
+
+test('review 3: a bot is told about voice in the channels it can see only', () => {
+  const C = require('../src/communities'), V = require('../src/voice'), BV = require('../src/bot-voice');
+  const c = db.get('SELECT * FROM communities WHERE sid = ?', sid), snap = C.snapOf(c);
+  const vc = snap.channels.find(x => x.cid === voice), amyId = db.get('SELECT id FROM users WHERE principal = ?', amy.user.id).id;
+  V.voiceIn.set('bf_' + voice, new Map([[1, { id: owner.user.id, username: 'owner', muted: false, deafened: false }]]));
+  try {
+    db.run("INSERT OR REPLACE INTO perm_overwrites (community_id, channel_id, target_type, target_id, allow, deny) VALUES (?, ?, 'member', ?, 0, ?)", c.id, vc.id, amyId, P.VIEW);
+    const s2 = C.snapOf(db.get('SELECT * FROM communities WHERE sid = ?', sid));
+    assert.equal(BV.voiceStates(c, s2, () => 1, amyId).length, 0);
+    assert.equal(BV.voiceStates(c, s2, () => 1, null).length, 1);
+  } finally { V.voiceIn.delete('bf_' + voice); db.run("DELETE FROM perm_overwrites WHERE channel_id = ? AND target_type = 'member' AND target_id = ?", vc.id, amyId); }
+});
+
+test('review 4 + 5: an edit cannot add embeds without Embed links, nor other servers\' emojis without Use external emojis', async () => {
+  const M = require('../src/messages'), auth = require('../src/auth');
+  const chan = await newChannel('edits');
+  const m = (await post(amy, chan.cid, 'plain')).body.message;
+  await owner.a.put(OW(chan.cid, `/member/${encodeURIComponent(amy.user.id)}`), { deny: ['embed_links', 'use_external_emojis'] });
+  const me = auth.userByPrincipal(amy.user.id);
+  const out = await M.editMessage(m.id, me, 'plain still', { embeds: [{ title: 'sneaky', url: 'https://example.org' }] });
+  assert.deepEqual([out.embeds, out.suppress_embeds], [undefined, true]);
+  await assert.rejects(M.editMessage(m.id, me, 'now <:party:eOTHER9999>'), e => e.code === 'no_external_emojis');
+});
+
+test('review 6: without Read message history: no single-message fetch for bots, no starboard entries, a pin is only a flag, a reply has no preview', async () => {
+  const chan = await newChannel('history');
+  const first = (await post(owner, chan.cid, 'the earlier one')).body.message;
+  await owner.a.put(OW(chan.cid, `/member/${encodeURIComponent(amy.user.id)}`), { deny: ['read_message_history'] });
+  const wa = await wsClient(base).login(amy.session), wb = await wsClient(base).login(ben.session);
+  // a reply: amy gets it without the text of the earlier message; ben with it
+  await post(owner, chan.cid, 'answer', { reply_to: first.id });
+  const a = await wa.waitFor(f => f.type === 'chat_message' && f.message.body === 'answer');
+  const b = await wb.waitFor(f => f.type === 'chat_message' && f.message.body === 'answer');
+  assert.deepEqual(a.message.reply, { id: first.id, earlier: true });
+  assert.equal(b.message.reply.body, 'the earlier one');
+  // a pin: amy gets only the flag
+  await owner.a.put(`/api/v1/messages/${first.id}/pin`);
+  const pinned = await wa.waitFor(f => f.type === 'chat_message_pinned');
+  assert.deepEqual(pinned, { type: 'chat_message_pinned', server: sid, channel: chan.cid, id: first.id, pinned: true });
+  await wb.waitFor(f => f.type === 'chat_message_update' && f.message.id === first.id && f.message.pinned);
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(!wa.frames.some(f => f.type === 'chat_message_update' && f.message?.id === first.id));
+  wa.close(); wb.close();
+  // starboard: amy does not get entries from a channel whose history she may not read
+  const board = await newChannel('stars', { type: 'starboard', config: { min: 1, watch: [chan.cid] } });
+  for (const who of [owner, ben]) await who.a.put(`/api/v1/messages/${first.id}/reactions/${encodeURIComponent('⭐')}`);
+  const forBen = (await ben.a.get(`/api/v1/channels/${board.cid}/starboard`)).body, forAmy = (await amy.a.get(`/api/v1/channels/${board.cid}/starboard`)).body;
+  assert.ok(forBen.recent.some(x => x.id === first.id), JSON.stringify(forBen).slice(0, 200));
+  assert.ok(!forAmy.recent.some(x => x.id === first.id));
+});
+
+test('review 8: manage_channel in one channel lets someone edit and delete that channel; a channel deny takes it from a manager', async () => {
+  const chan = await newChannel('managed');
+  assert.equal((await amy.a.patch(`/api/v1/channels/${chan.cid}`, { topic: 'x' })).status, 403);
+  await owner.a.put(OW(chan.cid, `/member/${encodeURIComponent(amy.user.id)}`), { allow: ['manage_channel'] });
+  assert.equal((await amy.a.patch(`/api/v1/channels/${chan.cid}`, { topic: 'mine now' })).body.channel.topic, 'mine now');
+  const rid = (await owner.a.post(`/api/v1/servers/${sid}/roles`, { name: 'Chan2', permissions: ['manage_channels'] })).body.role.rid;
+  await owner.a.put(`/api/v1/servers/${sid}/members/${encodeURIComponent(ben.user.id)}/roles/${rid}`);
+  await owner.a.put(OW(chan.cid, `/member/${encodeURIComponent(ben.user.id)}`), { deny: ['manage_channel'] });
+  assert.equal((await ben.a.patch(`/api/v1/channels/${chan.cid}`, { topic: 'no' })).status, 403);
+  assert.equal((await ben.a.del(`/api/v1/channels/${chan.cid}`)).status, 403);
+  assert.equal((await amy.a.del(`/api/v1/channels/${chan.cid}`)).status, 200);
+  await owner.a.del(`/api/v1/servers/${sid}/members/${encodeURIComponent(ben.user.id)}/roles/${rid}`);
+});
+
+test('review 9: an overwrite on the owner can be removed; a whole list sent back names unchanged entries above you freely', async () => {
+  const chan = await newChannel('owner-ow');
+  const c = db.get('SELECT * FROM communities WHERE sid = ?', sid), ch = db.get('SELECT * FROM channels WHERE cid = ?', chan.cid);
+  const ownerId = db.get('SELECT id FROM users WHERE principal = ?', owner.user.id).id;
+  db.run("INSERT INTO perm_overwrites (community_id, channel_id, target_type, target_id, allow, deny) VALUES (?, ?, 'member', ?, 0, ?)", c.id, ch.id, ownerId, P.SEND);
+  db.run('UPDATE channels SET perms_synced = 0 WHERE id = ?', ch.id);
+  assert.equal((await owner.a.del(OW(chan.cid, `/member/${encodeURIComponent(owner.user.id)}`))).status, 200);
+  // the moderator sends back the list with the (higher) Mods role's overwrite unchanged and one change of their own
+  await owner.a.put(OW(chan.cid, `/role/${modRid}`), { allow: ['attach_files'] });
+  const list = (await mod.a.get(OW(chan.cid))).body.overwrites.map(o => ({ type: o.type, id: o.id, allow: o.allow, deny: o.deny }));
+  const r = await mod.a.put(OW(chan.cid), { overwrites: [...list, { type: 'role', id: 'everyone', deny: ['add_reactions'] }] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  // and the old route (PUT /perms) works with it there too
+  assert.equal((await owner.a.put(`/api/v1/channels/${chan.cid}/perms`, { overwrites: [] })).status, 200);
+});
+
+test('review 10: member overwrites (and whole categories) only for the people who manage them', async () => {
+  const chan = await newChannel('quiet', { category: 'Text channels' });
+  await owner.a.put(OW(chan.cid, `/member/${encodeURIComponent(ben.user.id)}`), { deny: ['add_reactions'] });
+  await owner.a.put(OW(chan.cid, '/role/everyone'), { deny: ['embed_links'] });
+  const forAmy = (await amy.a.get(`/api/v1/servers/${sid}`)).body.channels.find(c => c.cid === chan.cid);
+  assert.deepEqual(forAmy.permission_overwrites.map(o => o.type), ['role']);
+  assert.deepEqual((await amy.a.get(OW(chan.cid))).body.overwrites.map(o => o.type), ['role']);
+  const forOwner = (await owner.a.get(`/api/v1/servers/${sid}`)).body.channels.find(c => c.cid === chan.cid);
+  assert.deepEqual(forOwner.permission_overwrites.map(o => o.type).sort(), ['member', 'role']);
+  // a category with no channel you can see: not there for you
+  await owner.a.put(`/api/v1/servers/${sid}/layout`, { categories: [...(await layoutNow()).categories, 'Locked'] });
+  const locked = await newChannel('locked-in', { category: 'Locked' });
+  await owner.a.put(OW(locked.cid, '/role/everyone'), { deny: ['view_channel'] });
+  assert.equal((await amy.a.get(CAT('Locked'))).body.error, 'category_not_found');
+  assert.equal((await owner.a.get(CAT('Locked'))).status, 200);
 });
 
 test('the v36 migration: the old see / send / attach settings become role overwrites, @everyone gets the new bits', async () => {

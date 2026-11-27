@@ -200,6 +200,12 @@ function channelView(snap, ch) {
     permission_overwrites: require('./overwrites').listOf(snap, snap.owFor(ch)), perms_synced: !!ch.perms_synced,
   };
 }
+// a channel as one member sees it: the member overwrites (whose principals they name) only for people who may edit the channel's
+// permissions; role and @everyone ones for everyone who can see it (PROTOCOL §6.5)
+const managesPerms = (snap, ch, uid) => snap.isOwner(uid) || snap.perms(uid) === ALL_PERMS || (snap.canView(ch, uid) && !!(snap.chPerms(ch, uid) & (P.MANAGE_ROLES | P.MANAGE_CHANNELS)));
+const forViewer = (v, snap, ch, uid) => (managesPerms(snap, ch, uid) ? v : { ...v, permission_overwrites: (v.permission_overwrites || []).filter(o => o.type !== 'member') });
+const viewFor = (snap, ch, uid) => forViewer(channelView(snap, ch), snap, ch, uid);
+const viewForWire = (v, snap, uid) => { const ch = snap.channels.find(x => x.cid === v.cid); return ch ? forViewer(v, snap, ch, uid) : v; }; // (a channel view already made, e.g. in chat_channels_update)
 function memberView(snap, u) {
   const isOwner = snap.isOwner(u.id);
   const ids = snap.roleIds(u.id);
@@ -289,7 +295,7 @@ function serverDetail(sid, me) {
     roles: snap.roles.map(roleView),
     voice: require('./voice').stateOf(list), // (who is in the voice channels you can see, never the hidden ones)
     channels: list.map(ch => ({
-      ...channelView(snap, ch), unread: Number(ch.last_message_id) > (read.get(ch.id) ?? Number(ch.last_message_id)),
+      ...viewFor(snap, ch, me.id), unread: Number(ch.last_message_id) > (read.get(ch.id) ?? Number(ch.last_message_id)),
       last_read_id: String(read.get(ch.id) ?? ch.last_message_id ?? 0), mentions: pings.get(ch.id) || 0, unread_count: counts.get(ch.id) || 0, can_post: snap.canPost(ch, me.id),
     })),
   };
@@ -760,11 +766,11 @@ function createChannel(sid, me, body = {}) {
   channelsChanged(c);
   audit(c, me, 'channel_create', { target: { kind: 'channel', id: row.cid, name: row.name }, details: { type } });
   const s2 = snapOf(c);
-  return channelView(s2, s2.channel(row.id));
+  return viewFor(s2, s2.channel(row.id), me.id);
 }
 function updateChannel(cid, me, body = {}) {
   const { ch, c, snap } = findChannel(cid, me);
-  if (!snap.can(me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403);
+  if (!snap.chCan(ch, me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403); // (manage_channel in this channel, PROTOCOL §6.5)
   const set = {};
   if (body.icon !== undefined) set.icon = channelIcon(body.icon);
   if (body.name !== undefined) { set.name = channelName(body.name); if (!set.name) throw err('name_required'); }
@@ -781,16 +787,17 @@ function updateChannel(cid, me, body = {}) {
   if (type === 'voice') set.locked = 0;
   if (body.position !== undefined && Number.isFinite(Number(body.position))) set.position = Math.trunc(Number(body.position));
   if (Object.keys(set).length) {
+    if (set.category !== undefined && set.category !== ch.category) keepOwnOverwrites(c, ch); // (moving never changes who sees it)
     db.run(`UPDATE channels SET ${Object.keys(set).map(k => k + ' = ?').join(', ')} WHERE id = ?`, ...Object.values(set), ch.id);
     channelsChanged(c);
     audit(c, me, 'channel_update', { target: { kind: 'channel', id: ch.cid, name: set.name || ch.name }, details: { changed: Object.keys(set), ...(set.name && set.name !== ch.name ? { old_name: ch.name } : {}) } });
   }
   const s2 = snapOf(c);
-  return channelView(s2, s2.channel(ch.id));
+  return viewFor(s2, s2.channel(ch.id), me.id);
 }
 function deleteChannel(cid, me) {
   const { ch, c, snap } = findChannel(cid, me);
-  if (!snap.can(me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403);
+  if (!snap.chCan(ch, me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403);
   if (snap.channels.length <= 1) throw err('last_channel');
   db.run('DELETE FROM channels WHERE id = ?', ch.id);
   channelsChanged(c);
@@ -806,40 +813,76 @@ function setChannelPerms(cid, me, list) {
     .map(x => ({ type: 'role', id: String(x.rid), allow: (Number(x?.allow) || 0) & CHANNEL_BITS, deny: (Number(x?.deny) || 0) & CHANNEL_BITS }));
   require('./overwrites').replaceAll(c.sid, me, { cid: ch.cid }, [...roles, ...keep]);
   const s2 = snapOf(c);
-  return channelView(s2, s2.channel(ch.id));
+  return viewFor(s2, s2.channel(ch.id), me.id);
+}
+// A channel that follows its category's overwrites and is about to land in another category (moved, or its category removed):
+// it keeps the overwrites it has now as its own and stops following, so moving it never changes who sees it (PROTOCOL §6.5).
+// Following the new category again is an explicit sync (overwrites.js, with its checks)
+function keepOwnOverwrites(c, ch) {
+  if (!ch.perms_synced) return;
+  db.run('DELETE FROM perm_overwrites WHERE channel_id = ?', ch.id);
+  for (const o of db.all('SELECT * FROM perm_overwrites WHERE community_id = ? AND category = ?', c.id, ch.category || '')) {
+    db.run('INSERT INTO perm_overwrites (community_id, channel_id, target_type, target_id, allow, deny) VALUES (?, ?, ?, ?, ?, ?)', c.id, ch.id, o.target_type, o.target_id, o.allow, o.deny);
+  }
+  db.run('UPDATE channels SET perms_synced = 0 WHERE id = ?', ch.id);
+}
+// a category's new name: its overwrites and its channels go along (they keep following it)
+function renameCategory(c, from, to) {
+  db.run('UPDATE perm_overwrites SET category = ? WHERE community_id = ? AND category = ?', to, c.id, from);
+  db.run('UPDATE channels SET category = ? WHERE community_id = ? AND category = ?', to, c.id, from);
 }
 // the sidebar layout: category order + which category each channel is in and its place (Manage channels)
+// body: { categories: [name...], channels?: [{ cid, category }], renames?: { old: new } }. A name in the same place as one that
+// is gone counts as a rename of it (its overwrites go along). Channels you may not manage (manage_channel there) stay put.
 function setLayout(sid, me, body = {}) {
   const { c, snap } = memberCommunity(sid, me);
   if (!snap.can(me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403);
   const old = categoriesOf(c);
   const cats = [...new Set((Array.isArray(body.categories) ? body.categories : old).map(x => clean(x, 40)).filter(Boolean))].slice(0, 30);
   if (!cats.length && snap.channels.length) throw err('need_a_category');
+  const renames = new Map();
+  if (body.renames && typeof body.renames === 'object') for (const [a, b] of Object.entries(body.renames)) { const x = clean(a, 40), y = clean(b, 40); if (old.includes(x) && cats.includes(y) && !old.includes(y)) renames.set(x, y); }
+  old.forEach((name, i) => { if (!renames.has(name) && !cats.includes(name) && cats[i] && !old.includes(cats[i]) && ![...renames.values()].includes(cats[i])) renames.set(name, cats[i]); });
   const home = cat => { // a deleted category's channels move to the one above it (else the next one)
+    if (renames.has(cat)) return renames.get(cat);
     if (cats.includes(cat)) return cat;
     const i = old.indexOf(cat);
     for (let j = i - 1; j >= 0; j--) if (cats.includes(old[j])) return old[j];
     for (let j = i + 1; j < old.length; j++) if (cats.includes(old[j])) return old[j];
     return cats[0];
   };
+  const mayMove = ch => snap.chCan(ch, me.id, P.MANAGE_CHANNELS);
   db.tx(() => {
+    for (const [a, b] of renames) renameCategory(c, a, b);
     setCategories(c, cats);
+    const now = () => db.all('SELECT * FROM channels WHERE community_id = ?', c.id);
     if (Array.isArray(body.channels)) {
       let pos = 0;
       for (const x of body.channels.slice(0, LIMITS.channels)) {
-        const ch = snap.channels.find(k => k.cid === String(x?.cid || ''));
+        const ch = now().find(k => k.cid === String(x?.cid || ''));
         if (!ch) continue;
-        const wanted = clean(x.category, 40);
-        db.run('UPDATE channels SET category = ?, position = ? WHERE id = ?', cats.includes(wanted) ? wanted : home(ch.category), pos++, ch.id);
+        if (!mayMove(snap.channel(ch.id))) { pos++; continue; }
+        const wanted = clean(x.category, 40), to = cats.includes(wanted) ? wanted : home(ch.category);
+        if (to !== ch.category) keepOwnOverwrites(c, ch);
+        db.run('UPDATE channels SET category = ?, position = ? WHERE id = ?', to, pos++, ch.id);
       }
     }
-    for (const ch of db.all('SELECT * FROM channels WHERE community_id = ?', c.id)) if (!cats.includes(ch.category)) db.run('UPDATE channels SET category = ? WHERE id = ?', home(ch.category), ch.id);
+    for (const ch of now()) if (!cats.includes(ch.category)) { keepOwnOverwrites(c, ch); db.run('UPDATE channels SET category = ? WHERE id = ?', home(ch.category), ch.id); }
     for (const o of db.all('SELECT DISTINCT category FROM perm_overwrites WHERE community_id = ? AND category IS NOT NULL', c.id)) if (!cats.includes(o.category)) db.run('DELETE FROM perm_overwrites WHERE community_id = ? AND category = ?', c.id, o.category);
   });
   channelsChanged(c);
-  audit(c, me, 'channel_layout', { details: { categories: cats } });
+  audit(c, me, 'channel_layout', { details: { categories: cats, ...(renames.size ? { renamed: Object.fromEntries(renames) } : {}) } });
   const s2 = snapOf(c);
-  return { categories: cats, channels: s2.channels.map(ch => channelView(s2, ch)) };
+  return { categories: cats, channels: s2.channels.map(ch => viewFor(s2, ch, me.id)) };
+}
+// PUT /api/v1/servers/:sid/categories/:name { name }: rename one (its overwrites and channels go along)
+function renameCategoryRoute(sid, me, from, body = {}) {
+  const { c } = memberCommunity(sid, me);
+  const old = categoriesOf(c), name = decodeURIComponent(String(from || '')), to = clean(body.name, 40);
+  if (!old.includes(name)) throw err('category_not_found', 404);
+  if (!to) throw err('category_required');
+  if (old.includes(to) && to !== name) throw err('category_taken', 409);
+  return setLayout(sid, me, { categories: old.map(x => (x === name ? to : x)), renames: { [name]: to } });
 }
 
 // ---------- roles (Manage roles; you can only touch roles below your own highest one) ----------
@@ -1172,7 +1215,7 @@ module.exports = { linkInfo,
   effectiveUploadMax, roleView, serverView, channelView, memberView, setNick, readState, mentionCounts, myServers, serverDetail,
   createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, discoveryView, listedCommunities, communityCount, pickCommunity, resolveAddress, addressOf, assertMayCreate,
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
-  channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,
+  channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, renameCategoryRoute, keepOwnOverwrites, viewFor, viewForWire, channelsChanged, onChannelsChanged, setCategories,
   createRole, updateRole, deleteRole, orderRoles, setMemberRole, setRoleIcon,
   listEmojis, allEmojis, createEmoji, renameEmoji, deleteEmoji, emojiView, listStickers, allStickers, createSticker, renameSticker, deleteSticker, stickerView, emojiInfo, shopView, shopRole, welcomeMessage, cleanConfig, cleanTemplates: templateList,
   identities, getSettings, setSettings, SETTING_DEFAULTS, notifyList, setNotify, instanceOrigin,
