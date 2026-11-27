@@ -539,8 +539,18 @@ test('a group DM: the owner adds someone, who gets what is sent from then on; a 
   assert.equal((await beaWs.waitFor(f => f.type === 'social_dm_rewrapped')).count, 1);
   const stored = JSON.parse(db.get('SELECT enc FROM messages WHERE id = ?', Number(m1.id)).enc);
   assert.ok(stored.wraps[K.bea.kid] && stored.wraps[oldBea.kid]);
-  // twice: nothing more; and bo, who joined after m1, cannot be given it
-  assert.deepEqual((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bea.enc_pub, K.bea.kid) } })).body, { added: 0, skipped: [m1.id] });
+  // whoever added a wrap may replace it; bo, who neither sent m2 nor is bea, cannot put one in for her (nobody can poison
+  // a wrap that blocks her from reading it), and a message whose envelope has no wraps is skipped, not a crash
+  assert.deepEqual((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bea.enc_pub, K.bea.kid) } })).body, { added: 1, skipped: [] });
+  const junk = nke1.wrap(crypto.randomBytes(32), K.bea.enc_pub, K.bea.kid);
+  assert.deepEqual((await bo.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m2.id]: junk, [m1.id]: junk } })).body, { added: 0, skipped: [m1.id, m2.id] });
+  assert.deepEqual((await bo.a.get(`/api/v2/social/dms/${enc(dm)}/rewrap?member=${enc(BEA)}&kid=${enc(K.bea.kid)}`)).body.messages, []);
+  assert.ok(!JSON.parse(db.get('SELECT enc FROM messages WHERE id = ?', Number(m2.id)).enc).wraps[K.bea.kid]);
+  // bea herself may (another of her clients can still open what it had)
+  assert.deepEqual((await bea.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m2.id]: junk } })).body, { added: 1, skipped: [] });
+  db.run('UPDATE messages SET enc = ? WHERE id = ?', JSON.stringify({ v: 2 }), Number(m2.id));
+  assert.deepEqual((await bea.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m2.id]: junk } })).body, { added: 0, skipped: [m2.id] });
+  // bo, who joined after m1, cannot be given it
   r = await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BO, kid: K.bo.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bo.enc_pub, K.bo.kid) } });
   assert.deepEqual(r.body, { added: 0, skipped: [m1.id] });
   assert.deepEqual((await bob.a.get(`/api/v2/social/dms/${enc(dm)}/rewrap?member=${enc(BO)}&kid=${enc(K.bo.kid)}`)).body.messages, []);

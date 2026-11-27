@@ -235,11 +235,12 @@ async function addMembers(me, rawId, body = {}) {
   return { dm: view(db.get('SELECT * FROM communities WHERE id = ?', c.id), me) };
 }
 
-// ---------- wrapping messages again (PROTOCOL §4d.5) ----------
-// A member whose keys changed (a lost account key, a new client) cannot open what was sealed to the old ones. Any member who
-// can open a message may add a wrap of its key for them: only for the keys their key document lists now, only for messages
-// sent while they were a member, and only where that key has no wrap yet. The host cannot check a wrap (it cannot open it);
-// the receiving client checks the key commitment as for any message.
+// ---------- wrapping messages again (PROTOCOL §4d.3) ----------
+// A member whose keys changed (a lost account key, a new client) cannot open what was sealed to the old ones. A wrap for a
+// message may be added by whoever sent it (they made its key) or by the member it is for (from another client that can
+// still open it), only for the keys the member's key document lists now, only for messages sent while they were a member.
+// A wrap the sender put in the message is never replaced; one added here may be replaced only by whoever added it
+// (dm_rewraps). The host cannot check a wrap (it cannot open it); the member's client checks the key commitment.
 const MAX_REWRAP = 500;
 async function rewrapTarget(c, memberRaw) {
   const p = people.parseId(String(memberRaw || '')), u = p?.local ? p.user : p ? auth.userByPrincipal(p.id) : null;
@@ -249,14 +250,24 @@ async function rewrapTarget(c, memberRaw) {
   const joined = db.get('SELECT joined_at FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id).joined_at;
   return { u, kids, joined };
 }
-// GET /api/v2/social/dms/:id/rewrap?member=<id>&kid=<kid>: the sealed messages since they joined that have no wrap for that key
+const wrapsOf = m => { try { const e = m?.enc ? JSON.parse(m.enc) : null; return e && e.wraps && typeof e.wraps === 'object' && !Array.isArray(e.wraps) ? e : null; } catch { return null; } };
+// may `me` add (or replace) the wrap for `kid` on message m, for member t? -> 'add' | 'replace' | null
+function mayWrap(me, t, m, enc, kid) {
+  if (!enc || m.created_at < t.joined) return null;
+  if (Number(m.user_id) !== Number(me.id) && Number(t.u.id) !== Number(me.id)) return null; // its sender, or the member it is for
+  if (!enc.wraps[kid]) return Object.keys(enc.wraps).length < require('./e2ee').MAX_WRAPS ? 'add' : null;
+  const by = db.get('SELECT author_id FROM dm_rewraps WHERE message_id = ? AND kid = ?', m.id, kid)?.author_id;
+  return by != null && Number(by) === Number(me.id) ? 'replace' : null;
+}
+// GET /api/v2/social/dms/:id/rewrap?member=<id>&kid=<kid>: the sealed messages since they joined that have no wrap for that
+// key and that the caller may wrap (the ones they sent; all of them for the member themselves)
 async function rewrapWanted(me, rawId, q = {}) {
   const c = hosted(rawId, me), t = await rewrapTarget(c, q.member);
   const kid = String(q.kid || '');
   if (!t.kids.has(kid)) throw err('unknown_kid', 400);
   const ch = channelOf(c);
-  const ids = db.all('SELECT id, enc FROM messages WHERE channel_id = ? AND enc IS NOT NULL AND created_at >= ? ORDER BY id', ch.id, t.joined)
-    .filter(m => { try { return !JSON.parse(m.enc).wraps?.[kid]; } catch { return false; } }).map(m => String(m.id));
+  const ids = db.all('SELECT id, user_id, enc, created_at FROM messages WHERE channel_id = ? AND enc IS NOT NULL AND created_at >= ? ORDER BY id', ch.id, t.joined)
+    .filter(m => { const e = wrapsOf(m); return e && !e.wraps[kid] && mayWrap(me, t, m, e, kid) === 'add'; }).map(m => String(m.id));
   return { member: people.fullId(t.u), kid, messages: ids.slice(0, MAX_REWRAP), more: ids.length > MAX_REWRAP };
 }
 // POST /api/v2/social/dms/:id/rewrap { member, kid, wraps: { "<message id>": { e, i, w } } } -> { added, skipped }
@@ -266,18 +277,19 @@ async function rewrap(me, rawId, body = {}) {
   if (!t.kids.has(kid)) throw err('unknown_kid', 400);
   const wraps = body.wraps && typeof body.wraps === 'object' && !Array.isArray(body.wraps) ? body.wraps : null;
   if (!wraps || !Object.keys(wraps).length || Object.keys(wraps).length > MAX_REWRAP) throw err('invalid_wraps', 400, { max: MAX_REWRAP });
-  const E = require('./e2ee'), ch = channelOf(c), str = (v, n) => typeof v === 'string' && v.length > 0 && v.length <= n && /^[A-Za-z0-9_-]+$/.test(v);
+  const ch = channelOf(c), str = (v, n) => typeof v === 'string' && v.length > 0 && v.length <= n && /^[A-Za-z0-9_-]+$/.test(v);
   let added = 0;
   const skipped = [];
   db.tx(() => {
     for (const [id, w] of Object.entries(wraps)) {
       if (!w || typeof w !== 'object' || !str(w.e, 128) || !str(w.i, 24) || !str(w.w, 128)) throw err('invalid_wraps', 400, { message: id });
-      const m = /^\d{1,19}$/.test(id) ? db.get('SELECT id, enc, created_at FROM messages WHERE id = ? AND channel_id = ?', Number(id), ch.id) : null;
-      let enc = null; try { enc = m?.enc ? JSON.parse(m.enc) : null; } catch { enc = null; }
-      // not here, not sealed, sent before they joined, already wrapped for that key, or full
-      if (!enc || m.created_at < t.joined || enc.wraps?.[kid] || Object.keys(enc.wraps || {}).length >= E.MAX_WRAPS) { skipped.push(id); continue; }
+      const m = /^\d{1,19}$/.test(id) ? db.get('SELECT id, user_id, enc, created_at FROM messages WHERE id = ? AND channel_id = ?', Number(id), ch.id) : null;
+      const enc = wrapsOf(m);
+      // not here, not sealed, sent before they joined, not theirs to wrap, already wrapped for that key by someone else, or full
+      if (!m || !mayWrap(me, t, m, enc, kid)) { skipped.push(id); continue; }
       enc.wraps[kid] = { e: w.e, i: w.i, w: w.w };
       db.run('UPDATE messages SET enc = ? WHERE id = ?', JSON.stringify(enc), m.id);
+      db.run('INSERT INTO dm_rewraps (message_id, kid, author_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(message_id, kid) DO UPDATE SET created_at = excluded.created_at', m.id, kid, me.id, now());
       added++;
     }
   });

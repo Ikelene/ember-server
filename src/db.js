@@ -395,6 +395,11 @@ const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS voice_usage (
     community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE, period TEXT NOT NULL, ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (community_id, period)
   );`,
+  // v34: who added a wrap to a sealed DM message after it was sent (social/dms.js rewrap): only they may replace it
+  `CREATE TABLE IF NOT EXISTS dm_rewraps (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE, kid TEXT NOT NULL, author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL, PRIMARY KEY (message_id, kid)
+  );`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
