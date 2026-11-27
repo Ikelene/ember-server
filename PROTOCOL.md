@@ -766,6 +766,8 @@ The settings live in `DATA_DIR/config.json`, a file you can edit by hand. The in
 
 ---
 
+**Moving a server here.** `POST /api/v2/homeserver/import?owner=<principal>&slug=<slug>&previous_url=<origin>` (instance admins; multipart `file`: a `bonfire-export-v1` zip, up to 1 GB) imports a server for its owner: `owner` is the principal of an account here, or `v:<Nookara id>` while Nookara accounts are this homeserver's (`accounts.nookara_identity`; a placeholder account until they first sign in; `400 nookara_accounts_off` otherwise). `slug` is the address it keeps (`400 invalid_slug`, `409 slug_taken { slug }`; left out: the export's own, else one from the name). `previous_url`, the origin the server had (a Nookara-hosted `https://e-<slug>.nookara.cc`), joins discovery's `previous_urls` (after the homeserver's own earlier addresses; at most 1000 kept), so signatures made for it still check out (`400 invalid_previous_url`). -> `{ sid, slug, address, owner }`. `404 owner_not_found`, `400 no_file`. Nookara's `scripts/migrate-hosted.js` moves its hosted servers into its homeserver with it.
+
 ### 5b. Backups
 
 Available on every instance (self-hosted, Starter and Plus). Authentication uses an **instance session**, never a Nookara token. Backups are portable `bonfire-export-v1` ZIPs (section 9), saved in `DATA_DIR/backups/<id>.zip` with a SQLite index. A backup belongs to **one server**; `max_backups` (default 10, configurable 1-50 through instance settings) is kept per server, the oldest removed first. The routes take the server as `?sid=` or body `sid` (§5a: optional while there is one server, `400 sid_required` with several). Lowering the setting through PATCH prunes immediately.
