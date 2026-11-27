@@ -61,8 +61,9 @@ async function add(me, body = {}) {
   if (cur === 'blocked') throw err('user_blocked', 409);
   if (cur === 'blocked_by') throw err('blocked', 403);
   if (cur === 'incoming') return accept(me, peer);
-  if (cur === 'outgoing') return { status: 'pending', friend: target };
-  if (db.get('SELECT COUNT(*) AS n FROM friends WHERE user_id = ?', me.id).n >= MAX_FRIENDS) throw err('too_many_friends', 409, { limit: MAX_FRIENDS });
+  // asked before: asked again (the other side may have turned it down, or never got it), at most as often as a new request
+  if (cur === 'outgoing' && p.local) return { status: 'pending', friend: target };
+  if (!cur && db.get('SELECT COUNT(*) AS n FROM friends WHERE user_id = ?', me.id).n >= MAX_FRIENDS) throw err('too_many_friends', 409, { limit: MAX_FRIENDS });
   if (!requestLimit.hit(me.id)) throw err('rate_limited', 429);
   const message = clean(body.message, 200);
   if (p.local) {
@@ -140,7 +141,10 @@ function register(app) {
     limits.hit(hs.domain, 'friend_requests');
     const cur = row(to.id, from)?.state;
     if (cur === 'blocked') throw err('blocked', 403);
-    if (cur === 'friend') return { status: 'friends' };
+    // a request from someone this account counts as a friend: their side has lost the friendship (they removed it and the
+    // removal never got here), so this side's is stale. It becomes a request again, to be accepted; never a friendship
+    // nobody here agreed to
+    if (cur === 'friend') { put(to.id, from, 'incoming', clean(req.body.message, 200)); return { status: 'pending' }; }
     if (cur === 'outgoing') { put(to.id, from, 'friend'); return { status: 'friends' }; } // both asked: they are friends
     if (!cur && db.get('SELECT COUNT(*) AS n FROM friends WHERE user_id = ?', to.id).n >= MAX_FRIENDS) throw err('too_many_friends', 409);
     put(to.id, from, 'incoming', clean(req.body.message, 200));

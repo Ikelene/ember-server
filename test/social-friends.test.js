@@ -213,6 +213,27 @@ test('unfriending and blocking reach the other homeserver', async () => {
   assert.deepEqual(ids((await friends(alice)).friends), [BOB]);
 });
 
+test('a request after a lost removal or a turned-down one waits to be accepted; the sender sees it as outgoing', async () => {
+  // alice's homeserver lost the friendship (a removal that never got to B): her new request is a request, not a friendship
+  await A.call('sql', { query: 'DELETE FROM friends' });
+  let r = await alice.a.post('/api/v2/social/friends', { handle: 'bob@b.example' });
+  assert.equal(r.body.status, 'pending');
+  assert.deepEqual([ids((await friends(alice)).outgoing), ids((await friends(alice)).friends)], [[BOB], []]);
+  assert.deepEqual([ids((await friends(bob)).incoming), ids((await friends(bob)).friends).includes(ALICE)], [[ALICE], false]);
+  // bob turns it down, alice asks again: a request again, still not friends
+  assert.equal((await bob.a.del(`/api/v2/social/friends/${enc(ALICE)}`)).status, 200);
+  await settle();
+  assert.deepEqual(ids((await friends(alice)).outgoing), []);
+  r = await alice.a.post('/api/v2/social/friends', { handle: 'bob@b.example' });
+  assert.equal(r.body.status, 'pending');
+  assert.deepEqual([ids((await friends(alice)).outgoing), ids((await friends(bob)).incoming), ids((await friends(bob)).friends).includes(ALICE)], [[BOB], [ALICE], false]);
+  // asking once more while it waits sends it again (bob's homeserver keeps one request)
+  assert.equal((await alice.a.post('/api/v2/social/friends', { handle: 'bob@b.example' })).body.status, 'pending');
+  assert.deepEqual(ids((await friends(bob)).incoming), [ALICE]);
+  assert.equal((await bob.a.post(`/api/v2/social/friends/${enc(ALICE)}/accept`)).body.status, 'friends');
+  assert.deepEqual(ids((await friends(alice)).friends), [BOB]);
+});
+
 // ---------- keys ----------
 // (the home API that publishes them: social-e2ee.test.js)
 test('the key document of an account goes between homeservers unchanged', async () => {
