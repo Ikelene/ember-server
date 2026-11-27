@@ -42,8 +42,8 @@ async function senderOf(raw) {
   }
   const u = auth.userByPrincipal(w.id);
   if (!auth.hostedHere(u)) throw err('user_not_found', 404);
-  // a Nookara account: Nookara's own report API takes it (config social.api_url says where Nookara is)
-  if (where.apiElsewhere(u)) { const api = where.urls().api_url; throw err('report_elsewhere', 409, { url: new URL(api).origin + NOOKARA_REPORT_PATH, api_url: api }); }
+  // a Nookara account: Nookara's own report API takes it (config social.reports_url, else that path where social.api_url is)
+  if (where.apiElsewhere(u)) { const api = where.urls().api_url; throw err('report_elsewhere', 409, { url: config.get().social.reports_url || new URL(api).origin + NOOKARA_REPORT_PATH, api_url: api }); }
   return u;
 }
 

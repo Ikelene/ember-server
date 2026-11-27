@@ -49,6 +49,7 @@ function cleanRemote(doc, id) {
     }
   }
   if (doc.clients_sig != null && !E.SIG_RE.test(String(doc.clients_sig))) return null;
+  if (c?.list.length && doc.clients_sig == null) return null; // a list nobody signed
   if (doc.clients_seq != null && !int(doc.clients_seq)) return null;
   if (doc.past != null && (!Array.isArray(doc.past) || doc.past.length > E.MAX_PAST || doc.past.some(p => !p || !E.KID_RE.test(String(p.kid || '')) || !E.isPub(p.sig_pub)))) return null;
   const { stale, ...rest } = doc; // (only ever said by the one serving an old copy)

@@ -146,7 +146,7 @@ function sanitize(p, loose = false) {
   if (p.social !== undefined) { // PROTOCOL §4c: where the social API of this homeserver's Nookara accounts is (nookara_identity); null = here
     const v = p.social, o = {};
     if (v && typeof v === 'object' && !Array.isArray(v)) {
-      for (const k of ['api_url', 's2s_url']) {
+      for (const k of ['api_url', 's2s_url', 'reports_url']) { // (reports_url: where DM messages of those accounts are reported, PROTOCOL §4d.4)
         if (v[k] === undefined) continue;
         if (v[k] === null || v[k] === '') { o[k] = null; continue; }
         const u = socialUrl(v[k]);
@@ -194,7 +194,7 @@ function get() {
   // the accounts settings (PROTOCOL §4a); accounts_mode and registration are what older clients read, derived from them
   v.accounts = AS.complete(data.accounts || {});
   v.federation = FS.complete(data.federation);
-  v.social = { api_url: data.social?.api_url || null, s2s_url: data.social?.s2s_url || null };
+  v.social = { api_url: data.social?.api_url || null, s2s_url: data.social?.s2s_url || null, reports_url: data.social?.reports_url || null };
   if (forced && AS.modeOf(v.accounts) !== forced) v.accounts = AS.withMode(v.accounts, forced, v.nookara_url);
   v.accounts_mode = AS.modeOf(v.accounts);
   v.registration = AS.legacyRegistration(v.accounts);

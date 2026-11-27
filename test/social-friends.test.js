@@ -280,7 +280,7 @@ test('a document shaped like Nookara\'s passes through as it is; a broken one is
     { ...doc, clients: { seq: 7, list: [{ ...signed.doc.list[0], label: 'x'.repeat(121) }] } },
     { ...doc, clients: { seq: 7, list: Array(201).fill(signed.doc.list[0]) } },
     { ...doc, clients: { seq: -1, list: [] } },
-    { ...doc, clients_sig: 'short' },
+    { ...doc, clients_sig: 'short' }, { ...doc, clients_sig: null },
     { ...doc, past: Array(21).fill(doc.past[0]) },
     { ...doc, past: [{ kid: before.kid }] },
   ];

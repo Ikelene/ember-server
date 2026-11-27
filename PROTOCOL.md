@@ -374,6 +374,8 @@ All fetches follow the rules of `src/safe-http.js`: https, public addresses only
 
 ### 4c. Friends, DMs, profiles and keys (s2s)
 
+(DMs are end-to-end encrypted: §4d.)
+
 Accounts of different homeservers can be friends, talk in DMs, read each other's profiles and find each other's public keys. Nothing here is special to this server: any implementation that serves the routes below with these shapes interoperates (Nookara serves `nookara.cc` accounts this way).
 
 The rules everything follows:
@@ -385,8 +387,8 @@ The rules everything follows:
   "social": { "api_url": "https://a.example/api/v2", "s2s_url": "https://a.example/_ember/s2s/v1" }
   ```
   `api_url` is the base of the client routes below (`<api_url>/social/...`, `<api_url>/users/lookup`), `s2s_url` the base of the server-to-server routes (`<s2s_url>/friend_request`, ...). Both default to those paths on the homeserver's own origin when `social` is missing; each must be `https` (http with `EMBER_DEV=1`) without credentials, query or fragment.
-- **Nookara accounts elsewhere.** While `accounts.nookara_identity` is on (§4a), config `social: { "api_url": …, "s2s_url": … }` (each `null` = this homeserver, the default; `400 invalid_social`) is what discovery says, and it applies to the `v:` accounts: for `nookara.cc` it names Nookara, which keeps their friends, blocks, keys, DM privacy and DM list and answers s2s for them. Then, for a `v:` account:
-  - this homeserver's friends, blocks and keys routes, and profiles / keys of accounts elsewhere, answer `409 social_elsewhere { api_url }` (local `l:` accounts still use this homeserver). Reading the profile or keys of an account of this homeserver still works;
+- **Nookara accounts elsewhere.** While `accounts.nookara_identity` is on (§4a), config `social: { "api_url": …, "s2s_url": … }` (each `null` = this homeserver, the default; `400 invalid_social`; a third key, `reports_url`, says where DM messages of those accounts are reported, §4d.4) is what discovery says, and it applies to the `v:` accounts: for `nookara.cc` it names Nookara, which keeps their friends, blocks, keys, DM privacy and DM list and answers s2s for them. Then, for a `v:` account:
+  - this homeserver's friends, blocks and keys routes (the home API of §4d.2 included), and profiles / keys of accounts elsewhere, answer `409 social_elsewhere { api_url }` (local `l:` accounts still use this homeserver). Reading the profile or keys of an account of this homeserver still works;
   - DMs still work here: `GET/POST /api/v2/social/dms*` are served, a DM a `v:` account starts is hosted here, and every `v:` member's pointer and activity (`dm_pointer`, `dm_activity`, the starter's own pointer included) are sent to `social.s2s_url` with `to` = `v:<id>@<domain>`, signed by this homeserver like any s2s request (`keyId="<domain>#<kid>"`, line 3 the host of `social.s2s_url`; the receiver checks it against this homeserver's JWKS). Adding another `v:` member is asked there (`dm_pointer` `added`, its answer counts), not decided here;
   - an s2s request arriving here with `to` (or a path id) `v:<id>@<domain>` is answered `421 misdirected { s2s_url }` (after the signature checks).
 
@@ -438,9 +440,9 @@ All under `<s2s_url>`; all `POST` unless marked.
 | `block` | `{ from, to }` | `{ ok: true }`: the same as `friend_remove`, and `to`'s homeserver may refuse `to`'s later requests to `from` itself (`403 blocked`) |
 | `unblock` | `{ from, to }` | `{ ok: true }` |
 | `dm_pointer` | `{ dm, to, kind, from? }`, see 4c.4 | `{ ok: true }`. `403 dm_not_allowed`, `403 dm_host_mismatch`, `410 pointer_gone`, `409 too_many_dms` |
-| `dm_activity` | `{ dm, to, last_message_id, count?, mention?, preview?, sender?, name? }`, see 4c.4 | `{ ok: true }`. `410 pointer_gone`, `403 dm_host_mismatch` |
+| `dm_activity` | `{ dm, to, last_message_id, count?, mention?, sender?, name? }`, see 4c.4 | `{ ok: true }`. `410 pointer_gone`, `403 dm_host_mismatch` |
 | `GET profile/<id>` | - | the profile, see 4c.5. `404 user_not_found` |
-| `GET keys/<id>` | - | `{ id, keys: [...] }`, see 4c.6. `404 user_not_found` |
+| `GET keys/<id>` | - | the account's key document (`{ id, keys: [] }` when it has none), see 4c.6. `404 user_not_found` |
 | `presence` | `{ from, status }` (`online`, `idle`, `dnd`, `offline`) | `{ ok: true }`. Optional: sent when an account connects or leaves, to the homeservers its friends are on; the receiver tells `from`'s friends' connected clients and stores nothing |
 
 `<id>` in a path is the URL-encoded stable id.
@@ -474,7 +476,8 @@ Gateway (§7), to the account's own connections: `{ type: "social_friends_update
   "group": false, "name": null, "owner": null,       // a group has a name (or null) and an owner (stable id)
   "sid": "d0a1b2c3d4e", "channel": "c5f6a7b8c9d",   // on the host: the DM's community and its one text channel
   "members": [ { "id": "l:2@b.example", "handle": "bob@b.example", "display_name": "bob", "avatar_url": null }, ... ],
-  "created_at": 1764200000000, "updated_at": 1764200100000, "last_message_id": "41", "unread": 0, "mention": false }
+  "created_at": 1764200000000, "updated_at": 1764200100000, "last_message_id": "41", "unread": 0, "mention": false,
+  "e2ee": true }                          // every DM is end-to-end encrypted (§4d)
 ```
 
 **Client API** (`<api_url>/social`):
@@ -491,14 +494,14 @@ Gateway (§7), to the account's own connections: `{ type: "social_friends_update
 
 `PATCH`, `DELETE .../members` and `leave` act on the host: asked of a homeserver that only has the pointer they answer `400 not_hosted_here { host_origin }`, except `leave`, which drops the pointer there (`{ ok: true, hosted_here: false, host_origin }`); the host then learns it from its next `dm_activity` (`410 pointer_gone`) and removes the member.
 
-**Using a DM.** On the host a DM is a hidden community of kind `dm` with one text channel (`channel`): messages, history, edits, reactions, typing, read state, uploads (`/api/v1/media/upload?sid=<sid>&cid=<channel>`) and the gateway events are those of §6-§7 on that channel id, and members get every message as a notification (`chat_mention`, and push with `kind: "dm"`, §20). A member from another homeserver gets a session on the host with a cross-homeserver token (§4b: `remote-token` with `audience` = `host_origin`, then `POST <host_origin>/api/v2/auth/remote`) and uses the same routes there. A DM is **not** a server: it is in no server list (`/servers`, `/discover`, discovery, the landing page, the directory, the admin's list of servers, backups and exports), it has no slug, address, invites, join policy, roles, extra channels, bots, bridges, webhooks, settings, audit log or reports, and every route that names a server by `sid` answers `404 server_not_found` for it. Its members can post, attach, react, edit and delete their own messages; the only moderation is leave, remove (the group's owner) and rename.
+**Using a DM.** Every DM is end-to-end encrypted: its messages are sealed envelopes and its files are sealed too (§4d says what the host takes and refuses). On the host a DM is a hidden community of kind `dm` with one text channel (`channel`): messages, history, edits, reactions, typing, read state, uploads (`/api/v1/media/upload?sid=<sid>&cid=<channel>`) and the gateway events are those of §6-§7 on that channel id, and members get every message as a notification (`chat_mention`, and push with `kind: "dm"`, §20). A member from another homeserver gets a session on the host with a cross-homeserver token (§4b: `remote-token` with `audience` = `host_origin`, then `POST <host_origin>/api/v2/auth/remote`) and uses the same routes there. A DM is **not** a server: it is in no server list (`/servers`, `/discover`, discovery, the landing page, the directory, the admin's list of servers, backups and exports), it has no slug, address, invites, join policy, roles, extra channels, bots, bridges, webhooks, settings, audit log or reports, and every route that names a server by `sid` answers `404 server_not_found` for it. Its members can post, attach, react, edit and delete their own messages; the only moderation is leave, remove (the group's owner) and rename.
 
 **What the host sends** to the homeserver of each member that lives elsewhere:
 
 `dm_pointer` `{ dm, to, kind, from? }`:
 ```jsonc
 { "dm": { "id": "d0a1b2c3d4e@b.example", "host": "b.example", "name": null, "group": false, "owner": null, "sid": "d0a1b2c3d4e", "channel": "c5f6a7b8c9d",
-          "members": [ { "id", "handle", "display_name", "avatar_url" }, ... ], "created_at": 1764200000000 },
+          "members": [ { "id", "handle", "display_name", "avatar_url" }, ... ], "created_at": 1764200000000, "e2ee": true },
   "to": "l:5@a.example", "kind": "added", "from": "l:2@b.example" }
 ```
 - `dm.host` must be the signing homeserver and `dm.id` must end in `@<that domain>` (`403 dm_host_mismatch`): only the host speaks for a DM. `host_origin` is never taken from the body: it is the signer's origin as found by discovery.
@@ -506,11 +509,11 @@ Gateway (§7), to the account's own connections: `{ type: "social_friends_update
 - `kind: "renamed"`: the name or the members changed; the pointer is updated. `410 pointer_gone` when `to` has none.
 - `kind: "removed"`: `to` is no longer in it (left on the host, removed, or the DM is gone); the pointer is deleted. Only `dm.id` and `dm.host` are needed.
 
-`dm_activity` `{ dm: "<dm id>", to, last_message_id, count?, mention?, preview?, sender?: { id, display_name }, name? }`: new messages. The host coalesces what is said within a second into one call per member; `count` is how many messages it stands for (default 1), `mention` whether one of them pinged or replied to `to`, `preview` the plain text of the last one (up to 300 characters; a host leaves it out for content it cannot read). The receiver sets the pointer's `last_message_id`, adds `count` to `unread`, ORs `mention`, tells `to`'s connected clients and pushes to `to`'s pushers when none is connected (`kind: "dm"`, §20). `410 pointer_gone` when `to` has no pointer: for a group the host takes that as "left" and removes the member.
+`dm_activity` `{ dm: "<dm id>", to, last_message_id, count?, mention?, sender?: { id, display_name }, name? }`: new messages. The host coalesces what is said within a second into one call per member; `count` is how many messages it stands for (default 1), `mention` whether one of them pinged or replied to `to` (a host cannot tell for sealed messages and sends `false`). There is no `preview`: messages are sealed (§4d), and a receiver ignores one that is sent anyway. The receiver sets the pointer's `last_message_id`, adds `count` to `unread`, ORs `mention`, tells `to`'s connected clients and pushes to `to`'s pushers when none is connected (`kind: "dm"`, §20). `410 pointer_gone` when `to` has no pointer: for a group the host takes that as "left" and removes the member.
 
 Table (member's side) `dm_pointers (user_id, dm_id, host_domain, host_origin, name, members_json, last_message_id, unread, mention, extra_json, updated_at)`, at most 500 per account. Host side: `communities.kind = 'dm'` (`join_policy` `'dm'` for two people, `'group'` for a group).
 
-Gateway, to the account's own connections on whichever homeserver sent it: `{ type: "social_dm_update", dm }` (new or changed), `{ type: "social_dm_remove", id }`, and on the member's homeserver `{ type: "social_dm_activity", dm, mention, sender?, preview? }`.
+Gateway, to the account's own connections on whichever homeserver sent it: `{ type: "social_dm_update", dm }` (new or changed), `{ type: "social_dm_remove", id }`, and on the member's homeserver `{ type: "social_dm_activity", dm, mention, sender? }`.
 
 #### 4c.5 Profiles
 
@@ -527,22 +530,31 @@ Client: `GET /api/v2/social/profile/<id>` -> `{ profile }` in the same shape. An
 
 #### 4c.6 Keys
 
-A homeserver stores and publishes **public** keys only; encryption and signing happen in clients. An account has one **account key** (`kind: "account"`, `alg: "ed25519"`) and up to 20 **device keys** (`kind: "device"`, `alg: "ed25519"` or `"x25519"`).
+A homeserver stores and publishes **public** keys only; encryption and signing happen in clients (§4d). Every account has at most one **key document**, in the format `nke1` (the one Nookara's end-to-end encrypted DMs use): one P-256 account key with a signing half and an encryption half, the account's signed list of linked clients, and the public halves of account keys it replaced.
 
 ```jsonc
 { "id": "l:5@a.example",
-  "keys": [ { "kid": "acct-2", "kind": "account", "alg": "ed25519", "public_key": "<base64url, 32 bytes>", "created_at": 1764200000000, "signed_by": "acct-1", "sig": "<base64url>" },
-            { "kid": "phone",  "kind": "device",  "alg": "x25519",  "public_key": "...", "created_at": ..., "signed_by": "acct-2", "sig": "..." } ] }
+  "format": "nke1",
+  "owner": "l:5@a.example",            // the exact string this account's signed texts are made over
+  "keys": [ { "kid": "<22 chars>", "kind": "account", "alg": "p256", "public_key": "<signing key, 87 chars>", "enc_public_key": "<encryption key, 87 chars>", "created_at": 1764200000000 } ],
+  "clients": { "seq": 3, "list": [ { "kid", "enc_pub", "sig_pub", "label", "app", "added_at", "revoked_at" } ] },   // as the account signed it, revoked entries included
+  "clients_sig": "<86 chars>" | null,
+  "clients_seq": 3,                    // = clients.seq
+  "past": [ { "kid", "sig_pub" } ],    // replaced account keys, public half, up to 20: their old signatures can still be checked
+  "stale": true }                      // only when served from an old copy
 ```
-- `kid`: 1-64 of `A-Za-z0-9._:-`, unique within the account. `public_key`: the raw 32-byte key, base64url without padding.
-- `sig` is Ed25519 by the key `signed_by`, over six lines joined by `\n`: `ember-key-v1`, the account's stable id, `kid`, `kind`, `alg`, `public_key`.
-- The chain: the **first** account key an account publishes has no signature. From then on a different account key is only accepted with `signed_by` = the kid of the account key it replaces and a valid `sig` by that key; every device key must have `signed_by` = the account key of the same set and a valid `sig` by it. The signatures are stored and published, so a client that remembers an account key can check every later change itself.
+
+- An account that has no keys yet: `{ "id": ..., "keys": [] }`. An unknown account: `404 user_not_found`.
+- Keys are raw uncompressed P-256 points (65 bytes, first byte `0x04`), base64url without padding (87 characters). `kid` = the first 22 characters of `base64url(SHA-256(encryption key))`. Signatures are ECDSA P-256 / SHA-256 in the 64-byte `r‖s` form, base64url (86 characters).
+- `keys` holds exactly one `account` entry. `device` entries (`signed_by` = the account's kid) may be listed for older readers, but **`clients` is what counts**: a linked client is an entry of `clients.list` whose `revoked_at` is `0`.
+- `owner` is the full stable id, except for Nookara accounts, whose signatures use the bare number (`"5"` for `v:5@nookara.cc`). A reader **must** check `owner === id` or `id === "v:" + owner + "@" + <domain of id>` and refuse anything else.
+- `clients_sig` is by the account's signing key over `nke1 clients|<owner>|<account kid>|<seq>|<entries>`, an entry being `kid,enc_pub,sig_pub,encodeURIComponent(label),app,added_at,revoked_at` and entries joined by `;`. On this homeserver `app` is limited to `A-Za-z0-9._:-` (it is not escaped).
+- **A homeserver passing on another's document changes nothing in it.** It checks the shape only (`id` is the one asked for; `owner` as above; one account key; `alg: "p256"`; keys of 87 characters that decode to a point; kids of 22 characters; `label` and `app` up to 120 characters; at most 200 list entries, 20 `past` entries, 21 keys; `clients_sig` 86 characters) and passes every field through as it came, in its order, fields it does not know included. It never checks or rewrites a signature: that is the reader's job. A document that fails the check is refused whole (`502 homeserver_unreachable { reason: "bad_keys" }`, or the last good copy with `stale: true`); one without `format: "nke1"` counts as `keys: []`.
+- What a reader (a client) checks before sealing to a document: `owner` as above; each `kid` matches its encryption key; `clients_sig` when the list is not empty. It remembers the account key per stable id (trust on first use), refuses a lower `seq` for the same key, and tells the person when the key changes. There is no signed chain from one account key to the next: a replaced key shows as a key change.
 
 Client:
-- `PUT /api/v2/social/keys { keys: [ { kid, kind, alg, public_key, signed_by?, sig? } ] }` -> `{ id, keys }`: the whole set, replacing the last one (keys left out are removed; an unchanged account key may be sent without its signature and keeps its place in the chain). Exactly one account key (`400 account_key_required`); `400 invalid_keys`; `403 key_signature_required { kid?, signed_by }` (a changed account key or a device key without the signature it needs); `403 bad_key_signature { kid }`.
-- `GET /api/v2/social/keys/<id>` -> `{ id, keys }`: an account here, or another homeserver's through `GET <s2s_url>/keys/<id>`, kept for 10 minutes (`stale: true` as for profiles). An account that has published nothing has `keys: []`.
-
-Table `account_keys (user_id, kid, kind, alg, public_key, created_at, signed_by, sig)`.
+- `GET /api/v2/social/keys/<id>[?fresh=1]` -> the document: an account here, or another homeserver's through `GET <s2s_url>/keys/<id>`, kept for 10 minutes (`stale: true` as for profiles). `?fresh=1` asks the other homeserver again (10 a minute per account asked about; beyond that the kept copy is served): for a sender told `stale_keys` (§4d.3) or looking at a signature by a key it does not know.
+- The keys themselves are made and changed through the home API of §4d.2. `PUT /api/v2/social/keys` (an Ed25519 / X25519 key chain no client ever used) is retired: `410 use_e2ee_api`. Table `account_keys` is left unused.
 
 #### 4c.7 What another implementation needs
 
@@ -550,11 +562,125 @@ To take part, a homeserver (for a domain `d`) serves:
 1. `https://d/.well-known/ember` with `homeserver: { domain: d }` (or one delegation), `jwks_uri` on its own origin, `federation` (§4b) and, when its social API is not at the default paths, `social: { api_url, s2s_url }`;
 2. its JWKS (Ed25519 keys with `kid`), and signs every s2s request as in 4c.1;
 3. `GET <api_url>/users/lookup?handle=`;
-4. under `<s2s_url>`: `friend_request`, `friend_accept`, `friend_remove`, `block`, `unblock`, `dm_pointer`, `dm_activity`, `GET profile/<id>`, `GET keys/<id>` (and `presence` if it wants it), verifying each request as in 4c.1 and answering unknown calls with 404;
-5. to host DMs for members elsewhere: cross-homeserver sign-in (§4b, `POST <origin>/api/v2/auth/remote`) and, for those sessions, the message routes and gateway of §6-§7 on the DM's `channel`, plus `GET <api_url>/social/dms` (so a member's client finds `sid` and `channel`) and the `leave` / `rename` / `remove` routes; and it sends `dm_pointer` / `dm_activity` as in 4c.4;
-6. to let its accounts join DMs hosted elsewhere: `remote-token` (§4b) and pointers kept from `dm_pointer` / `dm_activity`.
+4. under `<s2s_url>`: `GET keys/<id>` answering the key document of 4c.6 and passing other homeservers' documents on unchanged; `friend_request`, `friend_accept`, `friend_remove`, `block`, `unblock`, `dm_pointer`, `dm_activity`, `GET profile/<id>`, `GET keys/<id>` (and `presence` if it wants it), verifying each request as in 4c.1 and answering unknown calls with 404;
+5. to host DMs for members elsewhere: cross-homeserver sign-in (§4b, `POST <origin>/api/v2/auth/remote`) and, for those sessions, the message routes and gateway of §6-§7 on the DM's `channel`, plus `GET <api_url>/social/dms` (so a member's client finds `sid` and `channel`) and the `leave` / `rename` / `remove` routes; it sends `dm_pointer` / `dm_activity` as in 4c.4; and it follows the host rules of §4d.3 (sealed envelopes only, nothing readable stored or sent on);
+6. to let its accounts join DMs hosted elsewhere: `remote-token` (§4b), pointers kept from `dm_pointer` / `dm_activity`, the home API of §4d.2 for their keys, and `POST <api_url>/social/reports` (§4d.4).
 
 A homeserver that only wants friends, profiles and keys can answer `dm_pointer` with `403 dm_not_allowed` and never host a DM.
+
+### 4d. End-to-end encrypted DMs
+
+Every DM (§4c.4) is end-to-end encrypted, from its first message: the host stores sealed envelopes and can read none of them, and there is no unencrypted DM. The crypto is Nookara's `nke1` (P-256 ECDH + ECDSA, AES-256-GCM, HKDF-SHA256, HMAC-SHA256), done entirely in clients. A homeserver has two separate parts in it:
+
+- the **home** of an account keeps its public keys (the key document, §4c.6) and the account's private keys **locked**: two blobs only the account's own secret opens (4d.2);
+- the **host** of a DM stores and relays envelopes (4d.3).
+
+Neither can read a message. What a homeserver does see: who is in a DM, when messages are sent and how big they are, which message a message replies to, reactions, pins, read state, typing; public keys, the locked blobs with their salts, and who links which device.
+
+Base64 below is always base64url without padding.
+
+#### 4d.1 The sealed message
+
+One fresh key per message, wrapped once for every key that may read it. No ratchet and no forward secrecy.
+
+```json
+{ "v": 2, "ct": "…", "iv": "…", "commit": "…", "sig": "…", "signer": "<kid>", "wraps": { "<kid>": { "e": "…", "i": "…", "w": "…" } } }
+```
+
+| | |
+|---|---|
+| `dm` | the DM's id, `<sid>@<host domain>` with the domain in lower case |
+| `from` | the sender's full stable id (`l:5@a.example`, `v:5@nookara.cc`) |
+| payload | JSON `{ "t": text, "r"?: { "from": name, "s": quote }, "n": 8 random bytes, "ts": sender's clock in ms, "p"?: link previews }`. A file is a link on its own line in `t` (4d.3). Link previews are made by the sender's device and travel in here: no server fetches a link of a DM |
+| `ct` | AES-256-GCM(`K`, `iv`, payload), `K` = 32 random bytes, `iv` = 12 random bytes, additional data `nke1\|2\|<dm>\|<from>`, tag appended |
+| `commit` | HMAC-SHA256(`K`, `"nke1 commit"`): binds the envelope to its key, so a revealed key (4d.4) cannot be swapped |
+| `wraps[kid]` | `K` for one recipient key: a fresh ephemeral P-256 key `e` (raw point), `wrapKey` = HKDF-SHA256(ECDH(ephemeral, recipient's encryption key), salt = `e` raw, info = `"nke1 wrap\|<kid>"`, 32 bytes), `w` = AES-256-GCM(`wrapKey`, `i` (12 random bytes), `K`), no additional data |
+| `sig`, `signer` | ECDSA by the sender's key `signer` (its account key or one of its linked clients) over `nke1 sig\|2\|<dm>\|<from>\|<edit_of>\|<iv>\|<ct>\|<commit>`, where `edit_of` is `0` for a new message and the host's message id for an edit |
+| recipients | every current member of the DM, the sender included: the account key and every linked client that is not revoked, from each member's key document. In a two-person DM a client seals to exactly the two accounts it knows and refuses when the host lists more |
+
+A reader finds `wraps[<its kid>]`, unwraps `K`, checks `commit`, opens `ct` with the same additional data (so an envelope moved to another DM or put under another sender does not open) and verifies `sig` against the sender's key document (account key, a client in `clients.list`, or a `past` key).
+
+**Nobody without keys gets plain text.** A sender's client holds a message until every member has keys (it shows who is missing) and never falls back to an unencrypted message; the host would refuse it anyway.
+
+Limits: `ct` up to 98,304 characters; `wraps` up to 256 and up to 21 per member of the DM (an account key and 20 clients); `e` 128, `i` 24, `w` 128, `iv` 24, `commit` 64, `sig` 128 characters at most; kids are 22 characters.
+
+#### 4d.2 The home API: an account's own keys
+
+`<api_url>/social/e2ee`, on the account's home only. The bodies and answers are those of Nookara's `/im/keys`, so one client implementation serves both.
+
+- An account of another homeserver signed in here: `400 local_accounts_only`. A Nookara (`v:`) account whose social API is elsewhere (§4c): `409 social_elsewhere { api_url }`: its keys are Nookara's to keep, at `<api_url>/social/e2ee`. A session an OAuth app signed in with: `403 own_clients_only`.
+- **The unlock secret is a passphrase, never a PIN.** Whoever runs a homeserver holds the salt and a hash of the unlock proof and could try every 6-digit PIN in hours, so only `nookara.cc` itself takes PINs. Here a client must lock the keys with a passphrase of at least 12 characters, stretched with Argon2id at `m >= 65536` KiB, `t >= 3`, `p >= 1`, and **say so**: `passcode.secret_kind: "passphrase"` (Nookara's `type: "password"` is taken as the same). `type: "pin"` or `secret_kind: "pin"`, or neither field: `400 passphrase_required { kinds: ["passphrase"], min_length: 12, argon2id: { m, t, p } }`. Weaker Argon2id parameters: `400 weak_kdf { argon2id }`. The server cannot see the secret, so the length is the client's to enforce: it reads the rules from `GET /me` (`passcode_rules`) and must refuse a shorter one. The recovery code (26 Crockford characters, 130 bits) is the other way in.
+
+A locked blob is `AES-256-GCM(wrap, iv, JSON { enc_pub, sig_pub, kid, enc_priv (JWK), sig_priv (JWK) })` with additional data `nke1 backup`. The secret is stretched to 64 bytes (passphrase: Argon2id with `salt` and `params`; recovery code: HKDF-SHA256, `salt`, info `nke1 recovery`): the first 32 are `wrap`, the last 32 are `auth`. The server keeps `SHA-256(auth)` and hands the blob out only to someone who sends the right `auth`.
+
+| route | |
+|---|---|
+| `GET /me` | `{ id, owner, passcode_rules: { kinds, min_length, argon2id }, has: false }`, or with keys: `{ id, owner, passcode_rules, has: true, kid, enc_pub, sig_pub, clients: { seq, list }, clients_sig, passcode: { type: "password", secret_kind: "passphrase", salt, params: { m, t, p }, locked, tries_left }, recovery: { salt } }`. `owner` is the string the account's signed texts use (here always `id`) |
+| `POST /` `{ enc_pub, sig_pub, passcode: { secret_kind: "passphrase", salt, params: { m, t, p }, iv, ct, auth }, recovery: { secret_kind?: "recovery", salt, iv, ct, auth }, replace? }` | `{ success: true, kid }`. The first keys, or with `replace: true` new ones when everything was lost: the old `{ kid, sig_pub }` joins `past`, the client list is emptied, pending links are dropped, and old messages can no longer be opened. `400 bad_key`, `400 bad_backup`, `400 passphrase_required`, `400 weak_kdf`, `409 already_has_keys`, `429 rate_limited` (5 an hour) |
+| `POST /unlock` `{ kind: "passcode" \| "recovery", auth }` | `{ iv, ct }`, the locked keys, when `SHA-256(auth)` matches. `403 wrong_passcode { tries_left }`; after 10 wrong ones `423 passcode_locked { tries_left: 0 }` until the recovery code is used (which starts the count again); `403 wrong_recovery_code`; `404 no_backup`; `429 rate_limited` (60 an hour per kind) |
+| `PUT /backup` `{ kind, ...the blob as above, ts, proof }` | `{ success: true }`: a new passphrase or recovery code. `proof` = ECDSA by the account key over `nke1 proof\|backup\|<owner>\|<ts>`, `ts` within 5 minutes. `400 stale_proof`, `403 bad_proof`, `404 no_keys`, and the blob's errors |
+| `PUT /clients` `{ doc: { seq, list }, sig }` | `{ success: true }`: the signed list of linked clients (§4c.6). `seq` must be higher than the stored one (`409 stale_clients { seq }`), a revoked client stays revoked and at most 20 are active (`400 bad_clients`, `400 too_many_clients`), `sig` must be the account key's (`403 bad_signature`) |
+| `POST /link` `{ enc_pub, label? }` | `{ code, kind: "device", expires_at }`: a new device asks for the keys. `enc_pub` is an ephemeral P-256 key; `code` is 10 Crockford characters of `SHA-256(enc_pub)` as `XXXXX-XXXXX`, shown on both devices, so the server cannot swap the key. Valid 10 minutes. `404 no_keys`, `429 rate_limited` (20 an hour) |
+| `GET /link/<code>` | `{ kind, enc_pub, sig_pub, label, app, state: "waiting" \| "approved" \| "denied", sealed, expires_at }`. `404 link_not_found` |
+| `POST /link/<code>/approve` `{ sealed: { e, i, w } }` | `{ success: true }`: a device that has the keys seals them to `enc_pub` (as a wrap, 4d.1). `409 link_used`, `400 bad_sealed` |
+| `POST /link/<code>/deny` | `{ success: true }` |
+
+Linking a third-party app as a client of its own (its own key pair in `clients.list`) is not offered here yet; the list and its rules are in place for it.
+
+Gateway, on the home: `{ type: "e2ee_keys_changed", id }` to the account's own connections and to everyone it shares a DM hosted here with (drop the kept key document); `{ type: "e2ee_link_request", kind, label }` and `{ type: "e2ee_link_done", state, code }` to the account's own connections. Other homeservers are not told: their accounts learn of new keys through `stale_keys`, a signature by a key they do not know, or the 10-minute copy running out, each time asking with `?fresh=1`.
+
+Tables `e2ee_accounts (user_id, kid, enc_pub, sig_pub, clients_doc, clients_sig, past, created_at, updated_at)`, `e2ee_backups (user_id, kind, type, salt, params, blob_iv, blob_ct, auth_hash, fails, updated_at)`, `e2ee_links (code_hash, user_id, kind, enc_pub, sig_pub, label, app, state, sealed, expires_at)`. They go with the account.
+
+#### 4d.3 The host: what a DM takes
+
+The DM object says `"e2ee": true`. On its channel:
+
+- **Post** `POST /api/v1/channels/<channel>/messages { enc, reply_to? }` (or the gateway's `chat_send { channel, enc, reply_to?, nonce }`); **edit** `PATCH /api/v1/messages/<id> { enc }` with an envelope signed for `edit_of` = that id. Anything readable next to or instead of the envelope (`message` / `body`, `attachments`, `embeds`, `sticker`, `signature`, `alias`) is refused: `400 e2ee_required`. `enc` anywhere that is not a DM: `400 e2ee_not_here`. A malformed envelope: `400 bad_envelope` (`v` must be `2`), `400 message_too_long { max }`, `400 too_many_wraps { max }`.
+- The envelope is stored as sent (only the fields of 4d.1; anything else in it is dropped) and never opened. A message of a DM is `{ ..., "body": "", "attachments": [], "enc": { ... } }` in every view (post, history, pins, gateway events); `reply.body` of a reply is `""` (the quote is in the payload's `r`).
+- **Coverage.** Before storing, the host looks at each member's key document (its own accounts' directly, others' through s2s with the 10-minute copy) and expects a wrap for the member's **account** kid. A member that is missing one is asked about once more (`fresh`), and then `409 stale_keys { members: [id, …] }`: the sender fetches those documents with `?fresh=1`, seals again and retries once. Members that have no keys yet, or whose homeserver cannot be reached, are not checked. This helps senders with old copies of keys; it is not what keeps a message private.
+- `GET /api/v1/channels/<channel>/messages?kids=<kid>,<kid>` returns only those wraps of each envelope (a client names its own kids; without it all wraps come back).
+- **No previews, anywhere.** `chat_mention` and push (§20) for a DM message say `sent a message` and nothing else; `dm_activity` carries no `preview` and `mention: false` (the host cannot tell who is mentioned), and a homeserver receiving a `preview` from another host does not pass it on.
+- **No search**: `GET /api/v1/channels/<channel>/search` answers `{ messages: [] }`. **No link previews**: `GET /api/v1/unfurl?sid=<a DM's sid>` answers `{ embed: null }` without fetching anything, and a client must not ask any server to unfurl a link from a sealed message (the sender's device builds the preview and puts it in the payload). No AutoMod, no reports to the host.
+- **Files** are encrypted on the device (AES-256-GCM, a random 32-byte key and 12-byte iv, additional data `nke1 file`) and uploaded with `POST /api/v1/media/upload?sid=<sid>&cid=<channel>&sealed=1`. The host keeps the bytes exactly as sent: no type detection, no compression, no metadata stripping, whatever the bytes look like; the answer is `{ url, name: "file.bin", mime: "application/octet-stream", type: "file", size, sha256, sealed: true }`. The link goes inside the sealed text on its own line, `<url>#nke=<key>.<iv>.<name>.<mime>` (name and mime URI-encoded), never in `attachments`. An upload to a DM without `sealed=1`, and `POST /api/v1/media/import` for a DM: `400 e2ee_required`. `sealed=1` on a server: `400 e2ee_not_here`. `/uploads/*` answers any origin, so a client fetches the file without credentials and decrypts it.
+- System lines the host writes itself (someone joined or left a group, a rename, a pin) stay readable `system: true` rows.
+
+#### 4d.4 Reports
+
+A reported message goes to whoever manages the **sender's** account, with the one key that opens it: the reporter's client reveals that message's `K` and nothing else.
+
+`POST <sender's api_url>/social/reports`, with a session there (the reporter's own homeserver, or a cross-homeserver session, §4b):
+
+```jsonc
+{ "message": { "dm": "<dm id>", "id": "<the host's message id>", "from": "<sender's stable id>", "envelope": { "v": 2, ... } },
+  "revealed_key": "<K, base64url, 32 bytes>",
+  "reason": "harassment" | "spam" | "child_safety" | "nsfw" | "threats" | "other",
+  "details": "up to 1000 characters",                                    // optional
+  "context": [ { "id", "from", "envelope", "revealed_key" } ] }           // optional: up to 15 messages around it, each with its own key
+```
+-> `{ ok: true, id }` (`duplicate: true` when this reporter already reported that message).
+
+Before anything is kept the homeserver checks, without trusting the reporter or the DM's host:
+1. `from` is an account hosted here. A Nookara (`v:`) account whose social API is elsewhere: `409 report_elsewhere { url, api_url }`, `url` being Nookara's own DM report route (config `social.reports_url`, else `<origin of social.api_url>/api/report/dm-message`), which takes `{ source: "homeserver_dm", dm, message_id, from, envelope, revealed_key, reason, details? }` with a Nookara session and makes the same checks with the same strings. An account of another homeserver: `409 report_elsewhere { url: "<its api_url>/social/reports" }` (`400 sender_not_here` when that homeserver cannot be found). `404 user_not_found`; `400 cannot_report_self`.
+2. The envelope was **signed by a key of the sender** (its account key, a client in its list, or a `past` key) for this `dm`, this `from` and `edit_of` = `0` or `message.id`: `400 bad_signature { signature: "invalid" | "unknown" }`. Nobody can report words the sender did not send, in a DM they were not sent in.
+3. `revealed_key` **is that envelope's key**: its HMAC equals `commit` and it opens `ct` with the DM's additional data: `400 bad_revealed_key`.
+4. Each `context` entry's key opens its envelope (`400 bad_context { id }`); its signature is recorded as `valid` / `invalid` / `unknown` when its sender is an account of this homeserver and `unchecked` otherwise.
+
+Limits: 10 an hour per reporter (`429 rate_limited`; refused tries count), and per reporting homeserver `reports_per_hour` of §4b (`429 homeserver_rate_limited { retry_after }`). `400 invalid_reason { reasons }`, `400 invalid_request`, `400 bad_envelope`.
+
+The homeserver stores the envelope and the key, not the text. Its admins read a report by opening that one message in their client:
+
+- `GET /api/v2/homeserver/reports?status=open|resolved|dismissed|all&before=<id>&limit=` (instance admin; default `open`, 50, newest first) -> `{ reports: [ { id, status, reason, details, reporter: { id, handle, display_name, avatar_url }, sender: { … }, message: { dm, id, from, envelope, edit_of }, revealed_key, context: [ { id, from, envelope, revealed_key, signature } ], note, handled_by, created_at, updated_at } ], counts: { open, resolved, dismissed }, has_more }`. To read one: AES-256-GCM-open `envelope.ct` with `revealed_key`, `envelope.iv` and additional data `nke1|2|<message.dm>|<message.from>` (a context entry: its own `from`); files in it open with the keys in their links.
+- `PATCH /api/v2/homeserver/reports/<id> { status?, note? }` -> `{ report }`. `404 report_not_found`, `400 invalid_status`.
+
+Table `dm_reports (id, reporter, sender_id, sender, dm, message_id, envelope, revealed_key, edit_of, reason, details, context, status, note, handled_by, created_at, updated_at)`, one row per reporter and message.
+
+#### 4d.5 What is not protected
+
+- A homeserver can replace an account's published keys; the people it talks to see a key change and can compare safety numbers. Trust is on first use.
+- The host decides who is in a group, and clients seal to whoever it lists. A two-person DM is sealed to exactly two accounts.
+- A host can drop, replay or reorder envelopes within a DM. It cannot read, alter or forge them, or move them to another DM (`ts` in the payload lets a reader notice).
+- A database copy of the home lets its holder guess passphrases offline; that is why PINs are refused (4d.2).
+- No forward secrecy: a key that leaks opens every message wrapped for it.
 
 ---
 
@@ -763,7 +889,7 @@ Sounds belong to the community: `GET /servers/:sid/sounds` → `{ sounds: [{ id,
 
 ### 6.3 Link previews
 
-`GET /unfurl?url=<url>` (session required, 60 / minute / user) → `{ embed }`, where `embed` is `null` when there is nothing to show, or:
+`GET /unfurl?url=<url>` (session required, 60 / minute / user) → `{ embed }`, where `embed` is `null` when there is nothing to show (always, without a fetch, when `sid` names a DM: §4d.3), or:
 - `{ type: "link", url, site, title, description, color?, image, large }`, from OpenGraph / Twitter tags (falling back to oEmbed discovery); `image` is re-hosted at `/uploads/embeds/…` so viewers never contact the site;
 - `{ type: "youtube", id, url, title, channel, image }` for YouTube links.
 
@@ -1023,7 +1149,7 @@ DM calls (`bfc_…`) stay on Nookara.
 
 ## 11. Uploads
 
-`POST /api/v1/media/upload` takes a multipart field `file` and requires a session with `media` scope and community setting `allow_uploads`. The `sid` query parameter is required. Clients sending to a channel also pass `cid`; it must belong to that community and be visible to the caller. ATTACH is checked with channel overrides when `cid` is present, otherwise community permissions apply. Sending an attachment still checks the destination channel's ATTACH permission.
+(A DM takes only files sealed on the device, `?sealed=1`, kept byte for byte: §4d.3.) `POST /api/v1/media/upload` takes a multipart field `file` and requires a session with `media` scope and community setting `allow_uploads`. The `sid` query parameter is required. Clients sending to a channel also pass `cid`; it must belong to that community and be visible to the caller. ATTACH is checked with channel overrides when `cid` is present, otherwise community permissions apply. Sending an attachment still checks the destination channel's ATTACH permission.
 
 `POST /api/v1/media/import?sid=...&cid=...` takes JSON `{ url, name? }` and returns the same upload response. It uses the same scope, membership, permission and size checks. Only HTTPS source URLs without credentials, up to 4096 characters, are accepted. The existing SSRF-safe fetcher pins public DNS addresses and rechecks redirects, ports and private addresses, with bounded size and time. No browser cookies or authorization headers are forwarded. Magic-byte detection and JPEG EXIF stripping happen before hashing, exactly as for multipart uploads. Errors: `invalid_media_url`, `media_import_failed` (422), and `file_too_large` (413, with `max_mb`). The client should offer downloading and attaching the file if the source refuses imports.
 
@@ -1718,6 +1844,7 @@ X-Ember-Homeserver: <this homeserver's domain>
 -> { "rejected": ["<pushkey>", …] }
 ```
 - `title` is at most 100 characters, `preview` at most 300 and only sent to a pusher with `show_preview: true`. `url` is only sent when `public_url` is `https`. `counts.unread` is the number of channels the person has something unread in.
+- For a DM message `preview` is always `sent a message` (with the sender's name in front in a summary): DMs are sealed (§4d) and no homeserver can say more.
 - `kind` is `mention`, `reply` or `dm`; `call` and `other` are the gateway's other kinds and are not sent yet. `dm` (§4c.4) is every message in a DM, to each member who is not connected: by the host to its own accounts, and by a member's own homeserver when the host reports activity (`dm_activity`). Its `title` is the sender's name (`"nat"`, `"nat in <group>"`, or `"3 new messages from nat"` / `"... in <group>"` for the summary), its `url` is `<public_url>/#/dm/<dm id>`, and `counts.unread` also counts DMs hosted elsewhere that have something unread.
 - Quiet the way §12.3 is: nobody who is connected is pushed, and per person and channel the first ping goes out at once while the ones in the next 30 seconds become one summary (`"3 new mentions in #general"`).
 - A pushkey the gateway lists in `rejected` is deleted. Any other 2xx sets `last_ok_at`.

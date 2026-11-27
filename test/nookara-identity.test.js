@@ -181,6 +181,9 @@ test('social routes answer social_elsewhere for v: accounts; local accounts and 
   const sent = nke1.seal({ dm: `d1@${DOMAIN}`, from: `v:77@${DOMAIN}`, text: 'x', to: [nke1.account()], signer: nke1.account() });
   const r = await alice.post('/api/v2/social/reports', { message: { dm: `d1@${DOMAIN}`, id: '5', from: `v:77@${DOMAIN}`, envelope: sent.enc }, revealed_key: sent.k, reason: 'spam' });
   assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: nookaraSide.origin + '/api/report/dm-message', api_url: nookaraSide.origin + '/api/v2' }]);
+  config.update({ social: { reports_url: nookaraSide.origin + '/somewhere/reports' } });
+  assert.equal((await alice.post('/api/v2/social/reports', { message: { dm: `d1@${DOMAIN}`, id: '5', from: `v:77@${DOMAIN}`, envelope: sent.enc }, revealed_key: sent.k, reason: 'spam' })).body.url, nookaraSide.origin + '/somewhere/reports');
+  config.update({ social: { reports_url: null } });
   // its key document is asked for where its keys are
   const doc = { id: `v:77@${DOMAIN}`, format: 'nke1', owner: '77', keys: [(k => ({ kid: k.kid, kind: 'account', alg: 'p256', public_key: k.sig_pub, enc_public_key: k.enc_pub, created_at: 1 }))(nke1.account())], clients: { seq: 0, list: [] }, clients_sig: null, clients_seq: 0, past: [] };
   nookaraSide.handle = (req, res) => json(res, req.url.startsWith('/_ember/s2s/v1/keys/') ? 200 : 404, req.url.startsWith('/_ember/s2s/v1/keys/') ? doc : { error: 'not_found' });
