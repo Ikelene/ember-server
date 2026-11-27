@@ -29,6 +29,9 @@ function csrf(req) {
   return { token, set: [`${COOKIE}=${token}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=3600${config.publicUrl().startsWith('https:') ? '; Secure' : ''}`] };
 }
 const csrfOk = (req, sent) => { const have = cookies(req)[COOKIE]; return !!have && typeof sent === 'string' && sent.length > 0 && safeEqual(have, sent); };
+// the same cookie binds what a flow keeps between requests (an outside login's state, a login waiting to be linked) to the
+// browser that started it: a link someone else sends you carries their entry, which your browser's cookie does not match
+const boundHere = (req, bind) => { const have = cookies(req)[COOKIE]; return typeof bind === 'string' && !!have && safeEqual(have, bind); };
 
 // ---------- small stores (ten minutes, used once) ----------
 function store() {
@@ -39,7 +42,10 @@ function store() {
     take(id) { const v = this.peek(id); if (typeof id === 'string') m.delete(id); return v; },
   };
 }
-const pending = store(); // an outside login nobody here is linked to yet: { method_id, identity }
+const pending = store(); // an outside login nobody here is linked to yet: { method_id, identity, bind (the browser's ember_csrf) }
+const pendingHere = (req, id) => { const p = pending.peek(id); return p && boundHere(req, p.bind) ? p : null; };
+// what the page says about the login being linked: its name at the provider, so nobody links one they don't recognise
+const pendingNotice = p => { const m = P.method(p.method_id), who = p.identity.email || p.identity.username || p.identity.name || ''; return `Sign in with your password to link ${m?.name || 'this login'}${who ? ` (${who})` : ''} to your account.`; };
 const tickets = store(); // a signed-in account about to link a login: { user_id, method_id, return_to }
 
 // ---------- links ----------
@@ -86,7 +92,8 @@ function finish(res, user, a) {
 async function postLogin(req, res) {
   const b = req.body || {}, a = request(req, res, b);
   if (!a) return;
-  const again = (code, status, extra = {}) => showLogin(req, res, a, { error: code, username: typeof b.username === 'string' ? b.username.slice(0, 64) : '', link: pending.peek(b.link) ? b.link : null, ...extra }, status);
+  const held = pendingHere(req, b.link);
+  const again = (code, status, extra = {}) => showLogin(req, res, a, { error: code, username: typeof b.username === 'string' ? b.username.slice(0, 64) : '', ...(held ? { link: b.link, notice: pendingNotice(held) } : {}), ...extra }, status);
   if (!csrfOk(req, b.csrf)) return again('csrf', 403);
   const register = b.action === 'register';
   if (!auth.passwordMethod()) return again('password_login_disabled', 403);
@@ -108,20 +115,35 @@ async function postLogin(req, res) {
     return again(e.code, e.status || 400, register ? { view: 'register', invite: typeof b.invite === 'string' ? b.invite.slice(0, 40) : '' } : {});
   }
   // signed in with a password to link the outside login that had no account
-  const p = register ? null : pending.take(b.link);
+  const p = register || !held ? null : pending.take(b.link); // (only a login this browser brought back)
   if (p && !linkOf(p.method_id, p.identity.subject)) addLink(user.id, p.method_id, p.identity);
   finish(res, user, a);
 }
 
+// GET /login/start/<id>?link=<ticket>: a signed-in account adding a login. The ticket is not used up by opening it: the page
+// says which account the login will be added to and asks first (POST, with this browser's csrf), so a link made for someone
+// else's account does nothing unless whoever opens it agrees to add their login to that account
+function confirmLink(req, res) {
+  const id = req.params.id, t = tickets.peek(req.query.link), m = P.method(id);
+  if (!t || t.method_id !== id || !m) return showError(res, 400, 'This link has expired', 'Start linking again from your account settings.');
+  const u = auth.userById(t.user_id), c = csrf(req), esc = page.esc;
+  const body = page.messagePage({ title: `Link ${m.name}?`, text: `This adds your ${m.name} login to the account ${u ? u.username : '?'}@${config.domain()}, so that it can sign in as that account. Only go on if that is your account.` })
+    .replace('</div>\n</main>', `<form method="post" action="/login/start/${encodeURIComponent(id)}"><input type="hidden" name="csrf" value="${esc(c.token)}"><input type="hidden" name="link" value="${esc(String(req.query.link))}"><button class="btn primary" type="submit">Link ${esc(m.name)} to ${esc(u ? u.username : '')}</button></form></div>\n</main>`);
+  page.send(res, 200, body, { cookies: c.set });
+}
 async function startMethod(req, res) {
   if (!startLimit.hit(req.ip)) return showError(res, 429, 'Too many tries', page.message('rate_limited'));
   const id = req.params.id;
   let ctx, a = null;
-  if (req.query.link) {
-    const t = tickets.take(req.query.link);
+  const c = csrf(req); // the state of this sign-in is bound to the browser (callback)
+  if (req.method === 'POST') { // the "Link" button of confirmLink
+    const b = req.body || {};
+    if (!csrfOk(req, b.csrf)) return showError(res, 403, 'This page was open for too long', page.message('csrf'));
+    const t = tickets.take(b.link);
     if (!t || t.method_id !== id) return showError(res, 400, 'This link has expired', 'Start linking again from your account settings.');
     ctx = { link_user: t.user_id, return_to: t.return_to };
-  } else {
+  } else if (req.query.link) return confirmLink(req, res);
+  else {
     a = request(req, res, req.query);
     if (!a) return;
     ctx = { authz: a.authz };
@@ -130,7 +152,7 @@ async function startMethod(req, res) {
   let m = P.method(id);
   if (!m || m.kind === 'password' || config.mode() !== 'local') return oops('unknown_method');
   try { m = await P.ready(m); } catch (e) { log(`[login] ${id}: ${e.extra?.message || e.message}`); return oops('provider_failed'); }
-  page.redirect(res, P.start(m, ctx));
+  page.redirect(res, P.start(m, { ...ctx, bind: c.token }), c.set);
 }
 
 function linkDone(res, s, error) {
@@ -143,6 +165,9 @@ async function callback(req, res) {
   const id = req.params.id, q = req.query;
   const s = P.take(q.state, id);
   if (!s) return showError(res, 400, 'This sign-in has expired', 'It was not started here, or it took too long. Go back to the app and sign in again.');
+  // started in this browser? (a callback address someone else got from their provider, sent to you, would sign you in as
+  // them or link their login to your account)
+  if (!boundHere(req, s.bind)) return showError(res, 400, 'This sign-in was started somewhere else', 'Go back to the app and sign in again from this browser.');
   const a = s.authz ? O.parseAuthz(s.authz) : null;
   if (a && !a.ok) return showError(res, 400, 'This sign-in link is not valid', a.description);
   const oops = (code, status = 400) => (a ? showLogin(req, res, a, { error: code }, status) : linkDone(res, s, code));
@@ -188,7 +213,7 @@ async function callback(req, res) {
   }
   if (!user) {
     const links = [];
-    if (auth.passwordMethod()) links.push({ href: `/login?${new URLSearchParams({ ...a.authz, link: pending.put({ method_id: id, identity: idn }) })}`, label: 'Sign in with your password to link it' });
+    if (auth.passwordMethod()) links.push({ href: `/login?${new URLSearchParams({ ...a.authz, link: pending.put({ method_id: id, identity: idn, bind: s.bind }) })}`, label: 'Sign in with your password to link it' });
     links.push({ href: `/login?${new URLSearchParams(a.authz)}`, label: 'Back' });
     return showError(res, 403, 'No account found', page.message('not_linked'), links);
   }
@@ -279,8 +304,8 @@ function register(app) {
   app.get('/login', { auth: false }, (req, res) => {
     const a = request(req, res, req.query);
     if (!a) return;
-    const link = pending.peek(req.query.link) ? req.query.link : null;
-    showLogin(req, res, a, { view: req.query.view === 'register' ? 'register' : 'login', link, invite: typeof req.query.invite === 'string' ? req.query.invite.slice(0, 40) : '' });
+    const held = pendingHere(req, req.query.link);
+    showLogin(req, res, a, { view: req.query.view === 'register' ? 'register' : 'login', ...(held ? { link: req.query.link, notice: pendingNotice(held) } : {}), invite: typeof req.query.invite === 'string' ? req.query.invite.slice(0, 40) : '' });
   });
   app.post('/login', { auth: false, form: true }, postLogin);
   // "Cancel" on the page: the client hears access_denied
@@ -289,6 +314,7 @@ function register(app) {
     if (a) page.redirect(res, O.redirectWith(a.redirect, { error: 'access_denied', error_description: 'The sign-in was cancelled.', state: a.authz.state }));
   });
   app.get('/login/start/:id', { auth: false }, startMethod);
+  app.post('/login/start/:id', { auth: false, form: true }, startMethod);
   app.get('/login/callback/:id', { auth: false }, callback);
   app.post('/login/link/:id', req => linkTicket(req.user, req.params.id, req.body?.return_to));
 

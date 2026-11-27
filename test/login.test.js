@@ -110,7 +110,9 @@ async function signIn(username, password = PASS) {
 }
 // go through an outside method: /login/start -> (the provider) -> /login/callback. -> the last response
 async function outside(methodId, a, next = {}, { b = browser(), code = 'c-' + crypto.randomBytes(4).toString('hex'), start = null } = {}) {
-  const s = await b.get(start || `/login/start/${methodId}?${a.qs}`);
+  let s = await b.get(start || `/login/start/${methodId}?${a.qs}`);
+  // linking from a signed-in account: a page says which account, and its button goes on
+  if (s.status === 200 && /action="\/login\/start\//.test(s.text)) s = await b.post(`/login/start/${methodId}`, { csrf: b.field(s.text, 'csrf'), link: b.field(s.text, 'link') });
   assert.equal(s.status, 302, s.text);
   const to = new URL(s.location);
   idp.next = { nonce: to.searchParams.get('nonce'), ...next };
@@ -533,9 +535,16 @@ test('OpenID Connect: the id_token is checked (signature, issuer, audience, nonc
   const s2 = new URL((await browser().get(`/login/start/corp?${a.qs}`)).location).searchParams.get('state');
   assert.equal((await browser().get(`/login/callback/hub?code=c&state=${s2}`)).status, 400);
   // the provider said no
-  const s3 = new URL((await browser().get(`/login/start/corp?${a.qs}`)).location).searchParams.get('state');
-  const denied = await browser().get(`/login/callback/corp?error=access_denied&state=${s3}`);
+  const b3 = browser();
+  const s3 = new URL((await b3.get(`/login/start/corp?${a.qs}`)).location).searchParams.get('state');
+  const denied = await b3.get(`/login/callback/corp?error=access_denied&state=${s3}`);
   assert.equal(denied.status, 400); assert.match(denied.text, /cancelled/); assert.match(denied.text, /name="password"/);
+  // the state belongs to the browser that started the sign-in: a callback address sent to someone else does nothing there
+  const b4 = browser();
+  const s4 = new URL((await b4.get(`/login/start/corp?${a.qs}`)).location).searchParams.get('state');
+  idp.next = { claims: { sub: 'u-100' } };
+  const elsewhere = await browser().get(`/login/callback/corp?code=c9&state=${s4}`);
+  assert.equal(elsewhere.status, 400); assert.match(elsewhere.text, /started somewhere else/);
   // start needs a valid authorization request too
   assert.equal((await browser().get('/login/start/corp?' + authz({ redirect_uri: 'https://evil.example/auth/callback.html' }).qs)).status, 400);
   assert.equal((await browser().get('/login/start/nope?' + a.qs)).status, 400);
@@ -550,8 +559,16 @@ test('registration closed: an unknown login is refused, and can be linked by sig
   assert.equal(require('../src/db').get("SELECT 1 FROM users WHERE username_lc = 'bobby'"), undefined);
   const href = /href="(\/login\?[^"]*link=[^"]*)"/.exec(r.text)[1].replace(/&amp;/g, '&');
   const link = new URL(href, base).searchParams.get('link');
+  // the link belongs to the browser that came back from the provider: sent to someone else, it links nothing to their account
+  const victim = browser();
+  const vp = await victim.get(href);
+  assert.doesNotMatch(vp.text, /Link your account/);
+  const vdone = await victim.post('/login', { ...a.q, csrf: victim.field(vp.text, 'csrf'), action: 'login', username: 'alice', password: PASS, link });
+  assert.equal(vdone.status, 302, vdone.text);
+  assert.equal(require('../src/db').get("SELECT COUNT(*) AS n FROM login_links WHERE subject = 'u-200'").n, 0);
   const pg = await r.b.get(href);
   assert.match(pg.text, /Link your account/);
+  assert.match(pg.text, /link Corp SSO \(bob@corp\.example\) to your account/); // which login it is
   const done = await r.b.post('/login', { ...a.q, csrf: r.b.field(pg.text, 'csrf'), action: 'login', username: 'bob', password: PASS, link });
   assert.equal(done.status, 302);
   assert.equal((await redeem(a, answer(done.location).code)).body.account.username, 'bob');
@@ -617,6 +634,10 @@ test('linking and unlinking from a signed-in account; the last way in cannot be 
   assert.equal((await B.post('/login/link/hub', { return_to: 'https://evil.example/' })).body.error, 'invalid_return_to');
   let l = await B.post('/login/link/hub', { return_to: `${APP}/ember/#/settings` });
   assert.match(l.body.url, new RegExp(`^${pub}/login/start/hub\\?link=`));
+  // opening it asks first, naming the account the login goes to; without that page's csrf nothing happens
+  const conf = await browser().get(l.body.url.replace(pub, ''));
+  assert.equal(conf.status, 200); assert.match(conf.text, /to the account bob@/);
+  assert.equal((await browser().post('/login/start/hub', { csrf: 'x'.repeat(43), link: new URL(l.body.url).searchParams.get('link') })).status, 403);
   idp.userinfo = { id: 900, login: 'bob-two' };
   let r = await outside('hub', null, {}, { start: l.body.url.replace(pub, '') });
   assert.equal(r.location, `${APP}/ember/?linked=hub#/settings`);
