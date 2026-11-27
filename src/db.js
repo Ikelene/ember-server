@@ -391,6 +391,10 @@ const MIGRATIONS = [
   );
   CREATE INDEX IF NOT EXISTS server_requests_status ON server_requests(status, id);
   CREATE INDEX IF NOT EXISTS server_requests_user ON server_requests(user_id, status);`,
+  // v33: voice minutes per server and calendar month (UTC), for its `voice_minutes` limit (voice-meter.js, PROTOCOL §19.0)
+  `CREATE TABLE IF NOT EXISTS voice_usage (
+    community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE, period TEXT NOT NULL, ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (community_id, period)
+  );`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

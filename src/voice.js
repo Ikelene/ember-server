@@ -91,7 +91,7 @@ function voiceChanged(room) {
   gw().emit(c.id, { type: 'chat_voice_state', server: c.sid, channel: ch.cid, users: voiceUsers(room) });
 }
 const voiceJoined = (p, room) => { if (!voiceIn.has(room)) voiceIn.set(room, new Map()); voiceIn.get(room).set(p.userId, { id: p.principal, username: p.username, muted: false, deafened: false, since: Date.now() }); voiceChanged(room); };
-const voiceLeft = (p, room) => { const m = voiceIn.get(room); if (!m?.delete(p.userId)) return; if (!m.size) voiceIn.delete(room); voiceChanged(room); };
+const voiceLeft = (p, room) => { const m = voiceIn.get(room), v = m?.get(p.userId); if (!m?.delete(p.userId)) return; require('./voice-meter').left(v, room); if (!m.size) voiceIn.delete(room); voiceChanged(room); };
 
 // may this person join this room? (null = yes, otherwise why not)
 function voiceDenied(me, room) {
@@ -149,6 +149,13 @@ function removeMember(userId, communityId, reason = 'membership_removed') {
     }
   }
 }
+// every call in one server ends (its voice minutes ran out: voice-meter.js)
+function endCalls(communityId, reason) {
+  for (const [room, people] of [...rtcRooms]) {
+    if (voiceChannelOf(room)?.community_id !== communityId) continue;
+    for (const p of [...people.values()]) { if (p.virtual) continue; gw().send(p.sock, { type: 'chat_rtc_left', room, reason }); drop(p); }
+  }
+}
 function allocated(requested, results) {
   const remaining = (results || []).filter(r => r && r.mid != null && !r.errorCode && !r.error);
   return requested.map(t => {
@@ -169,6 +176,7 @@ async function handle(sock, me, msg, reply) {
       const room = String(msg.room || '');
       const denied = voiceDenied(me, room);
       if (denied) throw err(denied, 403);
+      require('./voice-meter').assertCanTalk(voiceChannelOf(room).community_id); // the server's voice minutes this month
       const backend = backendName(voiceChannelOf(room)?.community_id ?? null);
       if (!backend) throw err('voice_unavailable', 503);
       leave(sock);
@@ -335,4 +343,4 @@ const watchRooms = fn => { roomWatchers.add(fn); return () => roomWatchers.delet
 const roomOf = sock => rtcBySocket.get(sock)?.room || null;
 const socketsIn = room => [...(rtcRooms.get(room)?.keys() || [])];
 
-module.exports = { handle, leave, park, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf, virtualJoin, setVirtualPresence, realPeopleIn, watchRooms };
+module.exports = { handle, leave, park, endCalls, _setResumeGraceMs: ms => { RESUME_GRACE_MS = ms; }, removeMember, stateOf, configured, available, backendName, setFetch, voiceDenied, rtcRooms, voiceIn, roomOf, socketsIn, voiceChannelOf, virtualJoin, setVirtualPresence, realPeopleIn, watchRooms };

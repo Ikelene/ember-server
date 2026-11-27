@@ -80,7 +80,7 @@ test('a self-hosted homeserver limits nothing; discovery shows the defaults and 
   B = (await owner.a.post('/api/v1/servers', { name: 'Beta', join_policy: 'open' })).body.server.sid;
   const v = (await owner.a.get(S(A, '/limits'))).body;
   assert.equal(v.limits.emojis, null);
-  assert.deepEqual(v.usage, { member_cap: 1, emojis: 0, sounds: 0, bots: 0, storage_mb: 0 });
+  assert.deepEqual(v.usage, { member_cap: 1, emojis: 0, sounds: 0, bots: 0, storage_mb: 0, voice_minutes: 0 });
   assert.deepEqual([v.tier, v.until, v.overridden, v.tiers_available], [null, null, false, false]);
   // an over-size file is still the plain 413 here: the homeserver's own max_upload_mb is not a plan
   await owner.a.patch(S(A), { allow_uploads: true }); await owner.a.patch(S(B), { allow_uploads: true });
@@ -272,4 +272,33 @@ test('effective limits: override, then tier, then defaults', async () => {
   // a tier the homeserver no longer offers gives nothing
   await owner.a.patch('/api/v2/homeserver/limits', { tiers: [] });
   assert.equal(L.limit('emojis', cid), 1);
+});
+test('voice minutes are counted per server and month; a server at its limit starts no call and its calls end', async () => {
+  const VM = require('../src/voice-meter'), voice = require('../src/voice');
+  const cid = cidOf(A), other = cidOf(B);
+  const ch = db.get("SELECT cid FROM channels WHERE community_id = ? AND type = 'voice'", cid) || { cid: null };
+  assert.ok(ch.cid, 'a voice channel');
+  const room = `bf_${ch.cid}`;
+  // two people in a call for five minutes, and someone bridged in, who does not count
+  const t = Date.now();
+  voice.voiceIn.set(room, new Map([[901, { id: 'x:1', since: t - 5 * 60000 }], [902, { id: 'x:2', since: t - 5 * 60000 }], [903, { id: 'x:3', since: t - 5 * 60000, platform: 'discord' }]]));
+  VM.tick(t);
+  assert.equal(VM.usedMinutes(cid, t), 10);
+  assert.equal(VM.usedMinutes(other, t), 0);
+  VM.tick(t + 60000); // a minute later: counted from where it was left
+  assert.equal(VM.usedMinutes(cid, t + 60000), 12);
+  assert.equal((await owner.a.get(S(A, '/limits'))).body.usage.voice_minutes, 12);
+  // the limit: an override for this server only
+  await owner.a.patch(`/api/v2/homeserver/servers/${A}/limits`, { overrides: { voice_minutes: 12 } });
+  assert.throws(() => VM.assertCanTalk(cid), e => e.code === 'plan_limit' && e.extra.what === 'voice_minutes' && e.extra.used === 12);
+  VM.assertCanTalk(other);
+  let ended = null; const real = voice.endCalls; voice.endCalls = (c, why) => { ended = [c, why]; };
+  try { VM.tick(t + 120000); } finally { voice.endCalls = real; }
+  assert.deepEqual(ended, [cid, 'voice_minutes']);
+  await owner.a.patch(`/api/v2/homeserver/servers/${A}/limits`, { overrides: { voice_minutes: 0 } });
+  assert.throws(() => VM.assertCanTalk(cid), e => e.code === 'plan_feature');
+  await owner.a.patch(`/api/v2/homeserver/servers/${A}/limits`, { overrides: null });
+  voice.voiceIn.delete(room);
+  // a new month starts from nothing
+  assert.equal(VM.usedMinutes(cid, t + 40 * 24 * 3600000), 0);
 });

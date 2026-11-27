@@ -137,6 +137,7 @@ function usage(cid) {
   return {
     member_cap: d.get("SELECT COUNT(*) AS n FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? AND u.kind <> 'bot'", cid).n,
     emojis: count('emojis'), sounds: count('sounds'), bots: managed.botCount(cid), storage_mb: Math.ceil(storageUsed(cid) / MB),
+    voice_minutes: require('./voice-meter').usedMinutes(cid), // this calendar month (UTC)
   };
 }
 // what a server's members read: GET /api/v1/servers/:sid/limits, and `limits` in the server settings

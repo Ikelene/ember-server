@@ -62,6 +62,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   require('./game').init();   // Ember Link tables, hooks, retention
   require('./profiles').start(); // keeps Nookara members' names / pictures current
   require('./push').start(); // push through a gateway (PROTOCOL §20)
+  require('./voice-meter').start(); // voice minutes per server (PROTOCOL §19.0)
   require('./relay').start(); // Nookara relays (PROTOCOL §12): registers in the background once we are reachable
   require('./interactions').start(); // clears "thinking" messages a restart left behind
   require('./audit').start(); // drops audit log entries past their retention, hourly
@@ -78,6 +79,7 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
     require('./profiles').stop();
     require('./relay').stop();
     require('./push').stop();
+    require('./voice-meter').stop();
     require('./audit').stop();
     require('./federation').stop();
     require('./social').stop();

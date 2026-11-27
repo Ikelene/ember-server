@@ -1647,7 +1647,7 @@ What a server may have is decided per server, by the homeserver it lives on. In 
 ```
 - `null` = unlimited; `0` = not at all. `bridges` is the list of platforms a server may bridge to (`true` / `null` in a request = all four, `false` = none). `custom_voice_keys: false` = calls in that server never use the homeserver's own Cloudflare keys, only Nookara's broker (§12.7).
 - `max_upload_mb` left out of the defaults is the instance's `max_upload_mb` setting (§5); `null` means the hard ceiling of 500 MB.
-- `voice_minutes` is carried and shown but not metered by the instance yet: voice through the broker is still capped per homeserver by Nookara (§19.4).
+- `voice_minutes` is metered per server: every minute an account (not someone bridged in from another platform) is connected to one of its voice channels counts, per calendar month (UTC), in table `voice_usage`. `usage.voice_minutes` is this month's. At the limit `chat_rtc_join` answers `chat_error { error: "plan_limit", what: "voice_minutes", limit, used }` (`0`: `plan_feature`), and calls going on end within a minute with `chat_rtc_left { room, reason: "voice_minutes" }`. Voice through Nookara's broker is also still capped per homeserver by Nookara (§19.4).
 - `storage_mb` counts the uploads sent to that server (§11); older uploads belong to no server.
 - The server's own settings (§6.4: member limit, files per member, expiry, storage) can only narrow these; a saved number above the limit counts as the limit.
 
