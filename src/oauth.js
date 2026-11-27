@@ -53,7 +53,7 @@ function parseAuthz(q) {
   const back = (error, description) => ({ ok: false, redirect, state, error, description });
   if (s('response_type') !== 'code') return back('unsupported_response_type', 'response_type must be code.');
   if (s('code_challenge_method') !== 'S256' || !CHALLENGE.test(s('code_challenge'))) return back('invalid_request', 'PKCE with code_challenge_method=S256 is required.');
-  return { ok: true, authz: { client_id: CLIENT_ID, response_type: 'code', redirect_uri: redirect.uri, state, code_challenge: s('code_challenge'), code_challenge_method: 'S256', login_hint: s('login_hint').slice(0, 100) }, redirect };
+  return { ok: true, authz: { client_id: CLIENT_ID, response_type: 'code', redirect_uri: redirect.uri, state, code_challenge: s('code_challenge'), code_challenge_method: 'S256', login_hint: s('login_hint').slice(0, 100), ...(s('prompt').split(' ').includes('login') ? { prompt: 'login' } : {}) }, redirect }; // (prompt=login: a sign-in that may not reuse a provider's own session, passed on to it)
 }
 
 // ---------- codes ----------

@@ -557,6 +557,13 @@ test('OpenID Connect: the id_token is checked (signature, issuer, audience, nonc
   // start needs a valid authorization request too
   assert.equal((await browser().get('/login/start/corp?' + authz({ redirect_uri: 'https://evil.example/auth/callback.html' }).qs)).status, 400);
   assert.equal((await browser().get('/login/start/nope?' + a.qs)).status, 400);
+  // prompt=login (a client adding a second account): the provider is asked for a fresh sign-in too, and only then
+  const fresh = new URL((await browser().get(`/login/start/corp?${authz({ prompt: 'login', login_hint: 'sam' }).qs}`)).location);
+  assert.equal(fresh.searchParams.get('prompt'), 'login');
+  assert.equal(new URL((await browser().get(`/login/start/corp?${authz().qs}`)).location).searchParams.get('prompt'), null);
+  // and the sign-in page keeps it on the way to the provider (its buttons carry the request)
+  const pageWith = await browser().get(`/login?${authz({ prompt: 'login' }).qs}`);
+  assert.match(pageWith.text, /href="\/login\/start\/corp\?[^"]*prompt=login/);
 });
 
 test('registration closed: an unknown login is refused, and can be linked by signing in with a password', async () => {

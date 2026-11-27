@@ -81,6 +81,7 @@ function start(m, ctx) {
   const q = { response_type: 'code', client_id: m.client_id || '', redirect_uri: callbackUrl(m.id), state, scope: m.scopes || '' };
   if (m.oidc) q.nonce = nonce;
   if (m.pkce !== false) { q.code_challenge = b64url(crypto.createHash('sha256').update(verifier).digest()); q.code_challenge_method = 'S256'; }
+  if (ctx.authz?.prompt === 'login') q.prompt = 'login'; // the client asked for a fresh sign-in (adding another account): the provider may not reuse its own session
   for (const [k, v] of Object.entries(q)) if (v) u.searchParams.set(k, v);
   return u.href;
 }
