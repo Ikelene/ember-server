@@ -111,7 +111,11 @@ test('unlinking: at once here, and Nookara is told', async () => {
   assert.deepEqual([v.linked, v.nookara_id], [false, null]);
   const told = relay.calls.find(c => c.path.endsWith('/payment-link/revoke'));
   assert.deepEqual(told.body, { account: acc(), user_id: '777' });
-  assert.equal((await alice.a.del('/api/v2/account/payments/link')).body.error, 'not_linked');
+  // again (a client that had not heard yet): the same answer, Nookara is not told twice
+  const n = relay.calls.filter(c => c.path.endsWith('/payment-link/revoke')).length;
+  const again = await alice.a.del('/api/v2/account/payments/link');
+  assert.deepEqual([again.status, again.body.linked], [200, false]);
+  assert.equal(relay.calls.filter(c => c.path.endsWith('/payment-link/revoke')).length, n);
   assert.equal((await alice.a.post(`/api/v2/servers/${sid}/tier`, { tier: 'plus' })).body.error, 'nookara_link_required');
 });
 

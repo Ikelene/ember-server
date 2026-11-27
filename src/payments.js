@@ -80,7 +80,7 @@ async function finish(req, res) {
 // DELETE /api/v2/account/payments/link: here at once; Nookara is told (best effort: its side is checked on every pay request)
 function unlink(me) {
   const u = auth.userById(me.id);
-  if (!u.payment_nookara_id) throw err('not_linked', 404);
+  if (!u.payment_nookara_id) return view(u); // already gone (Nookara's notice, another client): nothing to do, the same answer
   clearLink(u.id);
   if (client().registered()) client().call('POST', relayPath('/payment-link/revoke'), { account: accountId(u), user_id: String(u.payment_nookara_id) }).catch(() => {});
   return view(auth.userById(u.id));
