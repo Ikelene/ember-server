@@ -1,6 +1,6 @@
 'use strict';
 // Instance sessions, Nookara instance-JWT login (PROTOCOL §2.2/§4), local accounts, principals, admin/owner helpers.
-const { KIND_NOOKARA, ERR, NOOKARA_ID_FIELD, NOOKARA_PATHS } = require('./compat');
+const { KIND_NOOKARA, ERR, NOOKARA_ID_FIELD, NOOKARA_PATHS, nookaraIdFields } = require('./compat');
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
@@ -14,7 +14,7 @@ const SKEW_S = 60;
 // gallery-approved bots (added from Nookara's bot gallery) also carry verified: true (checkmark on the BOT tag)
 const botVerified = principal => { try { return !!db.get('SELECT b.gallery_verified AS v FROM bots b JOIN users u ON u.id = b.user_id WHERE u.principal = ?', String(principal))?.v; } catch { return false; } };
 // accounts of another homeserver (kind 'remote', PROTOCOL §4b) carry remote: true and their homeserver's domain; their username is the whole handle (name@domain)
-const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, [NOOKARA_ID_FIELD]: u.nookara_id || null, ...(u.kind === 'remote' ? { remote: true, domain: u.domain, handle: u.username } : {}), ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
+const userView = u => (u ? { id: u.principal, kind: u.kind, username: u.username, display_name: u.display_name, pfp: u.pfp || null, ...nookaraIdFields(u.nookara_id), ...(u.kind === 'remote' ? { remote: true, domain: u.domain, handle: u.username } : {}), ...(u.kind === 'bot' ? { bot: true, ...(botVerified(u.principal) ? { verified: true } : {}) } : {}) } : null);
 const userById = id => db.get('SELECT * FROM users WHERE id = ?', id);
 const userByPrincipal = p => db.get('SELECT * FROM users WHERE principal = ?', String(p));
 

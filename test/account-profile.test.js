@@ -117,6 +117,10 @@ test('the sync marker is kept with the profile and can be switched off', async (
   assert.equal((await member.a.get('/api/v1/me/profile')).body.sync.stamp, 'abc');
   assert.equal((await member.a.patch('/api/v1/me/profile', { bio: 'still synced' })).body.sync.velora_id, '42'); // other edits leave it alone
   assert.equal((await member.a.patch('/api/v1/me/profile', { sync: null })).body.sync, null);
+  // the new name of the field works the same, and both names come back
+  const v2 = (await member.a.patch('/api/v1/me/profile', { sync: { nookara_id: '43', stamp: 'def' } })).body.sync;
+  assert.deepEqual([v2.nookara_id, v2.velora_id, v2.stamp], ['43', '43', 'def']);
+  assert.equal((await member.a.patch('/api/v1/me/profile', { sync: null })).body.sync, null);
 });
 
 test('a moderator reset clears the account profile too, and stops the sync', async () => {

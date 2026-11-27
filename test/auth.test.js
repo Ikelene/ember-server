@@ -62,7 +62,7 @@ test('POST /auth/nookara: login, principal user, scopes, profile refresh', async
   const a = api(inst.url);
   const r = await a.post('/api/v1/auth/nookara', { token: idp.mint({ sub: '555', username: 'nat', scp: ['chat', 'media'] }) });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.user, { id: 'v:555', kind: 'velora', username: 'nat', display_name: 'nat', pfp: null, velora_id: '555' });
+  assert.deepEqual(r.body.user, { id: 'v:555', kind: 'velora', username: 'nat', display_name: 'nat', pfp: null, nookara_id: '555', velora_id: '555' });
   const me = await api(inst.url, r.body.session).get('/api/v1/me');
   assert.deepEqual(me.body.scopes, ['chat', 'media']);
   const again = await a.post('/api/v1/auth/nookara', { token: idp.mint({ sub: '555', username: 'nat2', display_name: 'Nat Two', pfp: 'https://nookara.test/p.png', scp: ['chat'] }) });
@@ -78,7 +78,8 @@ test('POST /auth/nookara: login, principal user, scopes, profile refresh', async
 
 test('EMBER_OWNER pre-claims the instance; discovery shows the nookara block', async () => {
   const wk = (await api(inst.url).get('/.well-known/ember')).body;
-  assert.equal(wk.accounts_mode, 'velora');
+  assert.equal(wk.accounts_mode, 'nookara');
+  assert.equal((await api(inst.url).get('/.well-known/bonfire')).body.accounts_mode, 'velora', 'the old path keeps the old value');
   assert.equal(wk.claimed, true);
   assert.equal(wk.public_url, 'https://chat.test');
   assert.deepEqual(wk.nookara, { issuer: 'http://nookara.test', jwks_url: 'http://nookara.test/.well-known/bonfire/jwks.json', signing_issuers: ['http://nookara.test'] });

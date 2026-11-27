@@ -29,7 +29,8 @@ let alice, bob, carol, sid, generalCid, voiceCid;
 test('discovery, CORS and preflight', async () => {
   const r = await api(base).get('/.well-known/ember');
   assert.equal(r.status, 200);
-  assert.equal(r.body.software, 'bonfire-server');
+  assert.equal(r.body.software, 'ember-server');
+  assert.equal((await api(base).get('/.well-known/bonfire')).body.software, 'bonfire-server'); // (released clients read the old path)
   assert.equal(r.body.protocol, 1);
   assert.equal(r.body.accounts_mode, 'local');
   assert.equal(r.body.claimed, false);

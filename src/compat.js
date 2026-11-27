@@ -28,10 +28,12 @@ const LEGACY_NOOKARA_HOSTS = LEGACY_NOOKARA_ORIGINS.map(o => new URL(o).hostname
 
 // ---------------------------------------------------------------- discovery + config
 const WELL_KNOWN = '/.well-known/ember', LEGACY_WELL_KNOWN = '/.well-known/bonfire'; // both serve the discovery document
-// TODO protocol v2: the `software` name clients and Nookara read in discovery / instance info
-const SOFTWARE = 'bonfire-server';
-// accounts_mode is "nookara" in config.json; "velora" is still read (and rewritten). On the wire (discovery, the admin
-// settings, registration with Nookara) it is still "velora" until clients and Nookara learn the new value (TODO protocol v2).
+// the `software` name in discovery, instance info and GET /. /.well-known/ember says "ember-server"; /.well-known/bonfire, which
+// released Ember builds and the old browser extension read (and require "bonfire-server" there), keeps the old name
+const SOFTWARE = 'ember-server', LEGACY_SOFTWARE = 'bonfire-server';
+// accounts_mode is "nookara" in config.json; "velora" is still read (and rewritten). /.well-known/ember sends "nookara"; the old
+// discovery path, the admin settings, gateway instance_update and the registration with Nookara (which takes only "velora" /
+// "local") still send "velora" for released clients.
 const LEGACY_MODE = 'velora';
 const readMode = v => (v === LEGACY_MODE ? 'nookara' : v);
 const wireMode = v => (v === 'nookara' ? LEGACY_MODE : v);
@@ -49,10 +51,16 @@ const LEGACY_FIELD = { nookara: 'velora', nookara_url: 'velora_url', nookara_reg
 const withLegacy = obj => { const out = { ...obj }; for (const [k, old] of Object.entries(LEGACY_FIELD)) if (k in obj) out[old] = obj[k]; return out; };
 
 // ---------------------------------------------------------------- stored formats (left alone for now)
-// users.kind of a Nookara account, also sent to clients as user.kind (TODO protocol v2)
+// users.kind of a Nookara account, also sent to clients as user.kind. Kept on purpose: it is stored in every
+// database, in exports, and in what other homeservers cached about accounts here (PROTOCOL §3, names on the wire); clients take "velora" and "nookara" alike
 const KIND_NOOKARA = 'velora';
-// the wire name of a Nookara account id on user objects, clone-check, account profile sync and chat_profile_refresh (TODO protocol v2)
-const NOOKARA_ID_FIELD = 'velora_id';
+// the old wire name of a Nookara account id: user objects carry it next to `nookara_id` (NOOKARA_ID_WIRE), and clone-check,
+// account profile sync and chat_profile_refresh take either
+const NOOKARA_ID_FIELD = 'velora_id', NOOKARA_ID_WIRE = 'nookara_id';
+// both names of a Nookara account id on an object sent out
+const nookaraIdFields = v => ({ [NOOKARA_ID_WIRE]: v || null, [NOOKARA_ID_FIELD]: v || null });
+// a Nookara account id from input that may use either name
+const nookaraIdOf = o => (o ? o[NOOKARA_ID_WIRE] ?? o[NOOKARA_ID_FIELD] : undefined);
 // export format: still written as bonfire-export-v1, always read
 const EXPORT_FORMAT = 'bonfire-export-v1';
 const EXPORT_FORMATS = [EXPORT_FORMAT];
@@ -99,7 +107,7 @@ const BOT_API = { avatar: 'bonfire', channelType: 'bonfire_type', extra: 'bonfir
 const GAME_CMD = 'bonfire';
 
 module.exports = {
-  env, legacyName, LEGACY_NOOKARA_ORIGINS, LEGACY_NOOKARA_HOSTS, DB_FILE, LEGACY_DB_FILE, WELL_KNOWN, LEGACY_WELL_KNOWN, SOFTWARE, LEGACY_MODE, readMode, wireMode,
-  LEGACY_CONFIG_KEYS, renameLegacySettings, LEGACY_FIELD, withLegacy, KIND_NOOKARA, NOOKARA_ID_FIELD, EXPORT_FORMAT, EXPORT_FORMATS,
+  env, legacyName, LEGACY_NOOKARA_ORIGINS, LEGACY_NOOKARA_HOSTS, DB_FILE, LEGACY_DB_FILE, WELL_KNOWN, LEGACY_WELL_KNOWN, SOFTWARE, LEGACY_SOFTWARE, LEGACY_MODE, readMode, wireMode,
+  LEGACY_CONFIG_KEYS, renameLegacySettings, LEGACY_FIELD, withLegacy, KIND_NOOKARA, NOOKARA_ID_FIELD, NOOKARA_ID_WIRE, nookaraIdFields, nookaraIdOf, EXPORT_FORMAT, EXPORT_FORMATS,
   NOOKARA_PATHS, relayPath, RELAY_HEADERS, SIGN_CONTEXT, TYP, RECEIPT_TYPS, LEGACY_ROUTES, ERR, WIRE_HOST, APP_UA, BOT_API, GAME_CMD,
 };

@@ -1,6 +1,6 @@
 'use strict';
 // Discovery, instance auth, claiming, instance settings + admins.
-const { KIND_NOOKARA, ERR, SOFTWARE, NOOKARA_PATHS, WELL_KNOWN, LEGACY_WELL_KNOWN, LEGACY_ROUTES, wireMode, withLegacy } = require('../compat');
+const { KIND_NOOKARA, ERR, SOFTWARE, LEGACY_SOFTWARE, NOOKARA_PATHS, WELL_KNOWN, LEGACY_WELL_KNOWN, LEGACY_ROUTES, wireMode, withLegacy } = require('../compat');
 const config = require('../config');
 const db = require('../db');
 const auth = require('../auth');
@@ -16,17 +16,18 @@ const registerLimit = auth.limits.register, loginLimit = auth.limits.login;
 const nookaraLimit = limiter(60, 60 * 1000);
 const claimLimit = limiter(10, 600 * 1000);
 
-function discovery() {
+// legacy: the document at /.well-known/bonfire (released clients): the old software name and accounts_mode value
+function discovery({ legacy = false } = {}) {
   const cfg = config.get();
   const mode = config.mode();
   // withLegacy: the `nookara` object also goes out as `velora` (older clients read that)
   return withLegacy({
-    software: SOFTWARE, version: pkg.version, protocol: 1, protocol_version: 2,
+    software: legacy ? LEGACY_SOFTWARE : SOFTWARE, version: pkg.version, protocol: 1, protocol_version: 2,
     open_protocol: true, protocol_name: 'Ember Instance Protocol', protocol_docs: 'https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md',
     about: "Ember is an open chat protocol, not a Nookara-only product: anyone can write an Ember client and use or run Ember servers. Nookara's web, desktop and Android apps are just the clients the Nookara ecosystem uses.",
     build: V.build(), // PROTOCOL §3: { version, commit, commit_short, commit_date, built_at, dirty, build_id }
     name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
-    accounts_mode: wireMode(mode),
+    accounts_mode: legacy ? wireMode(mode) : mode,
     // signing_issuers: the "iss" a message signature may name here, preferred first (clients sign with the first one they know)
     nookara: mode === 'nookara' ? { issuer: cfg.nookara_url, jwks_url: `${cfg.nookara_url}${NOOKARA_PATHS.jwks}`, signing_issuers: require('../signing').issuers() } : null,
     claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
@@ -62,7 +63,8 @@ function register(app, { restart }) {
   require('../limits').register(app); require('../tiers').register(app); // PROTOCOL §19
   require('../push').register(app); // PROTOCOL §20
   require('../selfupdate').register(app); // GET/POST /api/v1/instance/update (asks hostd to rebuild + recreate this container)
-  for (const p of [WELL_KNOWN, LEGACY_WELL_KNOWN]) app.get(p, { auth: false }, () => discovery());
+  app.get(WELL_KNOWN, { auth: false }, () => discovery());
+  app.get(LEGACY_WELL_KNOWN, { auth: false }, () => discovery({ legacy: true }));
   app.get('/health', { auth: false }, () => ({ ok: true }));
   // PROTOCOL §5c: public build identity; instance admins/owner additionally get uptime, node, live stats and the update check
   app.get('/api/v1/instance/info', { auth: false }, async req => {

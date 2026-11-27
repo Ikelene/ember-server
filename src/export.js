@@ -84,7 +84,7 @@ function exportCommunity(sid, me) {
         let atts = []; try { atts = r.attachments ? JSON.parse(r.attachments) : []; } catch { atts = []; }
         const o = {
           id: String(r.id),
-          author: r.u_principal ? { id: r.u_principal, kind: r.u_kind, username: r.u_username, display_name: r.u_dn, pfp: r.u_pfp || null, [NOOKARA_ID_FIELD]: r.u_vid || null } : null,
+          author: r.u_principal ? { id: r.u_principal, kind: r.u_kind, username: r.u_username, display_name: r.u_dn, pfp: r.u_pfp || null, ...require('./compat').nookaraIdFields(r.u_vid) } : null,
           ...(!r.u_principal && r.author_name ? { author_name: r.author_name, author_avatar: r.author_avatar || null } : {}),
           body: r.body, attachments: atts.map(a => ({ ...a, url: localFile(a.url) })),
           ...(r.embeds ? { embeds: JSON.parse(r.embeds) } : {}),

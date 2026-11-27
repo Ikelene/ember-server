@@ -40,7 +40,7 @@ test('non-browser clients get exactly the old JSON at /', async () => {
     assert.equal(r.status, 200);
     assert.match(r.headers.get('content-type'), /application\/json/);
     const j = await r.json();
-    assert.equal(j.software, 'bonfire-server');
+    assert.equal(j.software, 'ember-server');
     assert.equal(j.discovery, '/.well-known/ember');
     assert.deepEqual(Object.keys(j).sort(), ['about', 'discovery', 'open_protocol', 'protocol', 'protocol_docs', 'software', 'version']);
   }
@@ -123,5 +123,5 @@ test('other paths are untouched for browsers too', async () => {
   assert.match(await nf.text(), /Not found/);
   assert.deepEqual(await (await get('/nope')).json(), { error: 'not_found' });
   const wk = await get('/.well-known/ember', BROWSER);
-  assert.equal((await wk.json()).software, 'bonfire-server');
+  assert.equal((await wk.json()).software, 'ember-server');
 });

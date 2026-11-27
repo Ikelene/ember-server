@@ -39,7 +39,7 @@ test('local owner switches to Nookara accounts, then claims it back with a Nooka
 
   await boot(dir); // the restart the mode change needs
   const info = (await api(inst.url).get('/.well-known/ember')).body;
-  assert.equal(info.accounts_mode, 'velora');
+  assert.equal(info.accounts_mode, 'nookara');
   assert.equal(info.claimed, false, 'the stranded owner counts as unclaimed');
   assert.equal(codeIn(dir), r.body.handover_code, 'the code from before the restart still works');
 

@@ -709,7 +709,7 @@ test('a homeserver that hosts no accounts: no login block, no /login', async () 
     base = other.url;
     const doc = (await api(base).get('/.well-known/ember')).body;
     assert.equal(doc.login, undefined);
-    assert.equal(doc.accounts_mode, 'velora');
+    assert.equal(doc.accounts_mode, 'nookara');
     assert.deepEqual(doc.accounts, { hosts_accounts: false, registration: 'closed', remote_accounts: { mode: 'allowlist' } });
     const a = authz({ redirect_uri: 'https://nookara.cc/ember/auth/callback.html' });
     assert.equal((await browser().get('/login?' + a.qs)).status, 404);

@@ -1,6 +1,6 @@
 'use strict';
 // Messages: post / edit / delete / reactions / pins / read state / search, plus signature handling (PROTOCOL §8).
-const { KIND_NOOKARA, NOOKARA_ID_FIELD, APP_UA } = require('./compat');
+const { KIND_NOOKARA, NOOKARA_ID_FIELD, APP_UA, nookaraIdFields } = require('./compat');
 const config = require('./config');
 const db = require('./db');
 const auth = require('./auth');
@@ -45,11 +45,11 @@ function identityView(subjectId, subjectParts, subjectName, subjectPrincipal, fa
   if (subjectId != null && parts) return { body: parts.map(p => (p === null ? (subjectName ? '@' + subjectName : 'Deleted account') : p)).join(''), subject: { id: subjectPrincipal, username: subjectName || null }, body_parts: parts };
   return { body: fallback };
 }
-const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, [NOOKARA_ID_FIELD]: vid || null, ...(kind === 'remote' ? { remote: true, domain: String(principal).slice(String(principal).lastIndexOf('@') + 1), handle: username } : {}), ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
+const person = (principal, kind, username, dn, pfp, vid) => ({ id: principal, kind, username, display_name: dn, pfp: pfp || null, ...nookaraIdFields(vid), ...(kind === 'remote' ? { remote: true, domain: String(principal).slice(String(principal).lastIndexOf('@') + 1), handle: username } : {}), ...(kind === 'bot' ? { bot: true, ...(require('./auth').botVerified(principal) ? { verified: true } : {}) } : {}) });
 // the same person with their nickname on snap's server (display_name = the nick, global_display_name = their own name)
 const nicked = (p, snap, userId) => { const n = p && userId != null && snap?.nick ? snap.nick(userId) : null; return n ? { ...p, display_name: n, global_display_name: p.display_name, nick: n } : p; };
 // webhook / bridged posts: a name and picture, no account
-const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, [NOOKARA_ID_FIELD]: null, name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
+const outsider = (name, avatar, bridge, from) => ({ id: null, kind: null, username: name, display_name: name, pfp: avatar || null, ...nookaraIdFields(null), name_only: true, webhook: true, ...(bridge ? { bridge } : {}), ...(from ? { bridge_from: from } : {}) });
 // author.bridge_from (where a bridged post was relayed from: a Velocity backend, "Discord" via CloudLink...) lives in bridge/store.js
 const bridgeFrom = id => { try { return require('./bridge/store').fromOf(id); } catch { return null; } };
 // alias: a bot posting under another name and picture ({ name, avatar_url }). author stays the real bot everywhere
@@ -117,10 +117,10 @@ function messageView(r, snap) {
   const author = r.system ? null
     : r.u_principal ? nicked(person(r.u_principal, r.u_kind, r.u_username, r.u_dn, r.u_pfp, r.u_vid), snap, r.user_id)
     : (r.webhook_id || r.bridge) ? outsider(r.author_name || 'Webhook', r.author_avatar, r.bridge, r.bridge ? bridgeFrom(r.id) : null)
-    : r.author_name ? { id: null, kind: null, username: r.author_name, display_name: r.author_name, pfp: r.author_avatar || null, [NOOKARA_ID_FIELD]: null, name_only: true } : null;
+    : r.author_name ? { id: null, kind: null, username: r.author_name, display_name: r.author_name, pfp: r.author_avatar || null, ...nookaraIdFields(null), name_only: true } : null;
   const replyAuthor = r.r_system ? null
     : r.r_principal ? nicked(person(r.r_principal, r.r_kind, r.r_username, r.r_dn, r.r_pfp, r.r_vid), snap, r.r_user_id)
-    : r.r_author_name ? { id: null, kind: null, username: r.r_author_name, display_name: r.r_author_name, pfp: null, [NOOKARA_ID_FIELD]: null, name_only: true } : null;
+    : r.r_author_name ? { id: null, kind: null, username: r.r_author_name, display_name: r.r_author_name, pfp: null, ...nookaraIdFields(null), name_only: true } : null;
   const rid = id => snap.roles.find(x => x.id === Number(id))?.rid;
   const rep = r.r_id ? identityView(r.r_subject_user_id, r.r_subject_parts, r.r_subject_username, r.r_subject_principal, r.r_body || '') : null;
   return {

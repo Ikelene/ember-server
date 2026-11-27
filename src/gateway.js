@@ -193,7 +193,7 @@ async function onFrame(sock, msg) {
         for (const s of V().socketsIn(room)) send(s, { type: 'voice_sound', by: me.username, channel: ch.cid, sound: r.sound });
         break;
       }
-      case 'chat_profile_refresh': require('./profiles').nudge(msg.nookara_id ?? msg[NOOKARA_ID_FIELD]).catch(() => {}); break; // Ember saw a live Nookara profile change: pull it now
+      case 'chat_profile_refresh': require('./profiles').nudge(require('./compat').nookaraIdOf(msg)).catch(() => {}); break; // Ember saw a live Nookara profile change: pull it now
       case 'chat_read': M().markRead(msg.channel, me, msg.message_id ?? msg.id); break;
       // which clients a member is connected with (PROTOCOL §7.1): the person themselves or Manage users holders only
       case 'chat_clients_watch': reply({ type: 'chat_clients', ...CL().watch(sock, me, msg.server, msg.user_id) }); break;

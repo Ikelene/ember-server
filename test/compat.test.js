@@ -66,7 +66,7 @@ test('boot: bonfire.db becomes ember.db, config.json velora keys become nookara 
     const base = srv.url;
     const now = await (await fetch(base + compat.WELL_KNOWN)).json();
     const old = await (await fetch(base + compat.LEGACY_WELL_KNOWN)).json();
-    assert.equal(now.accounts_mode, 'velora');
+    assert.deepEqual([now.accounts_mode, old.accounts_mode, now.software, old.software], ['nookara', 'velora', 'ember-server', 'bonfire-server']); // (the old path: released clients)
     assert.deepEqual(now.nookara, now.velora);
     assert.equal(now.nookara.issuer, 'https://nookara.cc');
     assert.deepEqual(Object.keys(old).sort(), Object.keys(now).sort());

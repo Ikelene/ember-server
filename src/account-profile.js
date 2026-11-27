@@ -3,7 +3,7 @@
 // and pronouns are kept here, on the server (a Nookara account's come from Nookara). A client that is also signed in to Nookara can copy
 // that profile over and keep it in sync: the client does the copying, `sync` only remembers which Nookara account it follows and the
 // stamp of the last copy, so every device of the account knows whether there is anything new to bring over.
-const { NOOKARA_ID_FIELD } = require('./compat');
+const { NOOKARA_ID_FIELD, nookaraIdFields, nookaraIdOf } = require('./compat');
 const db = require('./db');
 const auth = require('./auth');
 const { err, clean, now } = require('./util');
@@ -21,7 +21,7 @@ function stored(u) {
   let o = null; try { o = u?.account_profile ? JSON.parse(u.account_profile) : null; } catch { /* nothing */ }
   const out = {};
   for (const k of FIELDS) if (typeof o?.[k] === 'string' && o[k]) out[k] = o[k];
-  if (o?.sync && isNookaraId(o.sync[NOOKARA_ID_FIELD])) out.sync = { [NOOKARA_ID_FIELD]: String(o.sync[NOOKARA_ID_FIELD]), stamp: typeof o.sync.stamp === 'string' ? o.sync.stamp.slice(0, STAMP_MAX) : '', at: Number(o.sync.at) || 0 };
+  if (o?.sync && isNookaraId(nookaraIdOf(o.sync))) out.sync = { ...nookaraIdFields(String(nookaraIdOf(o.sync))), stamp: typeof o.sync.stamp === 'string' ? o.sync.stamp.slice(0, STAMP_MAX) : '', at: Number(o.sync.at) || 0 };
   return out;
 }
 const mine = u => { if (!auth.profileHere(u)) throw err('local_accounts_only', 400); return auth.userById(u.id); };
@@ -78,12 +78,12 @@ function update(me, body = {}) {
     if (body.color && !isHex(body.color)) throw err('invalid_color');
     if (body.color) data.color = String(body.color).toLowerCase(); else delete data.color;
   }
-  // sync: null / false = off; { <NOOKARA_ID_FIELD>, stamp } = this profile follows that Nookara account, last copied at `stamp`
+  // sync: null / false = off; { nookara_id (or velora_id), stamp } = this profile follows that Nookara account, last copied at `stamp`
   if (body.sync !== undefined) {
     if (!body.sync) delete data.sync;
     else {
-      if (typeof body.sync !== 'object' || !isNookaraId(body.sync[NOOKARA_ID_FIELD]) || (body.sync.stamp != null && (typeof body.sync.stamp !== 'string' || body.sync.stamp.length > STAMP_MAX))) throw err('invalid_sync');
-      data.sync = { [NOOKARA_ID_FIELD]: String(body.sync[NOOKARA_ID_FIELD]), stamp: body.sync.stamp || '', at: now() };
+      if (typeof body.sync !== 'object' || !isNookaraId(nookaraIdOf(body.sync)) || (body.sync.stamp != null && (typeof body.sync.stamp !== 'string' || body.sync.stamp.length > STAMP_MAX))) throw err('invalid_sync');
+      data.sync = { [NOOKARA_ID_FIELD]: String(nookaraIdOf(body.sync)), stamp: body.sync.stamp || '', at: now() };
     }
   }
   return write(u, { display_name: name, data });

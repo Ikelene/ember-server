@@ -112,7 +112,7 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 `GET INSTANCE/.well-known/ember` is public and returns (`GET INSTANCE/.well-known/bonfire` still serves the same document):
 ```json
 {
-  "software": "bonfire-server", "version": "0.1.0", "protocol": 1, "protocol_version": 2,
+  "software": "ember-server", "version": "0.1.0", "protocol": 1, "protocol_version": 2,
   "open_protocol": true, "protocol_name": "Ember Instance Protocol", "protocol_docs": "https://github.com/Ikelene/ember-server/blob/main/PROTOCOL.md", "about": "<one sentence: Ember is open, anyone can write a client or server>",
   "name": "My Instance", "description": "", "icon_url": null,
   "public_url": "http://localhost:4100", "previous_urls": [],
@@ -140,7 +140,8 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "instance_key": "<b64url raw 32-byte Ed25519 public key>", "instance_id": "ik_…"
 }
 ```
-- `accounts_mode` is still `"velora"` on the wire for a Nookara-accounts instance (older clients compare against it); `software` is still `"bonfire-server"`. Both change in protocol v2.
+- **Names on the wire (protocol v2).** `/.well-known/ember` says `software: "ember-server"` and `accounts_mode: "nookara"` for a Nookara-accounts instance (`/api/v1/instance/info` and `GET /` say `ember-server` too). `/.well-known/bonfire` serves the same document with the old values, `software: "bonfire-server"` and `accounts_mode: "velora"`: released Ember builds and the old browser extension read that path and require them. Clients should accept both spellings everywhere. These keep the old value for now, because released clients or Nookara's registration read it: the admin settings, the gateway `instance_update` and the registration with Nookara (`accounts_mode: "velora"`).
+- **What is not renamed, and why.** Account ids keep their formats: `v:<id>` for a Nookara account, `l:<n>`, `b:<n>`, and `<id>@<domain>` across homeservers. They are stored in every database, written into exports, signed into messages (§2.3), and cached by other homeservers (friends, DM pointers, memberships), so changing them would break what already exists. For the same reason a Nookara account's `user.kind` stays `"velora"` (it is the stored `users.kind`). Clients take `"velora"` and `"nookara"` alike. User objects carry the Nookara account id as `nookara_id` and also as the old `velora_id`. Inputs take either name: `chat_profile_refresh`, the account profile's `sync`, and `GET /api/v1/clone-check`. The export format name stays `bonfire-export-v1`.
 - `registration` applies only to local mode.
 - `accounts` and `login` are the homeserver's account settings and where to sign in (§4a); `login` is only there when accounts are hosted here. `accounts_mode` and `registration` stay for old clients.
 - `features.signing` is false in local mode. `features.youtube` is true only when the optional yt-dlp player works (§15).
