@@ -20,18 +20,22 @@ const tokenLimit = limiter(120, 60 * 1000);
 const startLimit = limiter(60, 600 * 1000);
 
 // ---------- csrf: a token in a cookie and in every form (double submit) ----------
-const COOKIE = 'ember_csrf';
+// Over https it is a __Host- cookie (Secure, Path=/, no Domain): a sibling subdomain cannot plant one, so nobody can make
+// a browser carry a csrf value they know (which would let them bind a sign-in or a pending link to it). Over plain http
+// (development) browsers refuse __Host- cookies, so it keeps the old name and path there
+const https = () => config.publicUrl().startsWith('https:');
+const cookieName = () => (https() ? '__Host-ember_csrf' : 'ember_csrf');
 const cookies = req => Object.fromEntries(String(req.headers.cookie || '').split(';').map(c => { const i = c.indexOf('='); return i < 0 ? ['', ''] : [c.slice(0, i).trim(), c.slice(i + 1).trim()]; }));
 function csrf(req) {
-  const have = cookies(req)[COOKIE];
+  const have = cookies(req)[cookieName()];
   if (have && /^[A-Za-z0-9_-]{43}$/.test(have)) return { token: have, set: [] };
   const token = b64url(crypto.randomBytes(32));
-  return { token, set: [`${COOKIE}=${token}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=3600${config.publicUrl().startsWith('https:') ? '; Secure' : ''}`] };
+  return { token, set: [https() ? `__Host-ember_csrf=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600; Secure` : `ember_csrf=${token}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=3600`] };
 }
-const csrfOk = (req, sent) => { const have = cookies(req)[COOKIE]; return !!have && typeof sent === 'string' && sent.length > 0 && safeEqual(have, sent); };
+const csrfOk = (req, sent) => { const have = cookies(req)[cookieName()]; return !!have && typeof sent === 'string' && sent.length > 0 && safeEqual(have, sent); };
 // the same cookie binds what a flow keeps between requests (an outside login's state, a login waiting to be linked) to the
 // browser that started it: a link someone else sends you carries their entry, which your browser's cookie does not match
-const boundHere = (req, bind) => { const have = cookies(req)[COOKIE]; return typeof bind === 'string' && !!have && safeEqual(have, bind); };
+const boundHere = (req, bind) => { const have = cookies(req)[cookieName()]; return typeof bind === 'string' && !!have && safeEqual(have, bind); };
 
 // ---------- small stores (ten minutes, used once) ----------
 function store() {

@@ -276,6 +276,15 @@ test('/login: the page, redirect_uri rules, errors back to the client', async ()
   assert.equal(pg.headers.get('access-control-allow-origin'), null);
   assert.match(pg.headers.get('content-security-policy'), /form-action 'self' https:\/\/app\.example/);
   assert.match(pg.headers.get('set-cookie'), /^ember_csrf=[\w-]{43}; Path=\/login; HttpOnly; SameSite=Lax/);
+  // over https it is a __Host- cookie: no sibling subdomain can plant one; a planted plain ember_csrf counts for nothing
+  const was = config.get().public_url;
+  config.update({ public_url: 'https://chat.example' });
+  try {
+    const sec = await browser().get('/login?' + a.qs);
+    assert.match(sec.headers.get('set-cookie'), /^__Host-ember_csrf=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=3600; Secure$/);
+    const planted = await fetch(base + '/login', { method: 'POST', headers: { Cookie: 'ember_csrf=' + 'p'.repeat(43), 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' }, body: new URLSearchParams({ ...a.q, csrf: 'p'.repeat(43), action: 'login', username: 'x', password: 'y' }).toString(), redirect: 'manual' });
+    assert.equal(planted.status, 403);
+  } finally { config.update({ public_url: was }); }
   assert.match(pg.text, /name="password"/);
   assert.match(pg.text, /Continue with Corp SSO/);
   assert.match(pg.text, /Create account/);

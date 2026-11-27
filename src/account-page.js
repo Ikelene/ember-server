@@ -31,12 +31,15 @@ const ERRORS = {
 
 // ---------- cookies and the session ----------
 const secure = () => (config.publicUrl().startsWith('https:') ? '; Secure' : '');
-const cookie = (name, value, maxAge) => `${name}=${value}; Path=/account; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure()}`;
+// over https the cookies are __Host- ones (Secure, Path=/, no Domain): a sibling subdomain cannot plant a session or a
+// sign-in state here. Plain http (development) keeps the plain names under /account
+const named = name => (secure() ? '__Host-' + name : name);
+const cookie = (name, value, maxAge) => (secure() ? `__Host-${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Secure` : `${name}=${value}; Path=/account; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`);
 const cookies = req => Object.fromEntries(String(req.headers.cookie || '').split(';').map(c => { const i = c.indexOf('='); return i < 0 ? ['', ''] : [c.slice(0, i).trim(), c.slice(i + 1).trim()]; }));
 const csrfOf = token => crypto.createHash('sha256').update('ember-account-csrf\n' + token).digest('base64url');
 // -> { token, user, family, hash } | null
 function session(req) {
-  const token = cookies(req)[COOKIE];
+  const token = cookies(req)[named(COOKIE)];
   const s = token && /^[A-Za-z0-9_-]{20,200}$/.test(token) ? auth.resolveSession(token) : null;
   return s && auth.hostedHere(s.user) && !s.user.banned ? { token, user: s.user, family: s.family, hash: s.hash } : null;
 }
@@ -49,7 +52,7 @@ function toLogin(res) {
   page.redirect(res, '/login?' + q, [cookie(LOGIN_COOKIE, `${state}.${verifier}`, 600)]);
 }
 function callback(req, res) {
-  const [state, verifier] = String(cookies(req)[LOGIN_COOKIE] || '').split('.');
+  const [state, verifier] = String(cookies(req)[named(LOGIN_COOKIE)] || '').split('.');
   const clear = cookie(LOGIN_COOKIE, '', 0);
   const fail = text => page.send(res, 400, page.messagePage({ title: 'Signing in did not work', text, bad: true, links: [{ href: '/account', label: 'Try again' }] }), { cookies: [clear] });
   if (req.query.error) return fail(req.query.error === 'access_denied' ? 'The sign-in was cancelled.' : 'Something went wrong. Try again.');
