@@ -51,19 +51,24 @@ async function discover(domain) {
   if (jwks.origin !== origin) throw new Error('bad_jwks_uri'); // the keys live on the homeserver itself
   return { origin, jwks_uri: jwks.href, ...socialUrls(doc.social, origin) };
 }
-// domain -> { origin, jwks_uri, api_url, s2s_url } (cached for an hour; a failure for a minute). Throws 502 homeserver_unreachable { reason }
+// is there an answer for this domain, good or bad, that is still fresh? (nothing would be fetched for it)
+const known = domain => { const hit = homeservers.get(domain); return !!hit && Date.now() - hit.at < (hit.error ? FAIL_TTL : HS_TTL); };
+// domain -> { origin, jwks_uri, api_url, s2s_url } (cached for an hour; a failure for a minute). Throws 502 homeserver_unreachable { reason }.
+// One lookup per domain at a time: requests that arrive meanwhile wait for it
+const looking = new Map(); // domain -> promise
 async function homeserver(domain) {
   const hit = homeservers.get(domain), t = Date.now();
   if (hit && t - hit.at < (hit.error ? FAIL_TTL : HS_TTL)) { if (hit.error) throw unreachable(domain, hit.error); return hit; }
-  try {
-    const found = await discover(domain);
-    homeservers.set(domain, { at: Date.now(), ...found });
-  } catch (e) {
-    if (homeservers.size > 5000) homeservers.clear();
-    homeservers.set(domain, { at: Date.now(), error: e.message || 'unreachable' });
-    throw unreachable(domain, e.message || 'unreachable');
+  if (!looking.has(domain)) {
+    looking.set(domain, (async () => {
+      try { homeservers.set(domain, { at: Date.now(), ...(await discover(domain)) }); }
+      catch (e) { if (homeservers.size > 5000) homeservers.clear(); homeservers.set(domain, { at: Date.now(), error: e.message || 'unreachable' }); }
+    })().finally(() => looking.delete(domain)));
   }
-  return homeservers.get(domain);
+  await looking.get(domain);
+  const got = homeservers.get(domain);
+  if (!got || got.error) throw unreachable(domain, got?.error || 'unreachable');
+  return got;
 }
 
 // missingKid: the forced refetch names the kid it is after (`?kid=`), so a homeserver that republishes other keys
@@ -110,4 +115,4 @@ const _test = {
   ageJwks(origin, ms) { const e = jwksCache.get(origin); if (e) { e.at -= ms; e.forced -= ms; } },
   jwksCache, homeservers,
 };
-module.exports = { homeserver, keyFor, addresses, forget, _test };
+module.exports = { homeserver, known, keyFor, addresses, forget, _test };

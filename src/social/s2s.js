@@ -11,7 +11,7 @@ const config = require('../config');
 const db = require('../db');
 const auth = require('../auth');
 const safe = require('../safe-http');
-const { err, now } = require('../util');
+const { err, now, limiter } = require('../util');
 const keys = require('../federation/keys');
 const R = require('../federation/rules');
 const resolve = require('../federation/resolve');
@@ -145,9 +145,22 @@ function parseHeader(v) {
   if (!R.isDomain(domain) || !kid || kid.length > 100 || !/^\d{1,12}$/.test(p.created || '') || !/^[A-Za-z0-9_-]{1,200}$/.test(p.sig || '')) return null;
   return { domain, kid, created: Number(p.created), sig: Buffer.from(p.sig, 'base64url') };
 }
+// Before a signature can be checked the sender's keys have to be found (its /.well-known/ember, its JWKS), and that is work
+// anyone can ask for with a made-up keyId. So: signed requests are limited per address, a domain nothing is known about yet
+// may be looked up only so often per address, and only so many such lookups run at once
+const ipLimit = limiter(600, 60 * 1000), lookupLimit = limiter(30, 10 * 60 * 1000);
+let MAX_LOOKUPS = 16, lookups = 0;
+async function lookedUp(domain, ip, fn) {
+  if (resolve.known(domain)) return fn();
+  if (!lookupLimit.hit(ip)) throw err('rate_limited', 429);
+  if (lookups >= MAX_LOOKUPS) throw err('busy', 503);
+  lookups++;
+  try { return await fn(); } finally { lookups--; }
+}
 // who sent this request. -> { domain, origin, ips }. Throws the errors of §4c, in its order: nothing is fetched for a
 // homeserver that is not let in
 async function verify(req) {
+  if (!ipLimit.hit(req.ip || '')) throw err('rate_limited', 429);
   const p = parseHeader(req.headers['ember-signature']);
   if (!p) throw err('invalid_signature_header', 401);
   const { domain } = p, named = req.headers['x-ember-homeserver'];
@@ -158,8 +171,7 @@ async function verify(req) {
   if (domain === config.domain()) throw err('own_homeserver', 400);
   if (denylist.check({ domain })) throw err('homeserver_denied', 403);
   if (!remote.domainAllowed(domain)) throw err('homeserver_not_allowed', 403, { domain });
-  const hs = await resolve.homeserver(domain);
-  const key = await resolve.keyFor(domain, hs, p.kid);
+  const { hs, key } = await lookedUp(domain, req.ip || '', async () => { const h = await resolve.homeserver(domain); return { hs: h, key: await resolve.keyFor(domain, h, p.kid) }; });
   if (!key) throw err('unknown_kid', 401);
   // signed for this homeserver and nobody else: the host is the one of our own public address
   const signed = Buffer.from(canonical({ method: req.method, target: req.url, host: new URL(config.publicUrl()).host, created: p.created, body: req.rawBody }));
@@ -207,5 +219,5 @@ const discovery = () => ({ social: where.urls() });
 
 module.exports = {
   PREFIX, MAX_AGE, canonical, digest, sign, request, call, later, after, start, stop, idle, verify, parties, localAccount, on, register, discovery, assertPeer,
-  _test: { setRetry(list) { RETRY = list; }, setMaxAge(ms) { MAX_QUEUE_AGE = ms; } },
+  _test: { setRetry(list) { RETRY = list; }, setMaxAge(ms) { MAX_QUEUE_AGE = ms; }, ipLimit, lookupLimit, setMaxLookups(n) { MAX_LOOKUPS = n; } },
 };

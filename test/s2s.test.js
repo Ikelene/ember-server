@@ -141,6 +141,28 @@ test('requests are counted per homeserver', async () => {
   limits.reset();
 });
 
+test('made-up keyIds cannot make this homeserver fetch for them: lookups of unknown domains are limited per address and in number', async () => {
+  accept('all');
+  const s2s = require('../src/social/s2s');
+  s2s._test.lookupLimit.reset(); s2s._test.ipLimit.reset();
+  const known = await mock('known.example');
+  assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200); // (now known)
+  // too many lookups running at once: 503 busy, while known domains go on
+  s2s._test.setMaxLookups(0);
+  let r = await known.s2s(base, 'POST', '/ping', {}, { signAs: 'nowhere-a.example' });
+  assert.deepEqual([r.status, r.body.error], [503, 'busy']);
+  assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200);
+  s2s._test.setMaxLookups(16); s2s._test.lookupLimit.reset();
+  // 30 unknown domains in ten minutes from one address, then 429; a failed lookup is remembered and not counted again
+  const codes = [];
+  for (let i = 0; i < 31; i++) codes.push((await known.s2s(base, 'POST', '/ping', {}, { signAs: `made-up-${i}.example` })).status);
+  assert.deepEqual([codes.slice(0, 30).every(c => c !== 429), codes[30]], [true, 429]);
+  r = await known.s2s(base, 'POST', '/ping', {}, { signAs: 'made-up-0.example' });
+  assert.notEqual(r.status, 429);
+  assert.equal((await known.s2s(base, 'POST', '/ping', {})).status, 200);
+  s2s._test.lookupLimit.reset();
+});
+
 test('the outbox: kept in the database until answered, carried on after a restart, the newest of a key replaces one waiting, given up when too old', async () => {
   accept('all');
   const s2s = require('../src/social/s2s'), db = require('../src/db');
