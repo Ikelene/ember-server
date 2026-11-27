@@ -131,8 +131,9 @@ async function refresh() {
 // sessions of remote accounts that are denied now end (their sockets close)
 function enforce() {
   const gone = [];
-  for (const u of db.all("SELECT id, principal, domain FROM users WHERE kind = 'remote' AND domain IS NOT NULL")) {
-    if (!check({ domain: u.domain, ips: seen.ipsOf(u.domain), sub: u.principal })) continue;
+  for (const u of db.all("SELECT id, principal, username, domain FROM users WHERE kind = 'remote' AND domain IS NOT NULL")) {
+    // an account entry may name the stable id or the handle (users.username of a remote account is its handle)
+    if (!check({ domain: u.domain, ips: seen.ipsOf(u.domain), sub: u.principal, handle: u.username })) continue;
     const n = db.run('DELETE FROM sessions WHERE user_id = ?', u.id).changes + db.run('DELETE FROM refresh_tokens WHERE user_id = ?', u.id).changes;
     if (n) gone.push(u.id);
     require('../gateway').closeUsers([u.id], 4003, 'homeserver_denied');

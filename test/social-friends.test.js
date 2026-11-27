@@ -141,6 +141,11 @@ test('a homeserver can only speak for its own accounts', async () => {
   config.update({ federation: { deny: ['l:9@m.example'] } }); // one account on the deny list
   r = await mockHs.s2s(baseB, 'POST', '/friend_request', { from: 'l:9@m.example', to: BOB });
   assert.deepEqual([r.status, r.body.error], [403, 'homeserver_denied']);
+  // an entry that names the handle catches the account too, once its handle is known here
+  require('../src/social/people').remember('user', 'l:9@m.example', { id: 'l:9@m.example', handle: 'mia@m.example', display_name: 'Mia', avatar_url: null });
+  config.update({ federation: { deny: ['MIA@m.example'] } });
+  r = await mockHs.s2s(baseB, 'POST', '/friend_request', { from: 'l:9@m.example', to: BOB });
+  assert.deepEqual([r.status, r.body.error], [403, 'homeserver_denied']);
   config.update({ federation: { deny: [] } });
   assert.equal((await bea.a.del(`/api/v2/social/friends/${enc('l:9@m.example')}`)).status, 200); // turned down
 });

@@ -181,12 +181,19 @@ function localAccount(id) {
   if (!auth.hostedHere(u) || u.banned) throw err('user_not_found', 404);
   return u;
 }
+// the handle we know for an account of another homeserver (its user row here, or what was cached about it), for deny-list
+// entries that name the handle rather than the stable id
+function handleOf(sub) {
+  const u = db.get("SELECT username FROM users WHERE kind = 'remote' AND principal = ?", sub);
+  if (u) return u.username;
+  try { const r = db.get("SELECT body FROM social_cache WHERE kind IN ('user', 'profile') AND id = ? ORDER BY fetched_at DESC LIMIT 1", sub); return r ? JSON.parse(r.body).handle || null : null; } catch { return null; }
+}
 // the two accounts of a call: `from` belongs to the homeserver that signed it, `to` lives here. -> { from: "id@domain", to: user row }
 function parties(body, hs) {
   const from = R.parseSub(body?.from);
   if (!from || typeof body.to !== 'string') throw err('invalid_request', 400);
   if (from.domain !== hs.domain) throw err('from_mismatch', 403);
-  if (denylist.check({ domain: hs.domain, ips: hs.ips, sub: body.from })) throw err('homeserver_denied', 403);
+  if (denylist.check({ domain: hs.domain, ips: hs.ips, sub: `${from.id}@${from.domain}`, handle: handleOf(`${from.id}@${from.domain}`) })) throw err('homeserver_denied', 403);
   return { from: `${from.id}@${from.domain}`, to: localAccount(body.to) };
 }
 // a route under /_ember/s2s/v1: fn(req, hs) runs once the signature holds
