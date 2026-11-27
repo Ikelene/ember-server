@@ -15,6 +15,8 @@ const { esc } = page;
 const COOKIE = 'ember_account', LOGIN_COOKIE = 'ember_account_login';
 const CALLBACK = '/account/auth/callback.html';
 const DM_FROM = { friends: 'My friends', anyone: 'Anyone', nobody: 'Nobody' };
+// where a Nookara account's DM privacy is kept (config social.api_url's site), for the link on the page
+const socialOrigin = () => { try { return new URL(require('./social/where').urls().api_url).origin; } catch { return ''; } };
 const NOTES = {
   profile: 'Profile saved.', avatar: 'Picture saved.', avatar_removed: 'Picture removed.', dm: 'DM privacy saved.', session: 'That session was signed out.',
   unlinked: 'That sign-in method was removed.', linked: 'Sign-in method added.',
@@ -135,7 +137,10 @@ function render(s, { note, error } = {}) {
     <label for="pic">Picture (PNG, JPEG, GIF or WebP, up to 4 MB)</label><input id="pic" type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
     <div class="inline"><button class="btn" type="submit">Upload picture</button>${u.pfp ? `<button class="btn" type="submit" formaction="/account/avatar/remove" formenctype="application/x-www-form-urlencoded" formnovalidate>Remove picture</button>` : ''}</div>
   </form>`}</section>
-${elsewhere ? '' : `
+${elsewhere ? `
+  <section aria-labelledby="h-dm"><h2 id="h-dm">DM privacy</h2>
+  <p class="sub">Who can start a DM with you is kept with your Nookara account.</p>
+  <a class="btn" href="${esc(socialOrigin() + '/me#privacy')}" rel="noopener">Change it on Nookara</a></section>` : `
   <section aria-labelledby="h-dm"><h2 id="h-dm">DM privacy</h2>
   <form method="post" action="/account/dm-privacy">${hidden}
     <label for="dmf">Who can start a DM with you</label>
@@ -207,4 +212,4 @@ function register(app) {
   post('/signout-all', (s, f, res) => { endAll(s.user); bye(res, 'Every session of your account was signed out, on every device.'); });
 }
 
-module.exports = { register, sessionsOf, csrfOf, _test: { COOKIE } };
+module.exports = { register, sessionsOf, csrfOf, _test: { COOKIE, render } };

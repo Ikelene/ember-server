@@ -176,6 +176,10 @@ test('social routes answer social_elsewhere for v: accounts; local accounts and 
   }
   assert.equal((await alice.get('/api/v2/social/friends')).status, 200);
   assert.equal((await nat.get('/api/v2/social/dms')).status, 200);
+  // the account page: DM privacy is Nookara's, so it links there instead of a form here
+  const natRow = require('../src/auth').userByPrincipal('v:77');
+  const pageHtml = require('../src/account-page')._test.render({ user: natRow, token: 'x'.repeat(30), hash: 'h'.repeat(64), family: null });
+  assert.ok(pageHtml.includes(`href="${nookaraSide.origin}/me#privacy"`) && !pageHtml.includes('name="dm_from"'));
   assert.equal((await alice.get('/api/v2/social/e2ee/me')).body.has, false);
   // a DM message of a Nookara account is reported to Nookara, wherever the DM is hosted (PROTOCOL §4d)
   const sent = nke1.seal({ dm: `d1@${DOMAIN}`, from: `v:77@${DOMAIN}`, text: 'x', to: [nke1.account()], signer: nke1.account() });
