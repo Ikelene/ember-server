@@ -379,6 +379,9 @@ test('password login -> code -> tokens -> API and gateway -> refresh (rotation, 
   // two tabs at once: inside the grace the second gets the same new tokens
   const twin = await ref({ refresh_token: t.body.refresh_token });
   assert.equal(twin.status, 200); assert.equal(twin.body.refresh_token, t2.body.refresh_token);
+  // (kept in the database, so a restart keeps it; sealed: the row alone does not give the new tokens away)
+  const grace = require('../src/db').all('SELECT sealed FROM oauth_grace');
+  assert.ok(grace.length && !grace.some(r => r.sealed.includes(t2.body.refresh_token) || r.sealed.includes(t2.body.access_token)));
   const t3 = await ref({ refresh_token: t2.body.refresh_token });
   assert.equal(t3.status, 200);
   // after it, an old refresh token used again ends the whole family
@@ -420,6 +423,7 @@ test('codes: PKCE mismatch, wrong redirect_uri, expired, replayed', async () => 
   assert.equal((await redeem(a, await code(a), { client_id: 'other' })).body.error, 'invalid_client');
 
   a = authz(); const old = await code(a);
+  assert.ok(require('../src/db').get('SELECT 1 FROM oauth_codes WHERE family IS NULL'), 'codes are kept in the database');
   O._test.expireCodes();
   assert.equal((await redeem(a, old)).body.error, 'invalid_grant');
 

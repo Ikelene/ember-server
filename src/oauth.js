@@ -57,12 +57,18 @@ function parseAuthz(q) {
 }
 
 // ---------- codes ----------
-const codes = new Map(); // sha256(code) -> { user_id, client_id, redirect_uri, challenge, exp, family }
-function sweep(map, t = now()) { if (map.size > 500) for (const [k, v] of map) if (v.exp < t) map.delete(k); }
+// oauth_codes: sha256(code) -> { user_id, client_id, redirect_uri, challenge, exp, family }. Kept past their minute only as long
+// as a replay could still be noticed (an hour), then swept
+const KEEP_SPENT = 3600 * 1000;
+function sweep(t = now()) {
+  db.run('DELETE FROM oauth_codes WHERE exp < ?', t - KEEP_SPENT);
+  db.run('DELETE FROM oauth_grace WHERE exp < ?', t);
+}
 function issueCode(user, authz) {
-  sweep(codes);
+  sweep();
   const code = b64url(crypto.randomBytes(32));
-  codes.set(sha256(code), { user_id: user.id, client_id: authz.client_id, redirect_uri: authz.redirect_uri, challenge: authz.code_challenge, exp: now() + CODE_TTL, family: null });
+  db.run('INSERT INTO oauth_codes (hash, user_id, client_id, redirect_uri, challenge, exp, family) VALUES (?, ?, ?, ?, ?, ?, NULL)',
+    sha256(code), user.id, authz.client_id, authz.redirect_uri, authz.code_challenge, now() + CODE_TTL);
   return code;
 }
 
@@ -93,20 +99,34 @@ function issueTokens(u, clientId, family = randHex(16)) {
 function grantCode(b) {
   const str = k => (typeof b[k] === 'string' ? b[k] : '');
   if (!str('code') || !str('code_verifier') || !str('redirect_uri')) throw oauthErr('invalid_request', 'code, code_verifier and redirect_uri are required.');
-  const key = sha256(str('code')), c = codes.get(key);
+  const key = sha256(str('code')), c = db.get('SELECT * FROM oauth_codes WHERE hash = ?', key);
   if (!c) throw oauthErr('invalid_grant', 'Unknown or expired code.');
-  if (c.family) { auth.revokeFamily(c.family); codes.delete(key); throw oauthErr('invalid_grant', 'This code was already used.'); } // a replayed code: what it issued goes too
-  if (c.exp < now()) { codes.delete(key); throw oauthErr('invalid_grant', 'Unknown or expired code.'); }
-  c.family = 'spent'; // single use, whatever happens next
+  if (c.family) { if (c.family !== 'spent') auth.revokeFamily(c.family); db.run('DELETE FROM oauth_codes WHERE hash = ?', key); throw oauthErr('invalid_grant', 'This code was already used.'); } // a replayed code: what it issued goes too
+  if (c.exp < now()) { db.run('DELETE FROM oauth_codes WHERE hash = ?', key); throw oauthErr('invalid_grant', 'Unknown or expired code.'); }
+  db.run("UPDATE oauth_codes SET family = 'spent' WHERE hash = ?", key); // single use, whatever happens next
   if (c.client_id !== str('client_id')) throw oauthErr('invalid_grant', 'The code was issued to another client.');
   if (c.redirect_uri !== str('redirect_uri')) throw oauthErr('invalid_grant', 'redirect_uri does not match the authorization request.');
   if (!VERIFIER.test(str('code_verifier')) || b64url(crypto.createHash('sha256').update(str('code_verifier')).digest()) !== c.challenge) throw oauthErr('invalid_grant', 'code_verifier does not match the code_challenge.');
   const out = issueTokens(usable(c.user_id), c.client_id);
-  c.family = out.family;
+  db.run('UPDATE oauth_codes SET family = ? WHERE hash = ?', out.family, key);
   return out.body;
 }
 
-const recent = new Map(); // sha256(old refresh token) -> { body, exp }: the answer a racing second use gets
+// oauth_grace: sha256(old refresh token) -> the answer a racing second use gets, sealed (AES-256-GCM) with a key made from
+// the old token itself: the row alone opens nothing
+const graceKey = token => crypto.createHash('sha256').update('ember-refresh-grace\n' + token).digest();
+function sealGrace(token, body) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', graceKey(token), iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(body)), c.final()]);
+  return [iv, c.getAuthTag(), ct].map(b => b.toString('base64url')).join('.');
+}
+function openGrace(token, sealed) {
+  try {
+    const [iv, tag, ct] = String(sealed).split('.').map(x => Buffer.from(x, 'base64url'));
+    const d = crypto.createDecipheriv('aes-256-gcm', graceKey(token), iv); d.setAuthTag(tag);
+    return JSON.parse(Buffer.concat([d.update(ct), d.final()]).toString('utf8'));
+  } catch { return null; }
+}
 function grantRefresh(b) {
   const token = typeof b.refresh_token === 'string' ? b.refresh_token : '';
   if (!token || token.length > 200) throw oauthErr('invalid_request', 'refresh_token is required.');
@@ -114,8 +134,9 @@ function grantRefresh(b) {
   if (!row || row.client_id !== b.client_id) throw oauthErr('invalid_grant', 'Unknown refresh token.');
   const t = now();
   if (row.used_at) {
-    const again = recent.get(hash);
-    if (again && t - row.used_at <= REUSE_GRACE) return again.body;
+    const again = db.get('SELECT sealed FROM oauth_grace WHERE hash = ? AND exp >= ?', hash, t);
+    const body = again && t - row.used_at <= REUSE_GRACE ? openGrace(token, again.sealed) : null;
+    if (body) return body;
     auth.revokeFamily(row.family); // an old refresh token used again: someone else may hold the family, so it all ends
     throw oauthErr('invalid_grant', 'This refresh token was already used. Sign in again.');
   }
@@ -123,8 +144,8 @@ function grantRefresh(b) {
   const u = usable(row.user_id);
   db.run('UPDATE refresh_tokens SET used_at = ? WHERE hash = ?', t, hash);
   const out = issueTokens(u, row.client_id, row.family);
-  sweep(recent, t);
-  recent.set(hash, { body: out.body, exp: t + REUSE_GRACE });
+  sweep(t);
+  db.run('INSERT OR REPLACE INTO oauth_grace (hash, sealed, exp) VALUES (?, ?, ?)', hash, sealGrace(token, out.body), t + REUSE_GRACE);
   return out.body;
 }
 
@@ -145,5 +166,5 @@ function revoke(tok) {
   else db.run('DELETE FROM sessions WHERE hash = ? AND expires_at IS NOT NULL', hash);
 }
 
-const _test = { codes, recent, expireCodes() { for (const c of codes.values()) c.exp = 0; }, ageRefresh(ms) { db.run('UPDATE refresh_tokens SET used_at = used_at - ? WHERE used_at IS NOT NULL', ms); } };
+const _test = { expireCodes() { db.run('UPDATE oauth_codes SET exp = 0'); }, ageRefresh(ms) { db.run('UPDATE refresh_tokens SET used_at = used_at - ? WHERE used_at IS NOT NULL', ms); } };
 module.exports = { CLIENT_ID, checkRedirect, redirectWith, parseAuthz, issueCode, issueTokens, token, revoke, accountView, _test };

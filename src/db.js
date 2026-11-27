@@ -364,6 +364,13 @@ const MIGRATIONS = [
     tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS s2s_outbox_domain ON s2s_outbox(domain, id);`,
+  // v30: sign-in codes (a minute) and the answer a racing second refresh gets (30 s) survive a restart (PROTOCOL §4a).
+  // oauth_grace.sealed: the new tokens, encrypted with a key only the old refresh token gives
+  `CREATE TABLE IF NOT EXISTS oauth_codes (
+    hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL,
+    challenge TEXT NOT NULL, exp INTEGER NOT NULL, family TEXT
+  );
+  CREATE TABLE IF NOT EXISTS oauth_grace (hash TEXT PRIMARY KEY, sealed TEXT NOT NULL, exp INTEGER NOT NULL);`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
