@@ -41,10 +41,16 @@ function setRestricted(sock, restricted) {
   } else send(sock, { type: 'account_restored' });
 }
 
+// every socket of the account hears the community from now on. One that has not finished chat_hello yet (still in its auth, or
+// its hello waiting on something) is told at the end of its hello: `joined` is added then, next to what the database says
 function subscribe(userId, communityId) {
-  for (const sock of byUser.get(Number(userId)) || []) if (sock.bf.ready) { if (!subs.has(communityId)) subs.set(communityId, new Set()); subs.get(communityId).add(sock); }
+  for (const sock of byUser.get(Number(userId)) || []) {
+    if (sock.bf.ready) { if (!subs.has(communityId)) subs.set(communityId, new Set()); subs.get(communityId).add(sock); }
+    else (sock.bf.joined ||= new Set()).add(communityId);
+  }
 }
 function unsubscribe(userId, communityId) {
+  for (const sock of byUser.get(Number(userId)) || []) sock.bf.joined?.delete(communityId);
   const set = subs.get(communityId);
   if (!set) return;
   for (const sock of byUser.get(Number(userId)) || []) set.delete(sock);
@@ -155,7 +161,9 @@ async function onFrame(sock, msg) {
     switch (msg.type) {
       case 'chat_hello': {
         st.ready = true;
-        for (const row of db.all('SELECT community_id FROM members WHERE user_id = ?', me.id)) { if (!subs.has(row.community_id)) subs.set(row.community_id, new Set()); subs.get(row.community_id).add(sock); }
+        const ids = new Set([...db.all('SELECT community_id FROM members WHERE user_id = ?', me.id).map(r => r.community_id), ...(st.joined || [])]);
+        st.joined = null;
+        for (const id of ids) { if (!db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', id, me.id)) continue; if (!subs.has(id)) subs.set(id, new Set()); subs.get(id).add(sock); }
         reply({ type: 'chat_ready', you: auth.userView(me) });
         require('./profiles').lazy(me); // picks up a rename done on Nookara since the last sign-in
         break;
