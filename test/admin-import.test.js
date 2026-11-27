@@ -69,6 +69,7 @@ test('old links keep working: invite codes and the main code come along; bridge 
   assert.deepEqual([r.body.invite_code, r.body.invites], [{ from: src.main, to: src.main }, []]);
   const c = db.get('SELECT * FROM communities WHERE sid = ?', r.body.sid);
   assert.equal(c.invite_code, src.main);
+  assert.equal(r.body.main_invite_code, src.main);
   assert.ok(db.get('SELECT 1 FROM invites WHERE code = ? AND community_id = ?', src.inv, c.id));
   // the guild is linked again on the same channel; no webhook (the bot makes one); this homeserver has no Discord bot yet
   const b = db.get("SELECT * FROM bridge_guilds WHERE community_id = ? AND platform = 'discord'", c.id);
