@@ -55,11 +55,22 @@ const CSS = `
 .paste dd{margin:0;color:var(--text);font:13px/1.5 Consolas,"Cascadia Code",ui-monospace,monospace;overflow-wrap:anywhere;user-select:all}
 `;
 
+// link previews in other apps (Open Graph / Twitter card): the server's name, description and icon, the homeserver as site
+function previewMeta(d, c, code, icon) {
+  const cfg = config.get(), n = d.member_count, cut = (s, max) => { const a = Array.from(String(s).replace(/\s+/g, ' ').trim()); return a.length > max ? a.slice(0, max - 1).join('') + '…' : a.join(''); };
+  const desc = cut(d.description || `You are invited to join ${d.name}: ${n.toLocaleString('en-US')} member${n === 1 ? '' : 's'} on ${cfg.name || cfg.domain}.`, 200);
+  const image = icon || absUrl(cfg.icon_url), site = cfg.name || cfg.domain;
+  const tags = [['og:type', 'website'], ['og:site_name', site], ['og:title', d.name], ['og:description', desc], ['og:url', inviteUrl(c.slug, code)], ...(image ? [['og:image', image]] : [])]
+    .map(([k, v]) => `<meta property="${k}" content="${esc(v)}">`);
+  tags.push(...[['twitter:card', 'summary'], ['twitter:title', d.name], ['twitter:description', desc], ...(image ? [['twitter:image', image]] : [])].map(([k, v]) => `<meta name="${k}" content="${esc(v)}">`));
+  return `<meta name="description" content="${esc(desc)}">\n${tags.join('\n')}\n`;
+}
+
 function render({ c, code }) {
   const cfg = config.get(), d = C.discoveryView(c), icon = absUrl(c.icon_url);
   const vars = { slug: c.slug, domain: cfg.domain, code };
   const initial = esc((Array.from(String(d.name || '').trim())[0] || 'E').toUpperCase());
-  const h = page.head(`Join ${d.name}`, CSS);
+  const h = page.head(`Join ${d.name}`, CSS, previewMeta(d, c, code, icon));
   const proto = `web+ember:invite?${new URLSearchParams({ address: d.address, ...(code ? { code } : {}) })}`;
   const clients = cfg.invites.clients.map(x => `<a class="btn" href="${esc(fill(x.url, vars))}" rel="noopener">${x.icon_url ? `<img src="${esc(x.icon_url)}" alt="">` : ''}Open in ${esc(x.name)}</a>`).join('\n  ');
   const n = d.member_count;

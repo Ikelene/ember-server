@@ -56,6 +56,24 @@ test('a valid invite renders the page: card, open-in buttons, web+ember link, ad
   assert.match(j.body.url, new RegExp(`/i/camp-fire/${code}$`));
 });
 
+test('the page carries link preview tags: og:title, description, url, site name; an icon is og:image as an absolute url', async () => {
+  const meta = html => Object.fromEntries([...html.matchAll(/<meta (?:property|name)="((?:og|twitter):[a-z_]+)" content="([^"]*)">/g)].map(m => [m[1], m[2]]));
+  let m = meta(await (await page(`/i/camp-fire/${code}`)).text());
+  const name = (await disco()).homeserver.name || 'localhost';
+  assert.equal(m['og:title'], 'Camp &lt;Fire&gt;');
+  assert.equal(m['og:description'], 'cosy &lt;b&gt;place&lt;/b&gt;');
+  assert.match(m['og:url'], new RegExp(`^http://localhost:\\d+/i/camp-fire/${code}$`));
+  assert.equal(m['og:site_name'], name);
+  assert.deepEqual([m['twitter:card'], m['twitter:title']], ['summary', 'Camp &lt;Fire&gt;']);
+  assert.equal(m['og:image'], undefined); // no icon anywhere
+  await alice.a.patch(`/api/v1/servers/${sid}`, { icon_url: '/uploads/camp.png', description: '' });
+  m = meta(await (await page(`/i/camp-fire/${code}`)).text());
+  assert.match(m['og:image'], /^http:\/\/localhost:\d+\/uploads\/camp\.png$/);
+  assert.equal(m['twitter:image'], m['og:image']);
+  assert.match(m['og:description'], /^You are invited to join Camp &lt;Fire&gt;: 1 member on /);
+  await alice.a.patch(`/api/v1/servers/${sid}`, { icon_url: null, description: 'cosy <b>place</b>' });
+});
+
 test('unknown slug, unknown code, a code of another server, unlisted without code: 404', async () => {
   const other = (await alice.a.post('/api/v1/servers', { name: 'Other Place' })).body.server;
   const otherCode = (await alice.a.post(`/api/v1/servers/${other.sid}/invites`, {})).body.code;

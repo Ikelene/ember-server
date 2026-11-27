@@ -53,7 +53,8 @@ const MESSAGES = {
 const message = code => MESSAGES[code] || 'Something went wrong. Try again.';
 
 // extraCss: more rules for a page that needs them (the account page)
-function head(title, extraCss = '') {
+// meta: more <head> lines (already escaped), e.g. the invite page's link preview tags
+function head(title, extraCss = '', meta = '') {
   const cfg = config.get();
   let icon = null;
   if (cfg.icon_url) { try { const x = new URL(String(cfg.icon_url), cfg.public_url + '/'); if (/^https?:$/.test(x.protocol)) icon = x.href; } catch { /* none */ } }
@@ -68,7 +69,7 @@ function head(title, extraCss = '') {
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
-${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
+${meta}${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
 <style>${CSS}${extraCss}</style>
 </head>
 <body>
