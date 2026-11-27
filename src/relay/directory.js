@@ -24,8 +24,8 @@ function payload() {
     invite_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(origin)}/invite/${c.invite_code}`,
     tags: Array.isArray(cfg.tags) ? cfg.tags.slice(0, 8) : [],
   });
-  // One listed server: exactly the entry Nookara has always taken. Several: the oldest stays in those fields and all of them ride
-  // along in `communities`. TODO: Nookara reads only the single entry for now; it will list `communities` once it is updated.
+  // One listed server: exactly the entry Nookara has always taken. Several: the oldest stays in those fields (older Nookara
+  // versions read only those) and all of them ride along in `communities`, which Nookara lists one row each.
   const out = { listed: true, ...entry(list[0]) };
   if (list.length > 1) out.communities = list.map(c => ({ sid: c.sid, slug: c.slug, address: C.addressOf(c), ...entry(c) }));
   return out;
