@@ -171,14 +171,14 @@ test('limits per homeserver: every account of a domain shares them; a new homese
   r = await post(a);
   assert.deepEqual([r.status, r.body.error], [429, 'homeserver_rate_limited']);
   assert.equal((await bo.a.post(`/api/v1/channels/${general.cid}/messages`, { body: 'local' })).status, 200);
-  // the third refusal in ten minutes puts the homeserver on hold for an hour: nothing counted gets through, sign-ins included
+  // the third refusal in ten minutes puts the homeserver on hold (five minutes, the first time): nothing counted gets through, sign-ins included
   await post(b);
   r = await post(a);
   assert.equal(r.status, 429);
-  assert.ok(r.body.retry_after > 3500 && r.body.retry_after <= 3600, String(r.body.retry_after));
+  assert.ok(r.body.retry_after > 290 && r.body.retry_after <= 300, String(r.body.retry_after));
   assert.equal((await signIn('lim.example')).status, 429);
   const view = (await bo.a.get('/api/v2/homeserver/federation')).body;
-  assert.deepEqual(view.held.map(h => h.domain), ['lim.example']);
+  assert.deepEqual(view.held.map(h => [h.domain, h.minutes, h.level, h.refused]), [['lim.example', 5, 0, { messages: 3 }]]);
   // an admin lifts it
   assert.deepEqual((await fedPatch({ release: ['lim.example'] })).body.held, []);
   limits.reset();
@@ -381,4 +381,54 @@ test('the deny entries of the homeserver itself: a domain, everything under one,
   assert.equal((await api(base).get('/api/v2/homeserver/federation')).status, 401);
   await fedPatch({ deny: [] });
   assert.equal((await signIn('one.example')).status, 200);
+});
+
+test('holds: only for homeservers this one has nothing to do with; they escalate; admins see what was refused and lift them', async () => {
+  fresh();
+  const H = 'flood.example', t0 = Date.now();
+  config.update({ federation: { rate_limits: { exchanges_per_minute: 2, hold_after: 3 } } });
+  seen.touch('flood.example', {});
+  try {
+    const run = t => { const out = []; for (let i = 0; i < 6; i++) { try { limits.hit(H, 'exchanges', t); out.push(200); } catch (e) { out.push(e.extra.retry_after); } } return out; };
+    seen._test.age(H, 40 * seen.DAY); // (old: the whole limit)
+    // a stranger over its limit three times in ten minutes: 5 minutes, then 15, then hold_minutes (60)
+    let r = run(t0);
+    assert.deepEqual(r.slice(0, 2), [200, 200]);
+    assert.equal(r[4], 300, 'the third refusal starts a 5 minute hold');
+    assert.deepEqual(limits.held(t0).map(h => [h.domain, h.minutes, h.level, h.refused]), [[H, 5, 0, { exchanges: 3 }]]);
+    r = run(t0 + 6 * 60000); assert.equal(r[4], 900);
+    r = run(t0 + 30 * 60000); assert.equal(r[4], 3600);
+    r = run(t0 + 100 * 60000); assert.equal(r[4], 3600, 'never longer than hold_minutes');
+    // a day without a hold starts over
+    r = run(t0 + 30 * 3600000); assert.equal(r[4], 300);
+    // admins see it, with what was refused, and lift it
+    let view = (await bo.a.get('/api/v2/homeserver/federation')).body;
+    assert.ok(Array.isArray(view.throttled));
+    limits.reset(); run(Date.now());
+    view = (await bo.a.get('/api/v2/homeserver/federation')).body;
+    assert.deepEqual(view.held.map(h => [h.domain, h.minutes]), [[H, 5]]);
+    assert.ok(view.held[0].until > Date.now() && view.held[0].since <= Date.now());
+    assert.deepEqual((await bo.a.del(`/api/v2/homeserver/federation/holds/${H}`)).body.held, []);
+    assert.equal((await bo.a.del(`/api/v2/homeserver/federation/holds/${H}`)).body.error, 'not_held');
+    // (lifted: what is left is the per-minute limit, not the hold)
+    assert.ok((() => { try { limits.hit(H, 'exchanges'); return 0; } catch (e) { return e.extra.retry_after; } })() <= 60);
+
+    // a homeserver an account here is friends with is never held, and gets the whole limit while it is new
+    limits.reset();
+    const F = 'friendly.example';
+    seen._test.age(F, 0); // (first seen just now: a new homeserver)
+    assert.equal(limits.limitFor(F, 'messages'), Math.floor(300 / 4));
+    db.run("INSERT INTO friends (user_id, peer, state, message, created_at, updated_at) VALUES (?, ?, 'friend', '', ?, ?)", db.get("SELECT id FROM users WHERE username = 'bo'").id, `l:7@${F}`, Date.now(), Date.now());
+    limits._test.forgetKnown();
+    assert.equal(limits.known(F), true);
+    assert.equal(limits.limitFor(F, 'messages'), 300);
+    r = []; for (let i = 0; i < 20; i++) { try { limits.hit(F, 'exchanges'); r.push(200); } catch (e) { r.push(e.extra.retry_after); } }
+    assert.deepEqual(r.slice(0, 2), [200, 200]);
+    assert.ok(r.slice(2).every(x => x <= 60), 'refused per minute, never held: ' + r.join(','));
+    assert.deepEqual(limits.held(), []);
+    assert.deepEqual(limits.throttled().map(x => [x.domain, x.known, x.refused.exchanges]), [[F, true, 18]]);
+  } finally {
+    config.update({ federation: { rate_limits: { exchanges_per_minute: 30, hold_after: 5 } } });
+    limits.reset();
+  }
 });

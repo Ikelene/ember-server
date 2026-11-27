@@ -114,7 +114,9 @@ async function drain(domain, w) {
       catch (e) { again = e.status === 502; } // refused by our own rules: no point trying again
       w.busy = 0;
       if (!db.raw()) return;
-      const tries = row.tries + 1, gap = RETRY[tries - 1];
+      // (a 429 says when to come back: not before that)
+      const tries = row.tries + 1, wantMs = last.status === 429 && Number(last.body?.retry_after) > 0 ? Math.min(Number(last.body.retry_after), 24 * 3600) * 1000 : 0;
+      const gap = RETRY[tries - 1] === undefined ? undefined : Math.max(RETRY[tries - 1], wantMs);
       if (again && gap !== undefined && now() + gap - row.created_at <= MAX_QUEUE_AGE) {
         db.run('UPDATE s2s_outbox SET tries = ?, next_at = ? WHERE id = ?', tries, now() + gap, row.id);
         continue;

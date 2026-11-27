@@ -209,7 +209,16 @@ test('the outbox: kept in the database until answered, carried on after a restar
   db.run("INSERT INTO s2s_outbox (domain, path, body, tries, next_at, created_at) VALUES ('out.example', '/presence', '{}', 0, 0, ?)", Date.now() - 5000);
   s2s.start(); await s2s.idle();
   assert.deepEqual([got.length, rows().length], [n + 1, 0]);
-  s2s._test.setMaxAge(24 * 3600 * 1000); s2s._test.setRetry([2000, 15000]);
+  s2s._test.setMaxAge(24 * 3600 * 1000);
+  // 429: not before the retry_after it names (here two minutes, past the five milliseconds of RETRY)
+  reply = () => [429, { error: 'homeserver_rate_limited', retry_after: 120 }];
+  s2s._test.setRetry([5, 5]);
+  const t = Date.now();
+  s2s.later('out.example', '/presence', { from: 'l:1@b.example', status: 'away' });
+  for (let i = 0; i < 200 && !rows()[0]?.tries; i++) await new Promise(r => setTimeout(r, 10));
+  assert.ok(rows()[0].next_at >= t + 119000, String(rows()[0].next_at - t));
+  s2s.stop(); db.run('DELETE FROM s2s_outbox');
+  s2s._test.setRetry([2000, 15000]);
 });
 
 test('a proxy in front without EMBER_TRUST_PROXY: said once, since every per-address limit would see only the proxy', () => {

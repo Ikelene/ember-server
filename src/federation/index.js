@@ -34,7 +34,8 @@ function adminView() {
     accepts_remote: remote.acceptMode(),
     keys: keys.view(),
     denylists: denylist.status(),
-    held: limits.held(),
+    held: limits.held(), // [ { domain, until, since, minutes, level, refused: { action: n } } ]
+    throttled: limits.throttled(), // homeservers refused something in the last ten minutes, not held: [ { domain, refused, known, last } ]
     homeservers: seen.all(),
     remote_accounts: require('./servers').remoteMembers(),
   };
@@ -68,6 +69,11 @@ function register(app) {
 
   app.get('/api/v2/homeserver/federation', { admin: true }, () => adminView());
   app.patch('/api/v2/homeserver/federation', { admin: true }, req => adminPatch(req.body));
+  // lift one hold (Manage > Federation): 404 not_held when there is none
+  app.delete('/api/v2/homeserver/federation/holds/:domain', { admin: true }, req => {
+    if (!limits.release(String(req.params.domain || '').toLowerCase())) throw err('not_held', 404);
+    return adminView();
+  });
   app.post('/api/v2/homeserver/federation/rotate-key', { owner: true }, req => {
     const kid = keys.rotate();
     log(`[federation] signing key rotated by ${req.user.principal}: ${kid}`);
