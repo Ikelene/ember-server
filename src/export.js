@@ -53,6 +53,8 @@ function exportCommunity(sid, me) {
     emojis,
     stickers,
     invites: db.all('SELECT * FROM invites WHERE community_id = ?', c.id).map(i => ({ code: i.code, expires_at: i.expires_at ?? null, max_uses: i.max_uses ?? null })),
+    invite_code: c.invite_code, // the server's own permanent code (old links carry it)
+    bridges: bridgesOf(c), // linked Discord / Fluxer guilds and Matrix rooms with their channel maps (no tokens, no webhooks)
   };
   files['manifest.json'] = strToU8(JSON.stringify({ format: FORMAT, source: origin(), source_kind: 'instance', exported_at: now(), community: c.sid }));
   files['community.json'] = strToU8(JSON.stringify(community, null, 1));
@@ -114,6 +116,19 @@ function readExport(buffer) {
   return { entries, manifest, cj };
 }
 // A new server owned by `me`. opts.trusted: no creation check (restoring a backup); opts.slug: the address to take when it is free
+// the bridge links of a server, for its export: what is needed to link the same guilds again (secrets stay behind)
+function bridgesOf(c) {
+  try { require('./bridge/store').ensure(); } catch { return []; }
+  return db.all('SELECT * FROM bridge_guilds WHERE community_id = ? ORDER BY id', c.id).map(b => ({
+    platform: b.platform, guild_id: b.guild_id, guild_name: b.guild_name, enabled: !!b.enabled,
+    links: db.all('SELECT ch.cid, bc.ext_channel_id, bc.ext_name FROM bridge_channels bc JOIN channels ch ON ch.id = bc.channel_id WHERE bc.bridge_id = ?', b.id),
+  }));
+}
+const CODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const codeFree = code => !db.get('SELECT 1 FROM invites WHERE code = ?', code) && !db.get('SELECT 1 FROM communities WHERE invite_code = ?', code);
+// opts: trusted (a restore or an admin's import: nothing is asked), slug, inviteCode (the main code to keep, else the export's),
+// bridges (links to make, else the export's; only for a trusted import), report (an object filled with what was kept or not:
+// { invite_code: { from, to }, invites: [{ from, to }], bridges: [{ platform, guild_id, linked, why? }] })
 function importCommunity(me, buffer, parsed, opts = {}) {
   if (!opts.trusted) C.assertMayCreate(me);
   const { entries, manifest, cj } = parsed || readExport(buffer);
@@ -223,10 +238,45 @@ function importCommunity(me, buffer, parsed, opts = {}) {
         stickerMap.set(s.tid, tid);
       } catch { /* skip an unusable sticker */ }
     }
-    // invites: same limits, fresh codes
+    // invites: the same codes and limits, so old links keep working; a code someone here already has gets a fresh one
+    const report = opts.report || {};
+    report.invites = [];
     for (const inv of (Array.isArray(cj.invites) ? cj.invites : []).slice(0, 50)) {
       if (inv?.expires_at && inv.expires_at <= now()) continue;
-      db.run('INSERT INTO invites (code, community_id, created_by, created_at, expires_at, max_uses) VALUES (?, ?, ?, ?, ?, ?)', randHex(4), c.id, me.id, now(), inv?.expires_at || null, Number.isInteger(inv?.max_uses) ? inv.max_uses : null);
+      const want = typeof inv?.code === 'string' && CODE_RE.test(inv.code) ? inv.code : null, code = want && codeFree(want) ? want : randHex(4);
+      if (want && code !== want) report.invites.push({ from: want, to: code });
+      db.run('INSERT INTO invites (code, community_id, created_by, created_at, expires_at, max_uses) VALUES (?, ?, ?, ?, ?, ?)', code, c.id, me.id, now(), inv?.expires_at || null, Number.isInteger(inv?.max_uses) ? inv.max_uses : null);
+    }
+    // the server's own permanent code
+    const mainWant = [opts.inviteCode, cj.invite_code].find(x => typeof x === 'string' && CODE_RE.test(x));
+    if (mainWant) {
+      if (codeFree(mainWant)) db.run('UPDATE communities SET invite_code = ? WHERE id = ?', mainWant, c.id);
+      report.invite_code = { from: mainWant, to: db.get('SELECT invite_code FROM communities WHERE id = ?', c.id).invite_code };
+    }
+    // bridge links, only when nobody has to prove anything (a restore, an admin moving a server for its owner): the same guilds
+    // and rooms on the same channels; a guild another server here already links is left out. Webhooks are made again by the
+    // bot on first use. Whether this homeserver's bot is in the guild is for the caller to check (admin-import.js)
+    report.bridges = [];
+    const wantBridges = Array.isArray(opts.bridges) ? opts.bridges : Array.isArray(cj.bridges) ? cj.bridges : [];
+    if (opts.trusted && wantBridges.length) {
+      require('./bridge/store').ensure();
+      for (const b of wantBridges.slice(0, 5)) {
+        const p = String(b?.platform || ''), gid = String(b?.guild_id || '');
+        if (!['discord', 'fluxer', 'matrix'].includes(p) || !/^[\w.:!-]{1,64}$/.test(gid)) continue;
+        if (db.get('SELECT 1 FROM bridge_guilds WHERE community_id = ? AND platform = ?', c.id, p)) continue;
+        const other = p !== 'matrix' && db.get('SELECT c.sid FROM bridge_guilds bg JOIN communities c ON c.id = bg.community_id WHERE bg.platform = ? AND bg.guild_id = ?', p, gid);
+        if (other) { report.bridges.push({ platform: p, guild_id: gid, linked: false, why: 'guild_already_linked', sid: other.sid }); continue; }
+        const bid = Number(db.run('INSERT INTO bridge_guilds (community_id, platform, guild_id, guild_name, enabled, created_by, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+          c.id, p, gid, clean(b.guild_name, 100), b.enabled === false ? 0 : 1, me.id, now()).lastInsertRowid);
+        let n = 0;
+        for (const l of Array.isArray(b.links) ? b.links.slice(0, 500) : []) {
+          const row = chMap.get(String(l?.cid || '')), ext = String(l?.ext_channel_id || '');
+          if (!row || !/^[\w.:!#-]{1,128}$/.test(ext) || db.get('SELECT 1 FROM bridge_channels bc JOIN bridge_guilds bg ON bg.id = bc.bridge_id WHERE bc.ext_channel_id = ? AND bg.platform = ?', ext, p)) continue;
+          db.run('INSERT OR IGNORE INTO bridge_channels (channel_id, bridge_id, ext_channel_id, ext_name) VALUES (?, ?, ?, ?)', row.id, bid, ext, clean(l.ext_name, 100));
+          n++;
+        }
+        report.bridges.push({ platform: p, guild_id: gid, linked: true, channels: n, ...(p === 'matrix' ? { why: 'matrix_bot_needed' } : {}) });
+      }
     }
 
     // messages, oldest first per channel

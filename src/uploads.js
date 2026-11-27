@@ -286,10 +286,10 @@ function saveSticker(buf, tid) {
 }
 
 // parse one multipart file field into memory. -> { buffer, filename, fields }
-function readMultipart(req, { maxBytes, field = 'file' } = {}) {
+function readMultipart(req, { maxBytes, field = 'file', fieldSize = 8192 } = {}) {
   return new Promise((resolve, reject) => {
     let bb;
-    try { bb = Busboy({ headers: req.headers, limits: { fileSize: maxBytes, files: 1, fields: 20, fieldSize: 8192 } }); } catch { return reject(err('bad_request', 400)); }
+    try { bb = Busboy({ headers: req.headers, limits: { fileSize: maxBytes, files: 1, fields: 20, fieldSize } }); } catch { return reject(err('bad_request', 400)); }
     const fields = {}; let file = null, tooBig = false;
     bb.on('field', (k, v) => { fields[k] = v; });
     bb.on('file', (name, stream, info) => {

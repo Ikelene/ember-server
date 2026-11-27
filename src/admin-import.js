@@ -32,7 +32,9 @@ function ownerOf(raw) {
   if (!u || u.kind === 'bot' || u.kind === 'remote' || u.banned) throw err('owner_not_found', 404);
   return u;
 }
-// POST /api/v2/homeserver/import?owner=<principal>&slug=<slug>&previous_url=<origin> (multipart `file`) -> { sid, slug, address, owner }
+// POST /api/v2/homeserver/import?owner=<principal>&slug=<slug>&previous_url=<origin>&invite_code=<code> (multipart `file`, and
+// optionally `bridges`: JSON, the server's bridge links when its export does not carry them) -> { sid, slug, address, owner,
+// invite_code, invites, bridges }
 async function importFor(q) {
   const owner = ownerOf(q.owner);
   let slug;
@@ -51,12 +53,25 @@ async function importFor(q) {
 function register(app) {
   app.post('/api/v2/homeserver/import', { admin: true }, async req => {
     const { owner, slug, prev } = await importFor(req.query || {}); // (checked before the upload is read)
-    const { buffer } = await uploads.readMultipart(req, { maxBytes: 1024 * 1024 * 1024 });
+    const { buffer, fields } = await uploads.readMultipart(req, { maxBytes: 1024 * 1024 * 1024, fieldSize: 512 * 1024 });
     if (!buffer) throw err('no_file');
-    const c = exp.importCommunity(owner, buffer, null, { trusted: true, slug });
+    let bridges;
+    if (fields.bridges !== undefined) { try { bridges = JSON.parse(fields.bridges); } catch { bridges = null; } if (!Array.isArray(bridges)) throw err('invalid_bridges'); }
+    const report = {};
+    const c = exp.importCommunity(owner, buffer, null, { trusted: true, slug, inviteCode: typeof req.query.invite_code === 'string' ? req.query.invite_code : undefined, bridges, report });
     if (slug && c.slug !== slug) throw err('slug_taken', 409, { slug, sid: c.sid }); // (taken while it was uploading)
     if (prev) rememberOrigin(prev);
-    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal };
+    // each bridge as this homeserver's bot sees it: not set up here, or not in that guild (the owner invites it again)
+    let seen = [];
+    if (report.bridges?.some(b => b.linked)) {
+      try { seen = (await require('./bridge/bridge').status(owner, c.sid)).bridges; } catch { seen = []; }
+    }
+    const bridgesOut = (report.bridges || []).map(b => {
+      const s = seen.find(x => x.platform === b.platform);
+      const problem = b.why || s?.problem || null;
+      return { ...b, ...(problem ? { problem, action: problem === 'bot_not_in_server' ? 'reinvite_bot' : problem === 'bridge_not_set_up' ? 'homeserver_bot_needed' : problem === 'matrix_bot_needed' ? 'owner_sets_matrix_bot' : problem === 'guild_already_linked' ? 'resolve_conflict' : 'check' } : {}) };
+    });
+    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut };
   });
 }
 
