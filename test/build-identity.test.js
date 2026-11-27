@@ -106,6 +106,11 @@ test('a git checkout knows its commit, is compared by commit date, and admins se
     assert.equal((await info()).update.outdated, false, 'this checkout is ahead of the release: no nagging');
     latest = { commit: me.commit, commit_date: me.commit_date, built_at: new Date().toISOString(), build_id: me.commit + '+abcd1234' };
     assert.equal((await info()).update.outdated, false, 'the same commit, built elsewhere');
+    // an old commit built today (a self-built image's built_at) is still behind a newer release built earlier
+    process.env.BONFIRE_BUILD_COMMIT = 'e'.repeat(40); process.env.BONFIRE_BUILD_COMMIT_DATE = '2026-01-01T00:00:00Z'; process.env.BONFIRE_BUILD_AT = new Date(Date.now() + day).toISOString();
+    latest = { commit: 'f'.repeat(40), commit_date: '2026-02-01T00:00:00Z', built_at: new Date().toISOString() };
+    assert.equal((await info()).update.outdated, true, 'commit dates beat build times');
+    for (const k of ['BONFIRE_BUILD_COMMIT', 'BONFIRE_BUILD_COMMIT_DATE', 'BONFIRE_BUILD_AT']) delete process.env[k];
 
     process.env.BONFIRE_CONTAINER = '1';
     assert.equal((await info()).install.kind, 'docker_build');

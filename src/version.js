@@ -123,10 +123,13 @@ async function check({ fresh = false } = {}) {
   if (!me.build_id) return { update: null, reason: 'no_build_identity' };
   const l = await fetchLatest({ fresh });
   if (!l) return { update: null, reason: 'unreachable' };
-  let outdated = l.build_id !== me.build_id && l.commit !== me.commit;
-  // never nag a server that is ahead (a newer checkout, a fork): compare build times, else commit times
-  if (outdated && l.built_at && me.built_at) outdated = Date.parse(l.built_at) > Date.parse(me.built_at);
-  else if (outdated && l.commit_date && me.commit_date) outdated = Date.parse(l.commit_date) > Date.parse(me.commit_date);
+  let outdated = l.build_id !== me.build_id;
+  // a self-built server on the released commit is current (only release builds carry the "+<treehash>" of a dirty rebuild)
+  if (outdated && me.source !== 'env' && l.commit === me.commit) outdated = false;
+  // never nag a server that is ahead (a newer checkout, a fork). Commit dates first: built_at of a self-built image is just when
+  // its admin ran `docker build`, so an old commit built today would look newer than the release. Build times only for the same commit.
+  if (outdated && l.commit !== me.commit && l.commit_date && me.commit_date) outdated = Date.parse(l.commit_date) > Date.parse(me.commit_date);
+  else if (outdated && l.built_at && me.built_at) outdated = Date.parse(l.built_at) > Date.parse(me.built_at);
   return { update: { outdated, latest: l, checked_at: new Date(latest.at).toISOString() }, reason: null };
 }
 // {outdated, latest, checked_at} or null when we cannot tell (see check() for why)
