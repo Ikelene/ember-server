@@ -40,8 +40,9 @@ function socialUrls(social, origin) {
 }
 async function discover(domain) {
   const start = devOrigin(domain) || `https://${domain}`;
-  let origin = start, doc = await getJson(start + WELL_KNOWN);
+  let origin = start, doc = await getJson(start + WELL_KNOWN), social = null;
   if (typeof doc.homeserver === 'string') { // delegation: the homeserver for this domain lives at another origin
+    if (doc.social && typeof doc.social === 'object') social = doc.social; // (the delegating document's `social` stays in force)
     origin = normalizeOrigin(doc.homeserver);
     if (!origin || (!origin.startsWith('https://') && !safe.local())) throw new Error('bad_delegation');
     doc = await getJson(origin + WELL_KNOWN);
@@ -50,7 +51,7 @@ async function discover(domain) {
   if (!doc.homeserver || typeof doc.homeserver !== 'object' || String(doc.homeserver.domain || '').toLowerCase() !== domain) throw new Error('domain_mismatch');
   let jwks; try { jwks = new URL(String(doc.jwks_uri)); } catch { throw new Error('no_jwks_uri'); }
   if (jwks.origin !== origin) throw new Error('bad_jwks_uri'); // the keys live on the homeserver itself
-  return { origin, jwks_uri: jwks.href, ...socialUrls(doc.social, origin) };
+  return { origin, jwks_uri: jwks.href, ...socialUrls(social || doc.social, origin) };
 }
 // is there an answer for this domain, good or bad, that is still fresh? (nothing would be fetched for it)
 const known = domain => { const hit = homeservers.get(domain); return !!hit && Date.now() - hit.at < (hit.error ? FAIL_TTL : HS_TTL); };

@@ -10,7 +10,7 @@ const ownApi = () => `${config.publicUrl()}/api/v2`;
 const ownS2s = () => config.publicUrl() + PREFIX;
 function urls() {
   const s = config.get().social, on = config.nookaraIdentity();
-  return { api_url: (on && s.api_url) || ownApi(), s2s_url: (on && s.s2s_url) || ownS2s() };
+  return { api_url: (on && s.api_url) || ownApi(), s2s_url: (on && s.s2s_url) || ownS2s(), ...(on && s.reports_url ? { reports_url: s.reports_url } : {}) };
 }
 const nookara = u => !!u && u.kind === KIND_NOOKARA;
 // a Nookara account of this homeserver whose friends / keys / DM list are kept elsewhere

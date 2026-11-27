@@ -163,6 +163,11 @@ test('discovery: social urls from config while nookara_identity is on; this home
   config.update({ social: { api_url: nookaraSide.origin + '/api/v2', s2s_url: nookaraSide.origin + '/_ember/s2s/v1' } });
   d = (await api(base).get('/.well-known/ember')).body;
   assert.deepEqual(d.social, { api_url: nookaraSide.origin + '/api/v2', s2s_url: nookaraSide.origin + '/_ember/s2s/v1' });
+  // and where their DM messages are reported, when it is set (other homeservers send reporters there)
+  config.update({ social: { reports_url: nookaraSide.origin + '/api/report/dm-message' } });
+  assert.equal((await api(base).get('/.well-known/ember')).body.social.reports_url, nookaraSide.origin + '/api/report/dm-message');
+  config.update({ social: { reports_url: null } });
+  assert.equal('reports_url' in (await api(base).get('/.well-known/ember')).body.social, false);
   config.update({ accounts: { nookara_identity: false } });
   assert.deepEqual((await api(base).get('/.well-known/ember')).body.social, { api_url: pub + '/api/v2', s2s_url: pub + '/_ember/s2s/v1' });
   config.update({ accounts: { nookara_identity: true } });

@@ -443,7 +443,14 @@ test('a report hands over one message and its key, to the homeserver of whoever 
   config.update({ federation: { dev_origins: { ...config.get().federation.dev_origins, 'reports.example': nk.origin } } });
   r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: '1', from: 'v:7@reports.example', envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
   assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: nk.origin + '/api/report/dm-message', api_url: nk.origin + '/api/v2' }]);
-  await nk.close();
+  // ...also when the domain delegates (nookara.cc -> its homeserver): the delegating document's `social` is what counts
+  const back = await mockHomeserver('front.example');
+  const front = await mockHomeserver('front-door.example');
+  front.doc = { homeserver: back.origin, social: { api_url: front.origin + '/api/v2', s2s_url: front.origin + '/_ember/s2s/v1', reports_url: front.origin + '/api/report/dm-message' } };
+  config.update({ federation: { dev_origins: { ...config.get().federation.dev_origins, 'front.example': front.origin } } });
+  r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: '1', from: 'v:7@front.example', envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
+  assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: front.origin + '/api/report/dm-message', api_url: front.origin + '/api/v2' }]);
+  await nk.close(); await back.close(); await front.close();
   r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: '1', from: 'l:1@nowhere.invalid', envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
   assert.equal(r.body.error, 'sender_not_here');
   // ... where bob files it with a session from his own (alice signed it with the key she has since replaced: still hers)
