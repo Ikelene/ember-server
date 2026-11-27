@@ -35,10 +35,12 @@ async function senderOf(raw) {
   const w = R.parseSub(String(raw ?? ''));
   if (!w) throw err('invalid_request', 400, { field: 'message.from' });
   if (w.domain !== config.domain()) {
-    let api = null;
-    try { api = (await resolve.homeserver(w.domain)).api_url; } catch { /* unknown homeserver */ }
-    if (!api) throw err('sender_not_here', 400);
-    throw err('report_elsewhere', 409, { url: api.replace(/\/+$/, '') + '/social/reports' });
+    let hs = null;
+    try { hs = await resolve.homeserver(w.domain); } catch { /* unknown homeserver */ }
+    if (!hs?.api_url) throw err('sender_not_here', 400);
+    // the sender's homeserver names its own report route in discovery (social.reports_url: Nookara's for nookara.cc),
+    // else <api_url>/social/reports; a reporter from here signs in there with a remote token (§4b) for that origin
+    throw err('report_elsewhere', 409, { url: hs.reports_url || hs.api_url.replace(/\/+$/, '') + '/social/reports', api_url: hs.api_url });
   }
   const u = auth.userByPrincipal(w.id);
   if (!auth.hostedHere(u)) throw err('user_not_found', 404);

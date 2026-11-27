@@ -35,7 +35,8 @@ function socialUrls(social, origin) {
     try { const u = new URL(v); if (u.username || u.password || u.search || u.hash || (u.protocol !== 'https:' && !(u.protocol === 'http:' && safe.local()))) return fallback; return u.href.replace(/\/+$/, ''); } catch { return fallback; }
   };
   const s = social && typeof social === 'object' ? social : {};
-  return { api_url: url(s.api_url, origin + '/api/v2'), s2s_url: url(s.s2s_url, origin + '/_ember/s2s/v1') };
+  // reports_url: where DM messages of its accounts are reported, when it is not <api_url>/social/reports (Nookara's, §4d.4)
+  return { api_url: url(s.api_url, origin + '/api/v2'), s2s_url: url(s.s2s_url, origin + '/_ember/s2s/v1'), reports_url: url(s.reports_url, null) };
 }
 async function discover(domain) {
   const start = devOrigin(domain) || `https://${domain}`;

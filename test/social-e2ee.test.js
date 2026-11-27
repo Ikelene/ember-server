@@ -435,7 +435,15 @@ test('a report hands over one message and its key, to the homeserver of whoever 
 
   // the sender is not ours: the report belongs to their homeserver
   r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: K.fromAlice.id, from: ALICE, envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
-  assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: A.url + '/api/v2/social/reports' }]);
+  assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: A.url + '/api/v2/social/reports', api_url: A.url + '/api/v2' }]);
+  // a homeserver that names its own report route in discovery (Nookara's social.reports_url): that one
+  const { mockHomeserver } = require('./helpers');
+  const nk = await mockHomeserver('reports.example');
+  nk.doc = { homeserver: { domain: 'reports.example' }, jwks_uri: nk.origin + '/.well-known/ember/jwks.json', social: { api_url: nk.origin + '/api/v2', reports_url: nk.origin + '/api/report/dm-message' } };
+  config.update({ federation: { dev_origins: { ...config.get().federation.dev_origins, 'reports.example': nk.origin } } });
+  r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: '1', from: 'v:7@reports.example', envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
+  assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: nk.origin + '/api/report/dm-message', api_url: nk.origin + '/api/v2' }]);
+  await nk.close();
   r = await bob.a.post('/api/v2/social/reports', { message: { dm: dmX, id: '1', from: 'l:1@nowhere.invalid', envelope: K.fromAlice.enc }, revealed_key: K.fromAlice.k, reason: 'threats' });
   assert.equal(r.body.error, 'sender_not_here');
   // ... where bob files it with a session from his own (alice signed it with the key she has since replaced: still hers)
