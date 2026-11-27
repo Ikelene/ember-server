@@ -128,6 +128,7 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
   "limits": { "defaults": { "member_cap": null, "voice_minutes": null, "max_upload_mb": 25, "storage_mb": null, "files_per_member": null, "upload_expiry_days": null, "emojis": null, "sounds": null, "bots": null, "bridges": ["discord", "fluxer", "matrix", "cloudlink"], "custom_voice_keys": true },
               "tiers": [ { "id": "plus", "name": "Plus", "price_credits": 50, "period_weeks": 1 } ] },
   "push": { "pushers_url": "…/api/v2/pushers" },
+  "invites": { "url_base": "https://a.example/i/", "clients": [ { "name": "Ember", "url": "https://nookara.cc/chat#/i/{address}/{code}" } ] },
   "social": { "api_url": "…/api/v2", "s2s_url": "…/_ember/s2s/v1" },
   "read_only": false,
   "homeserver": { "domain": "chat.example", "name": "My Instance", "description": "", "icon_url": null },
@@ -154,6 +155,7 @@ Legacy Nookara communities may be read-only: server objects include `read_only: 
 - `instance_key` / `instance_id` are the instance's relay key (§12.1). Nookara reads them here to check that a registering key controls the url.
 - `features.voice` is true when voice works: the instance's own Cloudflare keys, or Nookara's voice broker while registered and under its cap (§10).
 - `limits` is what a server here may have unless it bought a tier or an admin said otherwise, and the tiers on offer (§19). `push.pushers_url` is where a client registers for push (§20).
+- `invites`: an invite link is `url_base + slug + "/" + code` (`url_base` ends in `/`, default `https://<domain>/i/`). The homeserver serves that address as a page any client can open: the server's name, icon and member count, an "Open in your Ember app" link (`web+ember:invite?address=<slug@domain>&code=<code>`) and one link per entry of `clients`, whose `url` may use `{address}` (`slug@domain`), `{slug}`, `{domain}` and `{code}`. Asked for anything but HTML it answers `{ server, code, url }` (`404 invalid_invite`). `/i/<slug>` without a code works for a listed server. A delegating domain redirects `/i/...` to its homeserver.
 - `managed` stays for old clients. It is non-null on a Nookara-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
 - `read_only` is true while the instance refuses all writes (§19.3).
 - `previous_urls` lists earlier `public_url`s, newest first (a Nookara-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
@@ -712,6 +714,7 @@ If the env var `EMBER_OWNER=v:<nookara id>` is set (Nookara mode only), the inst
 | `tags` | string[] | ≤ 8 directory tags, ≤ 24 chars each, lower-cased, no commas |
 | `bridges` | object | `{ discord_oauth: { client_id, client_secret } \| null, discord_shards: 1-64 }` (§16). The secret is write-only: GET returns `{ discord_oauth: { client_id, has_secret } \| null, discord_shards }`, and a PATCH without it keeps the stored one. `400 invalid_bridges` |
 | `push` | object | `{ default_gateway }`: the push gateway a pusher uses when its client names none (§20); `https`, default `https://nookara.cc/_ember/push/v1/notify`; `null` = the default. `400 invalid_push` |
+| `invites` | object | `{ url_base, clients: [ { name, url, icon_url? } ] }` (§3): where invite links point and the clients the invite page offers (up to 12; `http(s)` without credentials, `url_base` without `?` or `#`); `null` (whole or a key) = the default. `400 invalid_invites` |
 | `limits` | object | `{ defaults, tiers }` (§19); normally edited through `/api/v2/homeserver/limits` |
 
 `GET` (and `PATCH`) also return read-only relay status: `velora: { registration, nookara_url, registered, instance_id, trusted, voice: { cap_minutes, used_minutes } | null, registered_at, last_error, voice_backend: "direct" | "broker" | null, directory: { listed, hidden_by_staff, pushed_at, last_error } }`. `POST /api/v1/instance/velora/register` (admins) registers right away and returns the same object; it takes no body (a `token` field is ignored: Nookara tokens never go to an instance). `GET /api/v1/instance/owner-attestation` (instance owner only) returns `{ attestation, instance_id }` for the payee flow (§12.1).
