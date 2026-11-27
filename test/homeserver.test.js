@@ -191,7 +191,7 @@ test('landing page: the homeserver on top, every listed server under it', async 
   assert.ok(html.includes('a homeserver &lt;b&gt;for&lt;/b&gt; camps'));
   for (const s of ['<h3>Camp Fire</h3>', '<h3>Bobs Place</h3>', 'camp-fire@localhost', 'bobs@localhost', 'run by two']) assert.ok(html.includes(s), s);
   const invites = [(await alice.a.get(S(A.sid))).body.server.invite, (await bob.a.get(S(B.sid))).body.server.invite];
-  for (const code of invites) assert.ok(html.includes(`/invite/${code}"`), 'join link');
+  for (const [i, code] of invites.entries()) assert.ok(html.includes(`/i/${['camp-fire', 'bobs'][i]}/${code}"`), 'join link');
   assert.ok(!html.includes('alice') && !html.includes('carol'), 'no member names');
   const stats = (await api(base).get('/api/v1/instance/stats')).body;
   assert.equal(stats.name, 'The Woods'); assert.equal(stats.domain, 'localhost');

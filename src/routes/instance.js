@@ -39,6 +39,8 @@ function discovery() {
     ...require('../limits').discovery(), // PROTOCOL §19: the homeserver's default limits and the tiers a server can buy
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
     homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
+    // client-neutral invite links: <url_base><slug>/<code>; clients: [{ name, url, icon_url? }], url templates with {address} {slug} {domain} {code}
+    invites: { url_base: cfg.invites.url_base, clients: cfg.invites.clients },
     creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account }, // who may make a server here (admins / allowlist / request / anyone)
     communities_count: C.communityCount(),
     communities: C.listedCommunities().map(C.discoveryView),

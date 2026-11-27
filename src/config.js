@@ -30,6 +30,12 @@ const DEFAULTS = {
   creation: { mode: 'admins', allowlist: [], per_account: null },
 };
 const CREATION_MODES = ['admins', 'allowlist', 'request', 'anyone'];
+// client-neutral invite links (https://<domain>/i/<slug>/<code>): the "Open in" buttons of the invite page. In a url
+// {address} is slug@domain, and {slug}, {domain} and {code} are what they say
+const DEFAULT_INVITE_CLIENTS = [
+  { name: 'Ember', url: 'https://nookara.cc/chat#/i/{address}/{code}' },
+  { name: 'Canopy', url: 'https://canopy.ikelene.net/#/i/{address}/{code}' },
+];
 const DOMAIN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 function init({ dataDir, port } = {}) {
@@ -76,6 +82,29 @@ function socialUrl(raw) {
   if (u.username || u.password || u.search || u.hash || raw.includes('?') || raw.includes('#')) return null;
   if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devHttp())) return null;
   return u.href.replace(/\/+$/, '');
+}
+
+// an http(s) address an admin typed (a link on a page, never fetched): no credentials, at most n characters
+function linkUrl(raw, n = 500) {
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > n) return null;
+  let u; try { u = new URL(raw.trim()); } catch { return null; }
+  return /^https?:$/.test(u.protocol) && !u.username && !u.password ? raw.trim() : null;
+}
+// invites: { url_base, clients: [{ name, url, icon_url? }] }; null (or a null key) = the default
+function sanitizeInvites(v, bad) {
+  if (v === null) return { url_base: null, clients: null };
+  if (!v || typeof v !== 'object' || Array.isArray(v)) { bad('invalid_invites'); return {}; }
+  const o = {};
+  if (v.url_base === null || v.url_base === '') o.url_base = null;
+  else if (v.url_base !== undefined) { const u = linkUrl(v.url_base); if (u && !/[?#]/.test(u)) o.url_base = u.endsWith('/') ? u : u + '/'; else bad('invalid_invites'); }
+  if (v.clients === null) o.clients = null;
+  else if (v.clients !== undefined) {
+    const ok = Array.isArray(v.clients) && v.clients.length <= 12 && v.clients.every(c => c && typeof c === 'object' && typeof c.name === 'string' && c.name.trim() && c.name.trim().length <= 40
+      && linkUrl(c.url) && (c.icon_url === undefined || c.icon_url === null || c.icon_url === '' || linkUrl(c.icon_url)));
+    if (ok) o.clients = v.clients.map(c => ({ name: c.name.trim(), url: c.url.trim(), ...(c.icon_url ? { icon_url: c.icon_url.trim() } : {}) }));
+    else bad('invalid_invites');
+  }
+  return o;
 }
 
 // validate a (partial) settings object. loose = ignore unknown keys / bad values quietly (hand-edited file)
@@ -141,6 +170,7 @@ function sanitize(p, loose = false) {
       out.bridges = b;
     }
   }
+  if (p.invites !== undefined) out.invites = sanitizeInvites(p.invites, bad);
   if (p.limits !== undefined) out.limits = require('./limits').sanitize(p.limits, loose); // PROTOCOL §19: { defaults, tiers }
   if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
   if (p.social !== undefined) { // PROTOCOL §4c: where the social API of this homeserver's Nookara accounts is (nookara_identity); null = here
@@ -180,10 +210,13 @@ function get() {
   v.push = { default_gateway: data.push?.default_gateway || 'https://nookara.cc/_ember/push/v1/notify' };
   v.bridges = { discord_oauth: data.bridges?.discord_oauth || null, discord_shards: data.bridges?.discord_shards || 1 };
   v.limits = { defaults: data.limits?.defaults || {}, tiers: data.limits?.tiers || [] };
+  v.invites = { url_base: data.invites?.url_base || null, clients: data.invites?.clients || DEFAULT_INVITE_CLIENTS };
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
   v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
   v.nookara_url = normalizeOrigin(v.nookara_url);
   if (!v.domain) { try { v.domain = new URL(v.public_url).hostname.toLowerCase(); } catch { v.domain = 'localhost'; } }
+  // https://<domain>/i/ (the public url's own origin when it is the domain, so an http dev server links to itself)
+  if (!v.invites.url_base) { let same = false; try { same = new URL(v.public_url).hostname.toLowerCase() === v.domain; } catch { /* no */ } v.invites.url_base = same ? v.public_url + '/i/' : `https://${v.domain}/i/`; }
   if (['auto', 'off'].includes(env('NOOKARA_REGISTRATION'))) v.nookara_registration = env('NOOKARA_REGISTRATION');
   let forced = envMode();
   if (managed.active()) { // Nookara-hosted (PROTOCOL §19): sign-in and registration are fixed, uploads are capped by the plan
@@ -225,6 +258,7 @@ function update(patch) {
     clean.bridges = { ...cur, ...clean.bridges };
   }
   if (clean.limits) clean.limits = { ...(data.limits || {}), ...clean.limits };
+  if (clean.invites) { clean.invites = { ...(data.invites || {}), ...clean.invites }; for (const k of ['url_base', 'clients']) if (clean.invites[k] === null) delete clean.invites[k]; }
   if (clean.federation) clean.federation = FS.merge(data.federation || {}, clean.federation);
   if (clean.social) clean.social = { ...(data.social || {}), ...clean.social };
   // the old accounts_mode / registration settings edit the accounts block (a value that only repeats what the block already
@@ -282,7 +316,7 @@ function adminView() {
     accounts_mode_env: !!envMode(), // the env var wins over the saved setting
     nookara_url: v.nookara_url, registration: v.registration, max_upload_mb: v.max_upload_mb, max_backups: v.max_backups,
     youtube: v.youtube, nookara_registration: v.nookara_registration, tags: v.tags, ember_clients: v.ember_clients,
-    push: v.push,
+    push: v.push, invites: v.invites,
     bridges: { discord_oauth: v.bridges.discord_oauth ? { client_id: v.bridges.discord_oauth.client_id, has_secret: !!v.bridges.discord_oauth.client_secret } : null, discord_shards: v.bridges.discord_shards },
     voice: { cf_app_id: v.voice.cf_app_id, has_app_secret: !!v.voice.cf_app_secret, cf_turn_key_id: v.voice.cf_turn_key_id, has_turn_token: !!v.voice.cf_turn_token },
   });
@@ -294,4 +328,4 @@ function publicView() {
 }
 const voiceConfigured = () => { if (managed.active() && !managed.allows('custom_voice_keys')) return false; const v = get().voice; return !!(v.cf_app_id && v.cf_app_secret && v.cf_turn_key_id && v.cf_turn_token); };
 
-module.exports = { init, get, mode, publicUrl, domain, nookaraIdentity, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS, envMode, devHttp, saved: () => AS.complete(data.accounts || {}), _test: { allowHttp(on) { allowHttp = !!on; } } };
+module.exports = { init, get, mode, publicUrl, domain, nookaraIdentity, update, watch, unwatch, adminView, publicView, voiceConfigured, events, dir: () => DATA_DIR, port: () => PORT, setPort: p => { PORT = p; }, DEFAULTS, DEFAULT_INVITE_CLIENTS, envMode, devHttp, saved: () => AS.complete(data.accounts || {}), _test: { allowHttp(on) { allowHttp = !!on; } } };

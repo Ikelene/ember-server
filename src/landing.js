@@ -38,7 +38,8 @@ function stats() {
   const servers = list.map(c => ({
     name: c.name, slug: c.slug, address: `${c.slug}@${cfg.domain}`, description: c.description || '', icon_url: absUrl(c.icon_url),
     members: n('SELECT COUNT(*) n FROM members WHERE community_id = ?', c.id), join_policy: c.join_policy,
-    join_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(cfg.public_url)}/invite/${c.invite_code}`,
+    join_url: `${emberBase(cfg.nookara_url)}#/i/${encodeURIComponent(cfg.public_url)}/invite/${c.invite_code}`, // (older clients' link, kept)
+    invite_url: require('./invite-page').inviteUrl(c.slug, c.invite_code), // the homeserver's own, any client opens it
   }));
   const { online, connections } = require('./gateway').counts();
   const { uptime_s, started_at } = require('./version').runtime();
@@ -207,7 +208,7 @@ function page() {
       <div class="si">${v.icon_url ? `<img src="${esc(v.icon_url)}" alt="">` : first(v.name)}</div>
       <div class="sw"><h3>${esc(v.name)}</h3><div class="sa">${esc(v.address)}</div>${v.description ? `<p>${esc(v.description)}</p>` : ''}
         <div class="meta"><span>${icon('users', 14)}<b>${fmt(v.members)}</b> member${v.members === 1 ? '' : 's'}</span><span>${icon('lock', 14)}${esc(JOIN[v.join_policy] || v.join_policy)}</span></div></div>
-      <a class="btn primary" href="${esc(v.join_url)}" rel="noopener">${icon('flame')}Join</a>
+      <a class="btn primary" href="${esc(v.invite_url)}">${icon('flame')}Join</a>
     </div>`;
   const title = `${name} on Ember`;
   const summary = `${fmt(s.members)} member${s.members === 1 ? '' : 's'}${s.description ? ' · ' + s.description.replace(/\s+/g, ' ').slice(0, 160) : ''}`;
