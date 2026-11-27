@@ -1,7 +1,9 @@
 'use strict';
-// The homeserver's sign-in page (GET /login, PROTOCOL §4a): plain server-rendered HTML, no scripts, nothing loaded from
-// anywhere else. Every value that reaches the page is escaped.
+// The homeserver's sign-in page (GET /login, PROTOCOL §4a): plain server-rendered HTML, no scripts. Every value that reaches the
+// page is escaped. Its look is the homeserver's branding (branding.js, PROTOCOL §5e): the rules below are served as a stylesheet
+// (/_ember/page/base.css), then the theme and the admin's custom CSS; no inline styles.
 const config = require('./config');
+const branding = require('./branding');
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -10,9 +12,16 @@ const CSS = `
 @media (prefers-color-scheme:light){:root{color-scheme:light;--bg:#f4f4f6;--surface:#ffffff;--surface-2:#f0f0f3;--border:#dcdce2;--border-2:#c9c9d1;--text:#18181b;--muted:#5d5d68;--accent:#6f5bb0;--accent-ink:#ffffff;--bad:#dc2626}}
 *{box-sizing:border-box;border-radius:0}
 html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--accent)}
+a{color:var(--link,var(--accent))}
 .wrap{max-width:400px;margin:0 auto;padding:48px 16px}
-.card{background:var(--surface);border:1px solid var(--border);padding:24px}
+.card{background:var(--surface);border:1px solid var(--border);padding:var(--pad,24px)}
+.hb{margin:calc(var(--pad,24px) * -1) calc(var(--pad,24px) * -1) 20px;height:120px;overflow:hidden;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.hb img{width:100%;height:100%;object-fit:cover;display:block}
+.logo{display:block;max-width:100%;max-height:72px;object-fit:contain}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.m0{margin:0}
+.grow{flex:1}
+.full{width:100%}
 .hs{display:flex;align-items:center;gap:14px;margin-bottom:20px}
 .ic{width:56px;height:56px;background:var(--surface-2);display:grid;place-items:center;overflow:hidden;font-size:24px;font-weight:700;color:var(--accent);flex:none}
 .ic img{width:100%;height:100%;object-fit:cover;display:block}
@@ -32,6 +41,7 @@ input:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-o
 .foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;margin-top:18px;font-size:14px}
 .to{margin-top:16px;color:var(--muted);font-size:13px;text-align:center;overflow-wrap:anywhere}
 `;
+branding.registerSheet('base', CSS);
 
 const MESSAGES = {
   invalid_credentials: 'Wrong username or password.',
@@ -55,14 +65,19 @@ const MESSAGES = {
 };
 const message = code => MESSAGES[code] || 'Something went wrong. Try again.';
 
-// extraCss: more rules for a page that needs them (the account page)
+// sheet: the page's own stylesheet (branding.registerSheet), e.g. the account page's
 // meta: more <head> lines (already escaped), e.g. the invite page's link preview tags
-function head(title, extraCss = '', meta = '') {
-  const cfg = config.get();
-  let icon = null;
-  if (cfg.icon_url) { try { const x = new URL(String(cfg.icon_url), cfg.public_url + '/'); if (/^https?:$/.test(x.protocol)) icon = x.href; } catch { /* none */ } }
-  const name = cfg.name || 'Ember server';
+// brand: { branding, prefix } for a preview of branding that is not saved (the saved one otherwise)
+function head(title, sheet = '', meta = '', brand = null) {
+  const b = brand?.branding || branding.saved();
+  const r = branding.resolve(b);
+  const icon = r.icon_url, name = r.name;
   const initial = esc((Array.from(name.trim())[0] || 'E').toUpperCase());
+  const banner = r.banner_url ? `
+  <div class="hb"><img src="${esc(r.banner_url)}" alt=""></div>` : '';
+  const who = r.theme.header === 'logo'
+    ? `<div><img class="logo" src="${esc(r.logo_url)}" alt="${esc(name)}"><h1 class="sr">${esc(name)}</h1><div class="dom">${esc(r.domain)}</div></div>`
+    : `<div class="ic">${icon ? `<img src="${esc(icon)}" alt="">` : initial}</div><div><h1>${esc(name)}</h1><div class="dom">${esc(r.domain)}</div></div>`;
   return {
     top: `<!doctype html>
 <html lang="en">
@@ -73,12 +88,13 @@ function head(title, extraCss = '', meta = '') {
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
 ${meta}${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
-<style>${CSS}${extraCss}</style>
+${branding.pageLink('base')}
+${sheet ? branding.pageLink(sheet) + '\n' : ''}${branding.links(b, brand?.prefix ? { prefix: brand.prefix } : {})}
 </head>
 <body>
 <main class="wrap">
-<div class="card">
-  <div class="hs"><div class="ic">${icon ? `<img src="${esc(icon)}" alt="">` : initial}</div><div><h1>${esc(name)}</h1><div class="dom">${esc(cfg.domain)}</div></div></div>`,
+<div class="card">${banner}
+  <div class="hs">${who}</div>`,
     bottom: `
 </div>
 </main>
@@ -92,7 +108,7 @@ const query = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v !==
 
 // { authz, csrf, view: 'login' | 'register', methods: [{ id, kind, name }], canRegister, registration (the mode), invite, error, notice, link, to }
 function loginPage(p) {
-  const h = head(`Sign in to ${config.get().name || 'Ember'}`);
+  const h = head(`Sign in to ${branding.resolve(p.brand?.branding || branding.saved()).name}`, '', '', p.brand || null);
   const password = p.methods.find(m => m.kind === 'password');
   const others = p.methods.filter(m => m.kind !== 'password');
   const carry = { ...p.authz, ...(p.link ? { link: p.link } : {}) };
@@ -135,21 +151,31 @@ function loginPage(p) {
 }
 
 // a page with one message (an error that cannot go back to the client, the end of linking a login)
-function messagePage({ title, text, bad = false, links = [] }) {
-  const h = head(title);
+function messagePage({ title, text, bad = false, links = [], brand = null }) {
+  const h = head(title, '', '', brand);
   return `${h.top}
   <h2>${esc(title)}</h2>
   <p class="msg${bad ? ' bad' : ''}"${bad ? ' role="alert"' : ''}>${esc(text)}</p>
   ${links.length ? `<div class="foot">${links.map(l => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join('')}</div>` : ''}${h.bottom}`;
 }
 
+// the sign-in page with branding that is not saved yet (an admin's live preview, branding.js): its forms go nowhere
+function previewPage(b, id, which) {
+  const brand = { branding: b, prefix: `/branding/preview/${encodeURIComponent(id)}` };
+  if (which === 'message') return messagePage({ title: 'Something to know', text: 'This is how a message from this homeserver looks.', links: [{ href: '#', label: 'A link' }], brand });
+  return loginPage({ brand, authz: {}, csrf: 'preview', view: 'login', methods: [{ id: 'password', kind: 'password', name: 'Password' }], canRegister: true, registration: 'open', notice: 'This is a preview of your branding.', to: 'Ember' });
+}
+
 // formTo: the client origin the last redirect goes to (a form's redirect chain is checked against form-action)
-function send(res, status, body, { cookies = [], formTo = null } = {}) {
-  const csp = `default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'${formTo ? ' ' + formTo : ''}; frame-ancestors 'none'`;
+// preview: a page an admin's client shows in a frame (its forms go nowhere)
+function send(res, status, body, { cookies = [], formTo = null, preview = false } = {}) {
+  const csp = preview
+    ? branding.csp({ form: "'none'", frameAncestors: config.get().ember_clients.join(' ') })
+    : branding.csp({ formTo });
   res.removeHeader('Access-Control-Allow-Origin');
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store',
-    'Content-Security-Policy': csp, 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', ...(cookies.length ? { 'Set-Cookie': cookies } : {}),
+    'Content-Security-Policy': csp, 'Referrer-Policy': 'no-referrer', ...(preview ? {} : { 'X-Frame-Options': 'DENY' }), ...(cookies.length ? { 'Set-Cookie': cookies } : {}),
   });
   res.end(body);
 }
@@ -159,4 +185,4 @@ function redirect(res, url, cookies = []) {
   res.end();
 }
 
-module.exports = { loginPage, messagePage, send, redirect, message, esc, head };
+module.exports = { loginPage, messagePage, previewPage, send, redirect, message, esc, head, CSS };

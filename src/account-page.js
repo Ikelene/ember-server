@@ -111,13 +111,14 @@ textarea:focus-visible,select:focus-visible{outline:2px solid var(--accent);outl
 .inline{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 .inline .btn{margin-top:0;width:auto;flex:1}
 `;
+require('./branding').registerSheet('account', CSS);
 function render(s, { note, error } = {}) {
   const u = auth.userById(s.user.id), cfg = config.get(), csrf = esc(csrfOf(s.token));
   const hidden = `<input type="hidden" name="csrf" value="${csrf}">`;
   const profile = require('./account-profile').get(u).profile;
   const settings = require('./communities').getSettings(u);
   const logins = require('./login').logins(u).logins;
-  const h = page.head(`Your account on ${cfg.name || 'Ember'}`, CSS);
+  const h = page.head(`Your account on ${require('./branding').resolve(require('./branding').saved()).name}`, 'account');
   const avatar = require('./social/people').absolute(u.pfp);
   // a Nookara account (accounts.nookara_identity): name and picture follow Nookara; DM privacy is Nookara's when its social API is there
   const nookara = u.kind !== 'local', elsewhere = require('./social/where').apiElsewhere(u);
@@ -126,7 +127,7 @@ function render(s, { note, error } = {}) {
   else if (note && NOTES[note]) body += `<p class="msg" role="status">${esc(NOTES[note])}</p>`;
   body += `
   <div class="who"><div class="av">${avatar ? `<img src="${esc(avatar)}" alt="">` : esc((Array.from(u.display_name || u.username)[0] || '?').toUpperCase())}</div>
-    <div><h2 style="margin:0">${esc(u.display_name || u.username)}</h2><div class="sub">${esc(u.username)}@${esc(cfg.domain)}</div></div></div>
+    <div><h2 class="m0">${esc(u.display_name || u.username)}</h2><div class="sub">${esc(u.username)}@${esc(cfg.domain)}</div></div></div>
 
   <section aria-labelledby="h-profile"><h2 id="h-profile">Profile</h2>
   ${nookara ? '<p class="sub">Your name and picture come from your Nookara account and are updated each time you sign in.</p>' : ''}
@@ -160,8 +161,8 @@ ${elsewhere ? `
   ${sessionsOf(u, s).map(x => `<div class="row"><div><div>${x.current ? 'This page' : 'A signed-in client'}</div><div class="sub">Signed in ${esc(when(x.created_at))}, last used ${esc(when(x.last_used))}</div></div>${
     x.current ? '' : `<form method="post" action="/account/sessions/end">${hidden}<input type="hidden" name="key" value="${esc(x.key)}"><button class="btn small" type="submit">Sign out<span class="sub"> this session</span></button></form>`}</div>`).join('\n  ')}
   <div class="inline">
-    <form method="post" action="/account/signout" style="flex:1">${hidden}<button class="btn" type="submit" style="width:100%">Sign out of this page</button></form>
-    <form method="post" action="/account/signout-all" style="flex:1">${hidden}<button class="btn danger" type="submit" style="width:100%">Sign out everywhere</button></form>
+    <form method="post" action="/account/signout" class="grow">${hidden}<button class="btn full" type="submit">Sign out of this page</button></form>
+    <form method="post" action="/account/signout-all" class="grow">${hidden}<button class="btn danger full" type="submit">Sign out everywhere</button></form>
   </div></section>`;
   return `${h.top}${body}${h.bottom}`;
 }

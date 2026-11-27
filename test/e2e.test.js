@@ -172,6 +172,8 @@ test('create a community: defaults, detail shape', async () => {
   assert.ok(Math.abs(mem.body.members[0].joined_at - Date.now()) < 60000);
 });
 
+// the homeserver in discovery, without the branding of its pages (test/branding.test.js has that)
+const hsCore = h => ({ domain: h.domain, name: h.name, description: h.description, icon_url: h.icon_url });
 test('a second server: admins may create it, others not by default; discovery shape', async () => {
   const again = await alice.a.post('/api/v1/servers', { name: 'Second' });
   assert.equal(again.status, 200, JSON.stringify(again.body));
@@ -186,7 +188,7 @@ test('a second server: admins may create it, others not by default; discovery sh
   const d = (await api(base).get('/.well-known/ember')).body;
   assert.deepEqual(d.community, { sid, slug: 'camp-fire', address: 'camp-fire@localhost', name: 'Camp Fire', icon_url: null, description: 'hello', member_count: 1, join_policy: 'request' });
   assert.equal(d.protocol, 1); assert.equal(d.protocol_version, 2);
-  assert.deepEqual(d.homeserver, { domain: 'localhost', name: d.name, description: d.description, icon_url: d.icon_url });
+  assert.deepEqual(hsCore(d.homeserver), { domain: 'localhost', name: d.name, description: d.description, icon_url: d.icon_url });
   assert.notEqual(d.name, 'Camp Fire'); // the homeserver keeps its own name
   assert.notEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).name, 'Camp Fire');
   // /discover with a single server returns it whether or not it is "listed"
@@ -204,7 +206,7 @@ test('the homeserver and a server each have their own name/description/icon', as
   assert.deepEqual([det.name, det.description, det.icon], ['Camp Fire', 'hello', null]);
   let disc = (await api(base).get('/.well-known/ember')).body;
   assert.equal(disc.community.name, 'Camp Fire');
-  assert.deepEqual(disc.homeserver, { domain: 'localhost', name: 'Renamed Camp', description: 'via settings', icon_url: 'https://img.example/i.png' });
+  assert.deepEqual(hsCore(disc.homeserver), { domain: 'localhost', name: 'Renamed Camp', description: 'via settings', icon_url: 'https://img.example/i.png' });
   // server settings leave the homeserver alone (PATCH + icon upload/delete)
   const p = await alice.a.patch(`/api/v1/servers/${sid}`, { name: 'Camp Fire 2', description: 'hello again' });
   assert.equal(p.status, 200, JSON.stringify(p.body));

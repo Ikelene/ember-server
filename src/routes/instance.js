@@ -38,7 +38,8 @@ function discovery() {
     ...require('../push').discovery(), // PROTOCOL §20: where a client registers its pushers
     ...require('../limits').discovery(), // PROTOCOL §19: the homeserver's default limits and the tiers a server can buy
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
-    homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
+    // (with its branding, PROTOCOL §5e: the name and pictures its pages show, and the theme tokens clients may tint it with)
+    homeserver: { ...require('../branding').discovery(), description: cfg.description },
     // client-neutral invite links: <url_base><slug>/<code>; clients: [{ name, url, icon_url? }], url templates with {address} {slug} {domain} {code}
     invites: { url_base: cfg.invites.url_base, clients: cfg.invites.clients },
     creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account, ...(cfg.creation.mode === 'request' ? { request_url: require('../server-requests').requestUrl() } : {}) }, // who may make a server here (admins / allowlist / request / anyone); request: where to ask

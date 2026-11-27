@@ -823,6 +823,65 @@ Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds 
 
 A Nookara member's `username` / `display_name` / `pfp` follow their Nookara profile: the instance refreshes them from `GET NOOKARA/bonfire/profiles?ids=1,2,3` (public, ≤ 100 ids, `{ profiles: [{ id, username, display_name, pfp }] }`) on every gateway `chat_hello` (at most once per account per 10 minutes), every 15 minutes for members, and at sign-in. A change emits `chat_identity_update { user, previous_username }` to every community the person is in; system lines (`body_parts`) already render the current name. Clients should patch every cached `author` / `subject` / member whose `id` equals `user.id` (principal, e.g. `v:12`). A client that learned about a change sooner (Nookara's own `user_update` event) may send `chat_profile_refresh { velora_id }` to make the instance re-read that one profile right away (no reply; throttled to one fetch per account per 15 s). Env `EMBER_PROFILE_SYNC=0` turns the refresh off (so does `nookara_registration: "off"`).
 
+### 5e. Homeserver branding
+
+A homeserver admin sets how the homeserver's **own pages** look: `/login` and the pages around it (register, link, confirm, waiting for approval), `/account`, the invite page `/i/<slug>/<code>`, the landing page `/`, the payment-link and bridge pages, and error pages (a browser that asks for a page that does not exist gets a 404 page; any other client still gets `{ error: "not_found" }`). The Ember and Canopy apps are never styled by it, and Nookara's pages stay Nookara's.
+
+**The setting** is `branding` in config.json. Every key is optional; when a key is not set, the page uses the default.
+
+```
+branding: {
+  name,                 // 1-64 characters; the default is the homeserver's name
+  icon_url, banner_url, logo_url,   // https, or this homeserver's own address (its uploads below)
+  accent,               // "#rrggbb", for both schemes
+  theme: {
+    scheme,             // "dark" | "light" | "auto" (default auto: dark, light for prefers-color-scheme: light)
+    dark:  { accent, background, surface, text, muted, border },   // "#rrggbb" each
+    light: { accent, background, surface, text, muted, border },
+    radius, button_radius,          // 0-24 (px)
+    font,               // "system" | "sans" | "serif" | "mono" | "rounded" | "humanist" | "custom" (needs font_url)
+    font_url,           // an uploaded font file (woff2 / woff / ttf / otf)
+    font_size,          // 12-20 (px)
+    density,            // "compact" | "normal" | "comfortable"
+    banner_height,      // 0-320 (px)
+    banner_position,    // "top" | "center" | "bottom"
+    header,             // "icon" (icon + name) | "logo" (logo_url in place of both; the name stays for screen readers)
+    page_width,         // 320-960 (px)
+    background_url      // a page background picture
+  },
+  custom_css            // admins' own CSS, at most 50 KB (below)
+}
+```
+
+**Checked on save.** An unknown key or a bad value gets `400 invalid_branding { field, reason }` (`reason`: `invalid`, `unknown`, `out_of_range`, `https_or_own`, `missing`, `low_contrast`, `too_large`, or the custom CSS reasons below). Colours have to be readable in every scheme that is used: `text` on `background` and on `surface` at least 4.5:1, and `muted` on `surface` at least 3:1. The text on the accent (`accent_ink`) is picked by contrast. Links and focus rings use the accent where it reads on `surface` (3:1), and the text colour where it does not.
+
+**Custom CSS** is refused (`field: "custom_css"`) when, after its escapes are read and its comments dropped, it has `@import` (`import`), `expression(` (`expression`), `javascript:` / `vbscript:` (`script_url`), `behavior` (`behavior`), `-moz-binding` (`binding`), `</style`, `<!--` or `<script` (`markup`), or `src(` (`src_function`). A `url()` or an `image-set()` string may only point to `https://`, to a path on this homeserver (`/...`), or to a `data:image/(png|gif|jpeg|webp);base64` picture (otherwise `url_not_allowed`). It is served as its own stylesheet, after the theme, on the homeserver's pages only. Only homeserver admins can set it. **It can change or hide anything on those pages, including the sign-in page's text and the "You will go back to ..." line.** That is the admin's call about their own pages, and nothing a member sends ever reaches it.
+
+**How pages get it.** The pages are plain HTML with no inline styles and no inline scripts. They link `/_ember/page/<name>.css` (the page's own rules), then `/branding/theme.css` (the theme as CSS custom properties, generated from the checked values only: `--bg --surface --surface-2 --border --border-2 --text --muted --accent --accent-ink --link --pad`), then `/branding/custom.css` when there is custom CSS. The page CSP is `default-src 'none'; img-src 'self' https: data:; font-src 'self' https:; style-src 'self'; base-uri 'none'; form-action 'self' [client]; frame-ancestors 'none'`. The landing page also has `script-src 'self'; connect-src 'self'` for its live numbers, which load from `/_ember/page/landing.js`.
+
+**Admin API** (homeserver admins; others get `403`):
+- `GET /api/v2/homeserver/branding` -> `{ branding, homeserver, fonts, limits }`. `branding` is what is saved, `custom_css` included. `homeserver` is the resolved discovery object below. `limits` is `{ name: 64, custom_css_bytes: 51200, radius: [0, 24], button_radius: [0, 24], font_size: [12, 20], banner_height: [0, 320], page_width: [320, 960] }`.
+- `PATCH /api/v2/homeserver/branding { ...partial }` -> the same. It merges with what is saved (`theme` and its `dark` / `light` too), and `null` sets a key back to its default.
+- `DELETE /api/v2/homeserver/branding` sets everything back to the defaults.
+- `POST /api/v2/homeserver/branding/upload?kind=icon|banner|logo|background|font` (multipart `file`) -> `{ kind, url, size, type }`. It accepts PNG, JPEG (EXIF removed), GIF or WebP up to 5 MB, and woff2, woff, ttf or otf fonts up to 2 MB. The type is detected from the bytes (`415 unsupported_type` otherwise). Files are served at `GET /branding/files/<hash>.<ext>` (immutable). Put the `url` into `icon_url`, `banner_url`, `logo_url`, `theme.background_url` or `theme.font_url`.
+- `POST /api/v2/homeserver/branding/preview { branding: {...partial}, page?: "login" | "message" }` -> `{ url, expires_at, homeserver }`. This is a live preview: `url` renders the sign-in page (or a message page) with the saved branding plus the change, which is not saved. It works for 10 minutes and needs no session (the address is the secret). It is checked like a save. Its CSP allows framing by the `ember_clients` origins, and its forms go nowhere (`form-action 'none'`).
+
+**Discovery** publishes the resolved look, never the custom CSS:
+
+```
+homeserver: {
+  domain, name, description, icon_url, banner_url, logo_url, accent,
+  theme: {
+    scheme,
+    colors: { dark: { accent, accent_ink, background, surface, text, muted, border, link }, light: { ... } },
+    radius, button_radius, font, font_stack, font_url, font_size, density,
+    banner_height, banner_position, header, page_width, background_url
+  }
+}
+```
+
+The colours are always filled in, with the defaults where nothing is set. A client can tint the homeserver's chips and cards with `colors[scheme]`, or with `colors.dark` / `colors.light` to match its own scheme.
+
 ## 6. Communities: REST (compatibility rule)
 
 **Rule:** every endpoint below uses the same path as Nookara's current `routes/chat.js`, with the `/chat` prefix replaced by `/api/v1`. It has the same request body and the **same response JSON shape** as Nookara returns today. The only difference is that user ids are principal strings (§4).

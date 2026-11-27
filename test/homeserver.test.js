@@ -66,7 +66,9 @@ test('setup: an unclaimed homeserver has no servers', async () => {
   const d = await disco();
   assert.equal(d.protocol, 1); assert.equal(d.protocol_version, 2);
   assert.equal(d.communities_count, 0); assert.deepEqual(d.communities, []); assert.equal(d.community, null);
-  assert.deepEqual(d.homeserver, { domain: 'localhost', name: 'Ember Instance', description: '', icon_url: null });
+  const { theme, ...hs } = d.homeserver; // (with the branding of its pages, PROTOCOL §5e: none set)
+  assert.deepEqual(hs, { domain: 'localhost', name: 'Ember Instance', description: '', icon_url: null, banner_url: null, logo_url: null, accent: null });
+  assert.equal(theme.scheme, 'auto');
   assert.equal((await alice.a.post('/api/v1/instance/claim', { code: inst.setup.current() })).status, 200);
   const s = (await alice.a.get('/api/v1/instance/settings')).body;
   assert.deepEqual(s.creation, { mode: 'admins', allowlist: [], per_account: null });

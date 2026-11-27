@@ -171,6 +171,9 @@ function sanitize(p, loose = false) {
     }
   }
   if (p.invites !== undefined) out.invites = sanitizeInvites(p.invites, bad);
+  if (p.branding !== undefined) { // PROTOCOL §5e: the homeserver's look on its own pages (branding.js checks every value)
+    try { out.branding = p.branding === null ? null : require('./branding').sanitize(p.branding); } catch (e) { if (!loose) throw e; }
+  }
   if (p.limits !== undefined) out.limits = require('./limits').sanitize(p.limits, loose); // PROTOCOL §19: { defaults, tiers }
   if (p.federation !== undefined) out.federation = FS.sanitize(p.federation, { loose, allowHttp: devHttp() }); // PROTOCOL §4b
   if (p.social !== undefined) { // PROTOCOL §4c: where the social API of this homeserver's Nookara accounts is (nookara_identity); null = here
@@ -211,6 +214,7 @@ function get() {
   v.bridges = { discord_oauth: data.bridges?.discord_oauth || null, discord_shards: data.bridges?.discord_shards || 1 };
   v.limits = { defaults: data.limits?.defaults || {}, tiers: data.limits?.tiers || [] };
   v.invites = { url_base: data.invites?.url_base || null, clients: data.invites?.clients || DEFAULT_INVITE_CLIENTS };
+  v.branding = data.branding || {};
   if (env('NOOKARA_URL')) v.nookara_url = normalizeOrigin(env('NOOKARA_URL')) || v.nookara_url;
   v.public_url = normalizeOrigin(env('PUBLIC_URL') || v.public_url || `http://localhost:${PORT}`);
   v.nookara_url = normalizeOrigin(v.nookara_url);

@@ -54,6 +54,7 @@ const CSS = `
 .paste dt{color:var(--muted)}
 .paste dd{margin:0;color:var(--text);font:13px/1.5 Consolas,"Cascadia Code",ui-monospace,monospace;overflow-wrap:anywhere;user-select:all}
 `;
+require('./branding').registerSheet('invite', CSS);
 
 // link previews in other apps (Open Graph / Twitter card): the server's name, description and icon, the homeserver as site
 function previewMeta(d, c, code, icon) {
@@ -70,7 +71,7 @@ function render({ c, code }) {
   const cfg = config.get(), d = C.discoveryView(c), icon = absUrl(c.icon_url);
   const vars = { slug: c.slug, domain: cfg.domain, code };
   const initial = esc((Array.from(String(d.name || '').trim())[0] || 'E').toUpperCase());
-  const h = page.head(`Join ${d.name}`, CSS, previewMeta(d, c, code, icon));
+  const h = page.head(`Join ${d.name}`, 'invite', previewMeta(d, c, code, icon));
   const proto = `web+ember:invite?${new URLSearchParams({ address: d.address, ...(code ? { code } : {}) })}`;
   const clients = cfg.invites.clients.map(x => `<a class="btn" href="${esc(fill(x.url, vars))}" rel="noopener">${x.icon_url ? `<img src="${esc(x.icon_url)}" alt="">` : ''}Open in ${esc(x.name)}</a>`).join('\n  ');
   const n = d.member_count;

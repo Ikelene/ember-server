@@ -3,6 +3,7 @@
 // Everything on it is already public (the discovery document, the invite card): names, descriptions, icons, member counts,
 // plus counts only (people online, sockets, channels, uptime), never who. Anything else asking for "/" still gets the JSON it always did.
 const config = require('./config');
+const branding = require('./branding');
 const db = require('./db');
 const pkg = require('../package.json');
 
@@ -32,7 +33,7 @@ function emberLink(origin) {
 
 function stats() {
   if (cache.v && Date.now() - cache.at < STATS_TTL) return cache.v;
-  const cfg = config.get(), list = shown(), one = list.length === 1 ? list[0] : null;
+  const cfg = config.get(), list = shown(), one = list.length === 1 ? list[0] : null, brand = branding.resolve(branding.saved());
   const n = (sql, ...a) => db.get(sql, ...a)?.n || 0;
   const { emberBase } = require('./util');
   const servers = list.map(c => ({
@@ -45,8 +46,9 @@ function stats() {
   const { uptime_s, started_at } = require('./version').runtime();
   const v = {
     // the homeserver's own name, description and icon; the numbers are the whole homeserver's
-    name: cfg.name, description: cfg.description || '', domain: cfg.domain,
-    icon_url: absUrl(cfg.icon_url), banner_url: absUrl(one?.banner_url),
+    // (its branding, PROTOCOL §5e: the name, icon and banner it set for its pages; else its settings and a single server's banner)
+    name: brand.name, description: cfg.description || '', domain: cfg.domain,
+    icon_url: brand.icon_url, banner_url: brand.banner_url || absUrl(one?.banner_url), accent: brand.theme.colors.dark.accent,
     members: n("SELECT COUNT(DISTINCT m.user_id) n FROM members m JOIN communities c ON c.id = m.community_id WHERE c.kind = 'server'"),
     online, connections,
     channels: n("SELECT COUNT(*) n FROM channels ch JOIN communities c ON c.id = ch.community_id WHERE c.kind = 'server'"),
@@ -223,7 +225,7 @@ function page() {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(summary)}">
-<meta name="theme-color" content="#9d8ad1">
+<meta name="theme-color" content="${esc(s.accent)}">
 <link rel="canonical" href="${esc(s.url)}/">
 ${s.icon_url ? `<link rel="icon" href="${esc(s.icon_url)}">` : ''}
 <meta property="og:type" content="website">
@@ -236,7 +238,8 @@ ${ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : ''}
 <meta name="twitter:title" content="${esc(name)}">
 <meta name="twitter:description" content="${esc(summary)}">
 ${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
-<style>${CSS}</style>
+${branding.pageLink('landing')}
+${branding.links(branding.saved())}
 </head>
 <body>
 <main class="wrap">
@@ -299,18 +302,21 @@ ${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
     <a href="https://github.com/Ikelene/ember-server" rel="noopener">${icon('code', 14)}Run your own</a>
   </footer>
 </main>
-<script>${JS}</script>
+${branding.scriptTag('landing')}
 </body>
 </html>`;
 }
 
-const CSP = "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+branding.registerSheet('landing', CSS);
+branding.registerScript('landing', JS);
+// its own stylesheets and script only (PROTOCOL §5e): nothing inline
+const CSP = () => branding.csp({ form: "'none'", script: "'self'", connect: "'self'" });
 
 function sendPage(req, res) {
   const body = page();
   res.writeHead(200, {
     'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-cache',
-    'Content-Security-Policy': CSP, 'Referrer-Policy': 'strict-origin-when-cross-origin', Vary: 'Accept',
+    'Content-Security-Policy': CSP(), 'Referrer-Policy': 'strict-origin-when-cross-origin', Vary: 'Accept',
   });
   res.end(req.method === 'HEAD' ? undefined : body);
 }

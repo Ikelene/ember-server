@@ -116,9 +116,12 @@ test('other paths are untouched for browsers too', async () => {
   const r = await get('/health', BROWSER);
   assert.match(r.headers.get('content-type'), /json/);
   assert.deepEqual(await r.json(), { ok: true });
+  // (a page that is not there: the homeserver's own error page for a browser, PROTOCOL §5e; JSON for everything else)
   const nf = await get('/nope', BROWSER);
   assert.equal(nf.status, 404);
-  assert.deepEqual(await nf.json(), { error: 'not_found' });
+  assert.match(nf.headers.get('content-type'), /html/);
+  assert.match(await nf.text(), /Not found/);
+  assert.deepEqual(await (await get('/nope')).json(), { error: 'not_found' });
   const wk = await get('/.well-known/ember', BROWSER);
   assert.equal((await wk.json()).software, 'bonfire-server');
 });

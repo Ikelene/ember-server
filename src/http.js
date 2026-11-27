@@ -13,6 +13,13 @@ const CORS = {
   'Access-Control-Max-Age': '86400',
 };
 
+// a browser asking for a page (not the API): errors get the homeserver's own page, with its branding (PROTOCOL §5e)
+const htmlPage = (req, pathname) => (req.method === 'GET' || req.method === 'HEAD') && !pathname.startsWith('/api/') && !pathname.startsWith('/_') && require('./landing').wantsHtml(req);
+function errorPage(res, status, title, text) {
+  const page = require('./login-page');
+  page.send(res, status, page.messagePage({ title, text, bad: status >= 500, links: [{ href: '/', label: 'Home' }] }));
+}
+
 class App {
   constructor({ trustProxy = false } = {}) { this.routes = []; this.trustProxy = trustProxy; this.fallbacks = []; this.corsRules = []; }
   // paths under `prefix` answer cross-origin only to the origins allowed(origin) accepts (everything else stays open to any origin)
@@ -85,10 +92,12 @@ class App {
         if (!res.headersSent && !res.writableEnded) this.send(res, 200, out === undefined ? { ok: true } : out);
         return;
       }
+      if (!matched && htmlPage(req, pathname)) return errorPage(res, 404, 'Not found', 'There is no page at this address on this homeserver.');
       this.send(res, matched ? 405 : 404, { error: matched ? 'method_not_allowed' : 'not_found' });
     } catch (e) {
       if (res.headersSent) { res.destroy(); return; }
       if (!e.code) console.error('[http]', req.method, pathname, e.stack || e.message);
+      if (!e.code && htmlPage(req, pathname)) return errorPage(res, 500, 'Something went wrong', 'This homeserver could not show this page. Try again in a moment.');
       this.send(res, e.status || (e.code ? 400 : 500), { error: e.code || 'server_error', ...(e.extra || {}) });
     }
   }

@@ -143,11 +143,9 @@ async function oauthCallback(q) {
     return { ok: true, message: `Confirmed: ${g.name || 'the server'} can now be linked. You can close this page.` };
   } catch (e) { log(`[bridge] discord oauth: ${e.message}`); return { ok: false, message: 'Discord could not be reached. Try again.' }; }
 }
-const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-function sendPage(res, r) {
-  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ember bridge</title><body style="font:16px system-ui;margin:15vh auto;max-width:28em;padding:0 1em"><h1 style="font-size:1.3em">${r.ok ? 'Confirmed' : 'Not confirmed'}</h1><p>${esc(r.message)}</p>`;
-  res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'X-Frame-Options': 'DENY' });
-  res.end(html);
+function sendPage(res, r) { // (the homeserver's own page, with its branding: PROTOCOL §5e)
+  const page = require('../login-page');
+  page.send(res, r.ok ? 200 : 400, page.messagePage({ title: r.ok ? 'Confirmed' : 'Not confirmed', text: r.message, bad: !r.ok }));
 }
 
 module.exports = { start, view, verified, spend, markVerified, linkedElsewhere, canManage, command, run, oauthSettings, oauthStart, oauthCallback, sendPage, TTL };
