@@ -64,6 +64,10 @@ async function finish(req, res) {
   states.delete(String(req.query.state || ''));
   const fail = text => page.send(res, 400, page.messagePage({ title: 'Linking did not work', text, bad: true }));
   if (!s || s.exp < now()) return fail('This link has expired. Start again from your account settings.');
+  if (req.query.error) { // they said no on Nookara's page
+    if (s.return_to) return page.redirect(res, s.return_to + (s.return_to.includes('?') ? '&' : '?') + 'payments_linked=0');
+    return page.send(res, 200, page.messagePage({ title: 'Nothing was linked', text: 'You cancelled on Nookara. You can close this page.' }));
+  }
   const u = auth.userById(s.user_id);
   if (!u) return fail('That account is gone.');
   let claims;

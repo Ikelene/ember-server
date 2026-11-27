@@ -86,6 +86,10 @@ test('linking: Nookara\'s consent page, its signed answer, the Nookara id kept o
   assert.equal((await back(s3, linkToken())).status, 400);
   const v = (await alice.a.get('/api/v2/account/payments')).body;
   assert.deepEqual([v.linked, v.nookara_id, v.own_nookara_account], [true, '777', false]);
+  // said no on Nookara's page: nothing changes, the client hears payments_linked=0
+  const s5 = (await alice.a.post('/api/v2/account/payments/link', { return_to: 'http://chat.test/' })).body.url;
+  r = await fetch(`${base}/account/payments/linked?state=${stateOf(s5)}&error=access_denied`, { redirect: 'manual' });
+  assert.deepEqual([r.status, r.headers.get('location')], [302, 'http://chat.test/?payments_linked=0']);
   // with a client to go back to
   const s4 = (await alice.a.post('/api/v2/account/payments/link', { return_to: 'http://chat.test/#/settings' })).body.url;
   r = await back(stateOf(s4), linkToken());
