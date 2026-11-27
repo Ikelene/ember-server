@@ -186,6 +186,105 @@ function removeMember(me, rawId, member) {
   takeOut(c, u);
   return { dm: view(db.get('SELECT * FROM communities WHERE id = ?', c.id), me) };
 }
+// POST /api/v2/social/dms/:id/members { members: [handle], member_ids?: [id] }: the group's owner adds people. Each is asked
+// the way a new DM asks (their dm_from, blocks; an account elsewhere through its homeserver: dm_pointer `added`, waited for).
+// End-to-end encryption: a sender wraps each message to the members the DM lists when it is sent, so someone added gets
+// the messages from then on; what was said before stays sealed to the others (PROTOCOL §4d)
+async function addMembers(me, rawId, body = {}) {
+  if (notHere(rawId)) throw err('not_hosted_here', 400, { host_origin: pointer(me, rawId).host_origin });
+  const c = group(hosted(rawId, me)), my = people.fullId(me);
+  if (Number(c.owner_id) !== Number(me.id)) throw err('owner_only', 403);
+  const handles = Array.isArray(body.members) ? body.members : [], given = Array.isArray(body.member_ids) ? body.member_ids : [];
+  if (handles.length + given.length < 1 || handles.length + given.length > MAX_MEMBERS || [...handles, ...given].some(x => typeof x !== 'string')) throw err('invalid_members', 400);
+  const found = new Map();
+  for (const h of handles) { const s = await people.find(h); found.set(s.id, s); }
+  for (const id of given) { const s = await people.findById(id); found.set(s.id, s); }
+  const have = new Set(membersOf(c).map(u => people.fullId(u)));
+  const fresh = [...found.values()].filter(s => !have.has(s.id));
+  if (!fresh.length) throw err('already_member', 400);
+  if (have.size + fresh.length > MAX_MEMBERS) throw err('group_full', 409, { max: MAX_MEMBERS });
+  const users = [];
+  for (const s of fresh) {
+    if (friends.hasBlocked(me, s.id)) throw err('user_blocked', 409, { member: s.id });
+    const p = people.parseId(s.id);
+    if (p.local && where.s2sElsewhere(p.user)) { users.push(p.user); continue; }
+    if (p.local) { if (!friends.dmAllowed(p.user, my)) throw err('dm_not_allowed', 403, { member: s.id }); users.push(p.user); continue; }
+    s2s.assertPeer(p.domain);
+    const u = remoteUser(s);
+    if (!u) throw err('dm_not_allowed', 403, { member: s.id });
+    users.push(u);
+  }
+  const t = now(), dm = { ...describe(c), members: [...membersOf(c).map(people.snippetOf), ...fresh] };
+  const told = [];
+  for (const u of users) {
+    const to = peerOf(u);
+    if (!to) continue;
+    try { await s2s.call(to.domain, 'POST', '/dm_pointer', { dm, to: to.to, kind: 'added', from: my }); told.push(to); }
+    catch (e) {
+      for (const x of told) s2s.later(x.domain, '/dm_pointer', { dm: { id: idOf(c), host: own() }, to: x.to, kind: 'removed' });
+      throw err(e.code, e.status, { ...(e.extra || {}), member: to.to });
+    }
+  }
+  const newcomers = new Set(told.map(x => x.to));
+  db.tx(() => { for (const u of users) db.run('INSERT OR IGNORE INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', c.id, u.id, t); });
+  for (const u of users) gateway().subscribe(u.id, c.id);
+  announce(c);
+  // the members elsewhere who were in it already hear who is in it now (the new ones were told above)
+  const d2 = describe(c);
+  for (const u of membersOf(c)) { const p = peerOf(u); if (p && !newcomers.has(p.to)) s2s.later(p.domain, '/dm_pointer', { dm: d2, to: p.to, kind: 'renamed' }); }
+  return { dm: view(db.get('SELECT * FROM communities WHERE id = ?', c.id), me) };
+}
+
+// ---------- wrapping messages again (PROTOCOL §4d.5) ----------
+// A member whose keys changed (a lost account key, a new client) cannot open what was sealed to the old ones. Any member who
+// can open a message may add a wrap of its key for them: only for the keys their key document lists now, only for messages
+// sent while they were a member, and only where that key has no wrap yet. The host cannot check a wrap (it cannot open it);
+// the receiving client checks the key commitment as for any message.
+const MAX_REWRAP = 500;
+async function rewrapTarget(c, memberRaw) {
+  const p = people.parseId(String(memberRaw || '')), u = p?.local ? p.user : p ? auth.userByPrincipal(p.id) : null;
+  if (!u || !isMember(c, u.id)) throw err('not_a_member', 404);
+  const doc = await require('./keys').docFor(u, { fresh: true });
+  const kids = new Set([...(doc?.keys || []).map(k => k.kid), ...((doc?.clients?.list || []).filter(x => !x.revoked_at).map(x => x.kid))]);
+  const joined = db.get('SELECT joined_at FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id).joined_at;
+  return { u, kids, joined };
+}
+// GET /api/v2/social/dms/:id/rewrap?member=<id>&kid=<kid>: the sealed messages since they joined that have no wrap for that key
+async function rewrapWanted(me, rawId, q = {}) {
+  const c = hosted(rawId, me), t = await rewrapTarget(c, q.member);
+  const kid = String(q.kid || '');
+  if (!t.kids.has(kid)) throw err('unknown_kid', 400);
+  const ch = channelOf(c);
+  const ids = db.all('SELECT id, enc FROM messages WHERE channel_id = ? AND enc IS NOT NULL AND created_at >= ? ORDER BY id', ch.id, t.joined)
+    .filter(m => { try { return !JSON.parse(m.enc).wraps?.[kid]; } catch { return false; } }).map(m => String(m.id));
+  return { member: people.fullId(t.u), kid, messages: ids.slice(0, MAX_REWRAP), more: ids.length > MAX_REWRAP };
+}
+// POST /api/v2/social/dms/:id/rewrap { member, kid, wraps: { "<message id>": { e, i, w } } } -> { added, skipped }
+async function rewrap(me, rawId, body = {}) {
+  const c = hosted(rawId, me), t = await rewrapTarget(c, body.member);
+  const kid = String(body.kid || '');
+  if (!t.kids.has(kid)) throw err('unknown_kid', 400);
+  const wraps = body.wraps && typeof body.wraps === 'object' && !Array.isArray(body.wraps) ? body.wraps : null;
+  if (!wraps || !Object.keys(wraps).length || Object.keys(wraps).length > MAX_REWRAP) throw err('invalid_wraps', 400, { max: MAX_REWRAP });
+  const E = require('./e2ee'), ch = channelOf(c), str = (v, n) => typeof v === 'string' && v.length > 0 && v.length <= n && /^[A-Za-z0-9_-]+$/.test(v);
+  let added = 0;
+  const skipped = [];
+  db.tx(() => {
+    for (const [id, w] of Object.entries(wraps)) {
+      if (!w || typeof w !== 'object' || !str(w.e, 128) || !str(w.i, 24) || !str(w.w, 128)) throw err('invalid_wraps', 400, { message: id });
+      const m = /^\d{1,19}$/.test(id) ? db.get('SELECT id, enc, created_at FROM messages WHERE id = ? AND channel_id = ?', Number(id), ch.id) : null;
+      let enc = null; try { enc = m?.enc ? JSON.parse(m.enc) : null; } catch { enc = null; }
+      // not here, not sealed, sent before they joined, already wrapped for that key, or full
+      if (!enc || m.created_at < t.joined || enc.wraps?.[kid] || Object.keys(enc.wraps || {}).length >= E.MAX_WRAPS) { skipped.push(id); continue; }
+      enc.wraps[kid] = { e: w.e, i: w.i, w: w.w };
+      db.run('UPDATE messages SET enc = ? WHERE id = ?', JSON.stringify(enc), m.id);
+      added++;
+    }
+  });
+  if (added) gateway().pushToUser(t.u.id, { type: 'social_dm_rewrapped', dm: idOf(c), kid, count: added });
+  return { added, skipped };
+}
+
 // POST /api/v2/social/dms/:id/leave: a group hosted here, or the pointer to one hosted elsewhere (that homeserver hears
 // it the next time it reports activity: 410 pointer_gone)
 function leave(me, rawId) {
@@ -289,6 +388,9 @@ function register(app) {
   app.post('/api/v2/social/dms/:id/leave', req => leave(req.user, req.params.id));
   app.post('/api/v2/social/dms/:id/read', req => read(req.user, req.params.id));
   app.delete('/api/v2/social/dms/:id/members/:member', req => removeMember(req.user, req.params.id, req.params.member));
+  app.post('/api/v2/social/dms/:id/members', req => addMembers(req.user, req.params.id, req.body || {}));
+  app.get('/api/v2/social/dms/:id/rewrap', req => rewrapWanted(req.user, req.params.id, req.query));
+  app.post('/api/v2/social/dms/:id/rewrap', req => rewrap(req.user, req.params.id, req.body || {}));
 
   // the host of a DM: `to` is in it now (added), no longer in it (removed), or it changed (renamed)
   s2s.on(app, 'POST', '/dm_pointer', (req, hs) => {

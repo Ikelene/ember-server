@@ -502,3 +502,47 @@ test('the homeserver\'s admins read a report by opening that one message themsel
   assert.deepEqual([r.body.reports.length, r.body.has_more], [2, true]);
   assert.ok((await bo.a.get(`/api/v2/homeserver/reports?status=all&before=${r.body.reports[1].id}`)).body.reports.every(x => Number(x.id) < Number(r.body.reports[1].id)));
 });
+test('a group DM: the owner adds someone, who gets what is sent from then on; a lost key is wrapped again by a member', async () => {
+  for (const who of [bob, bea, bo]) await who.a.patch('/api/v1/settings', { dm_from: 'anyone' });
+  if (!K.bo) { K.bo = nke1.account(); assert.equal((await setup(bo, K.bo)).status, 200); }
+  let r = await bob.a.post('/api/v2/social/dms', { members: ['bea'], group: true, name: 'Pair plus' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const g = r.body.dm, dm = g.id, cid = g.channel;
+  const sealBob = (text, to) => nke1.seal({ dm, from: BOB, text, to, signer: K.bob });
+  const before = sealBob('before bo', [K.bob, K.bea]);
+  const m1 = (await post(bob, cid, { enc: before.enc })).body.message;
+  // only the owner adds; someone in it already is not added twice
+  assert.equal((await bea.a.post(`/api/v2/social/dms/${enc(dm)}/members`, { members: ['bo'] })).body.error, 'owner_only');
+  assert.equal((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/members`, { members: ['bea'] })).body.error, 'already_member');
+  const boWs = await wsClient(baseB).login(bo.session); sockets.push(boWs);
+  db.run('UPDATE members SET joined_at = joined_at - 5000 WHERE community_id = (SELECT community_id FROM channels WHERE cid = ?)', cid); // (bob and bea were in it first)
+  db.run('UPDATE messages SET created_at = created_at - 5000 WHERE id = ?', Number(m1.id));
+  r = await bob.a.post(`/api/v2/social/dms/${enc(dm)}/members`, { members: ['bo'] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.dm.members.map(m => m.id), [BOB, BEA, BO]);
+  assert.equal((await boWs.waitFor(f => f.type === 'social_dm_update' && f.dm.id === dm)).dm.members.length, 3);
+  // from now on a message must be sealed to bo too
+  r = await post(bob, cid, { enc: sealBob('after', [K.bob, K.bea]).enc });
+  assert.deepEqual([r.status, r.body.members], [409, [BO]]);
+  const m2 = (await post(bob, cid, { enc: sealBob('after', [K.bob, K.bea, K.bo]).enc })).body.message;
+  // bea loses her key: a new one, and what was sealed to the old one is wrapped again by bob, who can open it
+  const oldBea = K.bea;
+  K.bea = nke1.account();
+  assert.equal((await setup(bea, K.bea, { replace: true })).status, 200);
+  const want = (await bob.a.get(`/api/v2/social/dms/${enc(dm)}/rewrap?member=${enc(BEA)}&kid=${enc(K.bea.kid)}`)).body;
+  assert.deepEqual([want.member, want.messages, want.more], [BEA, [m1.id, m2.id], false]);
+  assert.equal((await bob.a.get(`/api/v2/social/dms/${enc(dm)}/rewrap?member=${enc(BEA)}&kid=${enc(oldBea.kid)}`)).body.error, 'unknown_kid');
+  const k1 = before.k;
+  const beaWs = await wsClient(baseB).login(bea.session); sockets.push(beaWs);
+  r = await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bea.enc_pub, K.bea.kid), '999999': nke1.wrap(nke1.unb64(k1), K.bea.enc_pub, K.bea.kid) } });
+  assert.deepEqual(r.body, { added: 1, skipped: ['999999'] });
+  assert.equal((await beaWs.waitFor(f => f.type === 'social_dm_rewrapped')).count, 1);
+  const stored = JSON.parse(db.get('SELECT enc FROM messages WHERE id = ?', Number(m1.id)).enc);
+  assert.ok(stored.wraps[K.bea.kid] && stored.wraps[oldBea.kid]);
+  // twice: nothing more; and bo, who joined after m1, cannot be given it
+  assert.deepEqual((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bea.enc_pub, K.bea.kid) } })).body, { added: 0, skipped: [m1.id] });
+  r = await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BO, kid: K.bo.kid, wraps: { [m1.id]: nke1.wrap(nke1.unb64(k1), K.bo.enc_pub, K.bo.kid) } });
+  assert.deepEqual(r.body, { added: 0, skipped: [m1.id] });
+  assert.deepEqual((await bob.a.get(`/api/v2/social/dms/${enc(dm)}/rewrap?member=${enc(BO)}&kid=${enc(K.bo.kid)}`)).body.messages, []);
+  assert.equal((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/rewrap`, { member: BEA, kid: K.bea.kid, wraps: { [m1.id]: { e: 'x' } } })).body.error, 'invalid_wraps');
+});
