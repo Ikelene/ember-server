@@ -19,7 +19,9 @@ const SHOP_CATS = 10, SHOP_STYLES = ['cards', 'buttons']; // roles shop categori
 const STAR_SKIP = ['starboard', 'voice', 'link', 'roles']; // channels a starboard can't watch
 const identity = require('./identity');
 const CHANNEL_ICONS = ['hash', 'megaphone', 'lock', 'message-circle', 'gamepad-2', 'music', 'image', 'code', 'bug', 'lightbulb', 'help-circle', 'star', 'heart', 'book-open', 'coffee', 'sparkles', 'trophy', 'video', 'palette', 'terminal', 'globe', 'bell', 'shield', 'rocket', 'scroll-text', 'smile', 'flame', 'zap', 'gift', 'pin'];
-const inviteCode = () => crypto.randomBytes(8).toString('base64').replace(/[^a-z0-9]/gi, '').slice(0, 8).padEnd(8, 'x');
+// no look-alikes (0/O/o, 1/I/l): codes get read out and typed. Older codes keep working.
+const INVITE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz';
+const inviteCode = () => Array.from({ length: 8 }, () => INVITE_CHARS[crypto.randomInt(INVITE_CHARS.length)]).join('');
 const instanceOrigin = () => config.publicUrl();
 const userView = auth.userView;
 const lc = s => String(s).replace(/[\\%_]/g, x => '\\' + x);
