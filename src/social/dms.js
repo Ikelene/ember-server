@@ -36,7 +36,7 @@ function describe(c) {
   const owner = isGroup(c) ? auth.userById(c.owner_id) : null;
   return {
     id: idOf(c), host: own(), name: isGroup(c) ? c.name || null : null, group: isGroup(c), owner: owner ? people.fullId(owner) : null,
-    sid: c.sid, channel: channelOf(c)?.cid || null, members: membersOf(c).map(people.snippetOf), created_at: c.created_at,
+    sid: c.sid, channel: channelOf(c)?.cid || null, members: membersOf(c).map(people.snippetOf), created_at: c.created_at, e2ee: true,
   };
 }
 function view(c, me) {
@@ -106,7 +106,7 @@ async function create(me, body = {}) {
     users.push(u);
   }
   const sid = randId('d'), cid = randId('c'), t = now();
-  const dm = { id: `${sid}@${own()}`, host: own(), name: name || null, group, owner: group ? my : null, sid, channel: cid, members: [people.snippetOf(me), ...others], created_at: t };
+  const dm = { id: `${sid}@${own()}`, host: own(), name: name || null, group, owner: group ? my : null, sid, channel: cid, members: [people.snippetOf(me), ...others], created_at: t, e2ee: true };
   const told = [];
   for (const u of users) {
     const to = peerOf(u);
@@ -223,7 +223,7 @@ function pointerView(r) {
   const x = json(r.extra_json, {}) || {};
   return {
     id: r.dm_id, host: r.host_domain, host_origin: r.host_origin, name: r.name || null, group: !!x.group, owner: x.owner || null, sid: x.sid || null, channel: x.channel || null,
-    members: json(r.members_json, []), created_at: x.created_at || null, last_message_id: r.last_message_id || '0', unread: r.unread, mention: !!r.mention, hosted_here: false, updated_at: r.updated_at,
+    members: json(r.members_json, []), created_at: x.created_at || null, e2ee: true, last_message_id: r.last_message_id || '0', unread: r.unread, mention: !!r.mention, hosted_here: false, updated_at: r.updated_at,
   };
 }
 function pointer(me, rawId) {
@@ -253,13 +253,12 @@ function onPost(msg, ctx, meta) {
   const { c } = ctx;
   if (c.kind !== 'dm' || meta.system) return;
   const author = meta.userId ? auth.userById(meta.userId) : null;
-  const preview = require('../notify').plainBody(msg.body, ctx.snap).replace(/\s+/g, ' ').trim().slice(0, 300) || (msg.attachments?.length ? 'sent a file' : '');
   for (const u of membersOf(c)) {
     const peer = peerOf(u);
     if (!peer || u.id === meta.userId) continue;
     const key = `${c.id}|${u.id}`, e = pending.get(key) || { domain: peer.domain, community: c.id, user: u.id, body: { dm: idOf(c), to: peer.to, count: 0, mention: false } };
-    const pinged = String(msg.body || '').includes(`<@${u.principal}>`) || msg.reply?.author?.id === u.principal;
-    Object.assign(e.body, { last_message_id: String(msg.id), count: e.body.count + 1, mention: e.body.mention || pinged, preview, name: isGroup(c) ? c.name || null : null,
+    // (messages are sealed, PROTOCOL §4d: no preview, and nobody here can tell who is mentioned)
+    Object.assign(e.body, { last_message_id: String(msg.id), count: e.body.count + 1, mention: false, name: isGroup(c) ? c.name || null : null,
       sender: author ? { id: people.fullId(author), display_name: author.display_name || author.username } : null });
     pending.set(key, e);
   }
@@ -325,9 +324,10 @@ function register(app) {
     const count = Number.isInteger(b.count) && b.count > 0 ? Math.min(b.count, 1000) : 1;
     db.run('UPDATE dm_pointers SET last_message_id = ?, unread = MIN(unread + ?, 100000), mention = MAX(mention, ?), updated_at = ? WHERE user_id = ? AND dm_id = ?', b.last_message_id, count, b.mention === true ? 1 : 0, now(), to.id, dmId);
     const dm = pointerView(db.get('SELECT * FROM dm_pointers WHERE user_id = ? AND dm_id = ?', to.id, dmId));
-    const sender = people.cleanSnippet(b.sender, b.sender?.id), preview = clean(b.preview, 300);
-    gateway().pushToUser(to.id, { type: 'social_dm_activity', dm, mention: b.mention === true, ...(sender ? { sender: { id: sender.id, display_name: sender.display_name } } : {}), ...(preview ? { preview } : {}) });
-    require('../push').dm(to.id, { id: dmId, from: sender?.display_name || 'Someone', name: dm.group ? dm.name : null, group: dm.group, body: preview || 'sent a message' });
+    // DMs are end-to-end encrypted (PROTOCOL §4d): a `preview` a host sends anyway is not passed on
+    const sender = people.cleanSnippet(b.sender, b.sender?.id);
+    gateway().pushToUser(to.id, { type: 'social_dm_activity', dm, mention: b.mention === true, ...(sender ? { sender: { id: sender.id, display_name: sender.display_name } } : {}) });
+    require('../push').dm(to.id, { id: dmId, from: sender?.display_name || 'Someone', name: dm.group ? dm.name : null, group: dm.group, body: 'sent a message' });
     return { ok: true };
   });
 }

@@ -57,6 +57,8 @@ function register(app) {
   // ---- link previews: the instance fetches the page, never the browser (needs a session) ----
   app.get(v1('/unfurl'), async req => {
     if (!unfurlLimit.hit(req.user.id)) throw err('rate_limited', 429);
+    // a DM is end-to-end encrypted (PROTOCOL §4d): its links are never fetched here, a preview travels inside the message
+    if (req.query.sid && require('../db').get("SELECT 1 FROM communities WHERE sid = ? AND kind = 'dm'", String(req.query.sid))) return { embed: null };
     // ?sid= the server whose rules apply (yours); without it the only server's, and the defaults when there are several
     const c = req.query.sid ? C.memberCommunity(req.query.sid, req.user).c : C.communityCount() === 1 ? C.pickCommunity() : null;
     const rules = require('../settings').get(c).messages; // Server settings > Message rules > Link previews

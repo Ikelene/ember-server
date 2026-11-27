@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const http = require('http');
 const { tmpDir, api, wsClient, startHomeserver, mockHomeserver } = require('./helpers');
+const nke1 = require('./nke1');
 
 process.env.EMBER_ACCOUNTS_MODE = 'local';
 process.env.EMBER_DEV = '1';
@@ -31,7 +32,8 @@ async function until(fn, ms = 5000) { const t = Date.now(); for (;;) { const v =
 const reg = async (base, n) => { const r = await api(base).post('/api/v1/auth/register', { username: n, password: PW }); assert.equal(r.status, 200, JSON.stringify(r.body)); return { ...r.body, a: api(base, r.body.session) }; };
 const dmList = async who => (await who.a.get('/api/v2/social/dms')).body.dms;
 const settle = async () => { dms._test.flush(); await s2s.idle(); await A.call('idle'); await s2s.idle(); await push.idle(); };
-const say = (who, channel, message) => { messages._sendLimit.reset(); return who.a.post(`/api/v1/channels/${channel}/messages`, { message }); };
+// (a DM only takes sealed messages, PROTOCOL §4d: what it says is the client's business, so here it is an envelope nobody opens)
+const say = (who, channel, message) => { messages._sendLimit.reset(); return who.a.post(`/api/v1/channels/${channel}/messages`, { enc: nke1.sealed(message) }); };
 const dmCount = () => db.get("SELECT COUNT(*) AS n FROM communities WHERE kind = 'dm'").n;
 // alice (an account of A) signed in on B
 async function onB(who) {
@@ -130,21 +132,22 @@ test('the member from the other homeserver reads and writes in the DM through it
   let r = await say(al, cid, 'hello from the other side');
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.message.author.id, ALICE);
-  const got = await bobWs.waitFor(f => f.type === 'chat_message' && f.message.body === 'hello from the other side');
-  assert.equal(got.message.channel, cid);
+  const got = await bobWs.waitFor(f => f.type === 'chat_message' && f.message.id === r.body.message.id);
+  assert.deepEqual([got.message.channel, got.message.body, got.message.enc.ct], [cid, '', r.body.message.enc.ct]);
   assert.equal((await dmList(bob)).find(d => d.id === one.id).unread, 1);
   const hist = await bob.a.get(`/api/v1/channels/${cid}/messages`);
   assert.equal(hist.status, 200);
-  assert.ok(JSON.stringify(hist.body).includes('hello from the other side'));
+  assert.deepEqual(hist.body.messages.at(-1).enc, r.body.message.enc);
   assert.equal((await bob.a.post(`/api/v2/social/dms/${enc(one.id)}/read`)).body.dm.unread, 0);
   // her gateway connection on B hears the DM like any channel
   const alWs = await wsClient(baseB).login(al.session); sockets.push(alWs);
-  await say(bob, cid, 'hi alice');
-  await alWs.waitFor(f => f.type === 'chat_message' && f.message.body === 'hi alice');
-  // uploads work as in a server
-  const form = new FormData(); form.append('file', new Blob([Buffer.from('plain text file')], { type: 'text/plain' }), 'note.txt');
-  const up = await al.a.raw('POST', `/api/v1/media/upload?sid=${one.sid}&cid=${cid}`, form);
+  const hi = (await say(bob, cid, 'hi alice')).body.message;
+  await alWs.waitFor(f => f.type === 'chat_message' && f.message.id === hi.id);
+  // uploads work as in a server, for files sealed on the device
+  const form = () => { const f = new FormData(); f.append('file', new Blob([Buffer.from('sealed bytes')], { type: 'application/octet-stream' }), 'file.bin'); return f; };
+  const up = await al.a.raw('POST', `/api/v1/media/upload?sid=${one.sid}&cid=${cid}&sealed=1`, form());
   assert.equal(up.status, 200, JSON.stringify(up.body));
+  assert.equal((await al.a.raw('POST', `/api/v1/media/upload?sid=${one.sid}&cid=${cid}`, form())).body.error, 'e2ee_required');
   // someone who is not in it gets nothing
   assert.equal((await bea.a.get(`/api/v1/channels/${cid}/messages`)).status, 403);
   assert.equal((await say(bea, cid, 'let me in')).status, 403);
@@ -159,12 +162,12 @@ test('new messages reach the other homeserver: the pointer counts them and the a
   const m = (await say(bob, cid, 'are you there?')).body.message;
   await say(bob, cid, `and again <@${ALICE}>`);
   const p = await until(async () => { await settle(); const x = (await dmList(alice))[0]; return x.unread >= 2 ? x : null; });
-  assert.deepEqual([p.unread, p.mention, p.hosted_here], [2, true, false]);
+  assert.deepEqual([p.unread, p.mention, p.hosted_here], [2, false, false]); // (the host cannot tell who a sealed message mentions)
   assert.ok(Number(p.last_message_id) > Number(m.id));
   await until(() => pushed.length >= 1);
   const n = pushed.find(x => x.n.pushkey === 'alice-phone');
   assert.deepEqual([n.homeserver, n.n.kind, n.n.title, n.n.homeserver], ['a.example', 'dm', 'bob', 'a.example']);
-  assert.match(n.n.preview, /are you there\?|and again/);
+  assert.equal(n.n.preview, 'sent a message'); // never what it says
   assert.equal(n.n.counts.unread, 1);
   // reading clears the pointer; her own messages do not count for her
   assert.deepEqual([(await alice.a.post(`/api/v2/social/dms/${enc(one.id)}/read`)).body.dm.unread, (await dmList(alice))[0].mention], [0, false]);
@@ -178,7 +181,7 @@ test('new messages reach the other homeserver: the pointer counts them and the a
   await say(al, cid, 'one for bob');
   await until(async () => { await push.idle(); return pushed.some(x => x.n.pushkey === 'bob-phone'); });
   const nb = pushed.find(x => x.n.pushkey === 'bob-phone').n;
-  assert.deepEqual([nb.kind, nb.title, nb.preview], ['dm', 'alice@a.example', 'one for bob']);
+  assert.deepEqual([nb.kind, nb.title, nb.preview], ['dm', 'alice@a.example', 'sent a message']);
   assert.ok(!pushed.some(x => x.n.pushkey === 'alice-phone')); // not her: she wrote it
 });
 
@@ -207,7 +210,7 @@ test('only the host can speak for its DMs', async () => {
   r = await mockHs.s2s(baseB, 'POST', '/dm_activity', { dm: dm.id, to: BOB, last_message_id: '41', count: 3, mention: true, preview: 'psst', sender: { id: 'l:1@m.example', display_name: 'Mo' } });
   assert.equal(r.status, 200);
   const ev = await bobWs.waitFor(f => f.type === 'social_dm_activity' && f.dm.id === dm.id);
-  assert.deepEqual([ev.dm.unread, ev.dm.last_message_id, ev.mention, ev.preview, ev.sender.display_name], [3, '41', true, 'psst', 'Mo']);
+  assert.deepEqual([ev.dm.unread, ev.dm.last_message_id, ev.mention, ev.preview, ev.sender.display_name], [3, '41', true, undefined, 'Mo']); // a preview is never passed on
   r = await mockHs.s2s(baseB, 'POST', '/dm_pointer', { dm: { id: dm.id, host: 'm.example' }, to: BOB, kind: 'removed' });
   assert.equal(r.status, 200);
   await bobWs.waitFor(f => f.type === 'social_dm_remove' && f.id === dm.id);

@@ -138,7 +138,14 @@ function messageView(r, snap) {
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
     ...(r.sticker_id ? { sticker: stickerOf(r.sticker_id) } : {}),
+    ...(r.enc ? { enc: json(r.enc, null) } : {}), // a sealed DM message (PROTOCOL §4d): body is '', this is all there is
   };
+}
+// ?kids=a,b: only the wraps for these keys (an envelope carries one per key of every member)
+function onlyWraps(msgs, kids) {
+  const want = String(kids || '').split(',').filter(k => /^[\w-]{22}$/.test(k)).slice(0, 50);
+  if (want.length) for (const m of msgs) if (m.enc?.wraps) m.enc = { ...m.enc, wraps: Object.fromEntries(want.filter(k => m.enc.wraps[k]).map(k => [k, m.enc.wraps[k]])) };
+  return msgs;
 }
 const customReaction = raw => /^(?:c:)?(e[0-9a-f]{10})$/.exec(raw)?.[1]
   || /^<(?:a?):\w{1,32}:(e[0-9a-f]{10})>$/.exec(raw)?.[1]
@@ -266,13 +273,13 @@ function insertMessage(ctx, f) {
   require('./managed').assertWritable(); // every way of posting ends here: users, bots, webhooks, bridges, Ember Link
   const { ch, c, snap } = ctx;
   const res = db.run(
-    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via, components, interaction, sticker_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (channel_id, user_id, body, reply_to, attachments, system, sys_kind, subject_user_id, subject_parts, mention_everyone, mention_roles, author_name, author_avatar, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, embeds, webhook_id, bridge, via, components, interaction, sticker_id, enc)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ch.id, f.userId ?? null, f.body, f.replyTo ?? null, f.attachments?.length ? JSON.stringify(f.attachments) : null, f.system ? 1 : 0, f.sysKind || null,
     f.subjectId ?? null, f.subjectParts ? JSON.stringify(f.subjectParts) : null, f.everyone || 0, f.roleIds?.length ? ',' + f.roleIds.join(',') + ',' : null,
     f.authorName || null, f.authorAvatar || null, Date.now(), f.sig?.sig_kid ?? null, f.sig?.sig_sig ?? null, f.sig?.sig_ts ?? null, f.sig?.sig_nonce ?? null, f.sig?.verified ?? null,
     f.embeds?.length ? JSON.stringify(f.embeds) : null, f.webhookId ?? null, f.bridge || null, f.via ? JSON.stringify(f.via) : null,
-    f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null, f.stickerId || null);
+    f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null, f.stickerId || null, f.enc ? JSON.stringify(f.enc) : null);
   const id = Number(res.lastInsertRowid);
   if (f.alias) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', f.alias.name, f.alias.avatar || null, id);
   if (f.bridge && f.bridgeFrom) require('./bridge/store').setFrom(id, f.bridgeFrom);
@@ -354,8 +361,10 @@ function postWebhook(ctx, hook, { body, username, avatar, embeds, attachments })
 
 // ctx from C.findChannel. force skips the send/attach checks (interaction replies can post anywhere the bot is a member)
 // alias (bots only): { name, avatar_url } shows another name and picture on this message (see cleanAlias)
-async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, app, components, interaction, force, alias, sticker } = {}) {
+async function postMessage(me, ctx, text, { replyTo, attachments, signature, scopes, embeds, origin, ua, app, components, interaction, force, alias, sticker, enc } = {}) {
   const { ch, c, snap } = ctx;
+  if (c.kind === 'dm') return postSealed(me, ctx, enc, { replyTo, origin, ua, app, plain: given(text) || given(attachments) || given(embeds) || given(components) || given(sticker) || given(signature) || given(alias) || !!interaction });
+  if (enc !== undefined && enc !== null) throw err('e2ee_not_here', 400);
   let stickerId = null;
   if (sticker != null && sticker !== '') {
     stickerId = String(sticker);
@@ -385,9 +394,47 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
+// ---------- DMs: end-to-end encrypted, always (PROTOCOL §4d) ----------
+// A DM takes sealed messages and nothing else: the envelope is stored as it came and never read. No text, attachments
+// (a file is sealed too, its link is inside the ciphertext), embeds, stickers or server-checked signature; no AutoMod,
+// mentions or link previews, since there is nothing here to look at.
+const given = v => v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length);
+const E2EE = () => require('./social/e2ee');
+async function sealedIn(c, enc, plain) {
+  if (plain || enc === undefined || enc === null) throw err('e2ee_required', 400);
+  const members = db.all('SELECT u.* FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ?', c.id);
+  const clean = E2EE().checkEnvelope(enc, members.length);
+  const missing = await E2EE().uncovered(clean, members);
+  if (missing.length) throw err('stale_keys', 409, { members: missing });
+  return clean;
+}
+async function postSealed(me, ctx, enc, { replyTo, origin, ua, app, plain }) {
+  const { ch, c, snap } = ctx;
+  if (!snap.isMember(me.id)) throw err('not_a_member', 403);
+  if (!snap.canPost(ch, me.id)) throw err('no_send_permission', 403);
+  const clean = await sealedIn(c, enc, plain);
+  if (!sendLimit.hit(me.id)) throw err('rate_limited', 429);
+  if (me.kind === 'remote') require('./federation/limits').hit(me.domain, 'messages');
+  let reply = null;
+  if (replyTo != null && /^\d{1,15}$/.test(String(replyTo))) reply = db.get('SELECT id FROM messages WHERE id = ? AND channel_id = ?', Number(replyTo), ch.id)?.id ?? null;
+  return insertMessage(ctx, { userId: me.id, body: '', replyTo: reply, enc: clean, via: viaOf(origin, ua, app) });
+}
+async function editSealed(r, me, ctx, enc, plain) {
+  const { c, snap } = ctx;
+  if (Number(r.user_id) !== Number(me.id) || r.system || !r.enc) throw err('not_allowed', 403);
+  const clean = await sealedIn(c, enc, plain);
+  db.run('UPDATE messages SET enc = ?, edited_at = ? WHERE id = ?', JSON.stringify(clean), Date.now(), r.id);
+  const msg = viewById(r.id, snap);
+  gateway.emit(c.id, { type: 'chat_message_update', message: msg, __via: parseVia(r.via) });
+  runHooks(editHooks, msg, ctx);
+  return msg;
+}
+
 // undefined text/embeds/components/interaction/alias = keep them (alias: null clears it). silent skips the (edited) mark
-async function editMessage(id, me, text, { signature, scopes, embeds, components, interaction, silent, attachments, alias } = {}) {
+async function editMessage(id, me, text, { signature, scopes, embeds, components, interaction, silent, attachments, alias, enc } = {}) {
   const { r, ch, c, snap } = messageCtx(id, me);
+  if (c.kind === 'dm') return editSealed(r, me, { ch, c, snap }, enc, given(text) || given(attachments) || given(embeds) || given(components) || given(signature) || given(alias));
+  if (enc !== undefined && enc !== null) throw err('e2ee_not_here', 400);
   if (Number(r.user_id) !== Number(me.id)) throw err('not_allowed', 403);
   const aliasRow = cleanAlias(me, alias);
   const body = text === undefined ? r.body : normBody(text);
@@ -486,7 +533,7 @@ function attachVia(rows, snap, me, msgs) {
 }
 
 // ---------- history / search / pins / read ----------
-function history(cid, me, { before, after, limit } = {}) {
+function history(cid, me, { before, after, limit, kids } = {}) {
   const ctx = C.findChannel(cid, me);
   limit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
   let where = 'm.channel_id = ?';
@@ -495,13 +542,13 @@ function history(cid, me, { before, after, limit } = {}) {
   if (after && /^\d{1,15}$/.test(String(after))) { where += ' AND m.id > ?'; params.push(Number(after)); }
   const rows = db.all(`${SELECT_MSG} WHERE ${where} ORDER BY m.id ${after ? 'ASC' : 'DESC'} LIMIT ?`, ...params, limit);
   if (!after) rows.reverse();
-  return { channel: C.channelView(ctx.snap, ctx.ch), messages: attachVia(rows, ctx.snap, me, withReactions(rows.map(r => messageView(r, ctx.snap)))), has_more: rows.length === limit };
+  return { channel: C.channelView(ctx.snap, ctx.ch), messages: onlyWraps(attachVia(rows, ctx.snap, me, withReactions(rows.map(r => messageView(r, ctx.snap)))), kids), has_more: rows.length === limit };
 }
 const likeEsc = s => s.replace(/[\\%_]/g, x => '\\' + x);
 function search(cid, me, q) {
   const { ch, c, snap } = C.findChannel(cid, me);
   q = String(q || '').trim().slice(0, 100);
-  if (!q) return { messages: [] };
+  if (!q || c.kind === 'dm') return { messages: [] }; // (a DM is sealed: there is nothing here to search)
   const rows = db.all(`${SELECT_MSG} WHERE m.channel_id = ? AND m.body LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT ?`, ch.id, `%${likeEsc(q)}%`, S().get(c).messages.search_results);
   return { messages: rows.map(r => messageView(r, snap)) };
 }

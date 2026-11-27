@@ -35,7 +35,7 @@ function plainBody(body, snap) {
 // A person is pinged by a <@principal> token (Discord's format); a plain "@name" in the text is just text.
 function deliver(ctx, msg, authorId) {
   const { ch, c, snap } = ctx;
-  const dm = c.kind === 'dm'; // (PROTOCOL §4c) every message in a DM is for everyone in it
+  const dm = c.kind === 'dm'; // (PROTOCOL §4c) every message in a DM is for everyone in it; it is sealed (§4d), so there is nothing to preview
   const body = plainBody(msg.body, snap);
   const pinged = new Set([...String(msg.body || '').matchAll(/<@!?((?:[vlb]:)?\d{1,20}(?:@[a-z0-9.-]{1,253})?|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}@[a-z0-9.-]{1,253})>/g)].map(x => x[1]));
   const prefs = new Map();
@@ -44,7 +44,7 @@ function deliver(ctx, msg, authorId) {
     prefs.get(r.user_id).set(r.target, { level: r.level, muted_until: r.muted_until, push: !!r.push });
   }
   const online = new Set(gateway.onlineUserIds());
-  const payload = { type: 'chat_mention', id: msg.id, server: c.name, sid: c.sid, channel: ch.name, cid: ch.cid, from: msg.author?.username, pfp: msg.author?.pfp || null, body: body || 'sent a picture', ...(dm ? { dm: `${c.sid}@${require('./config').domain()}`, group: c.join_policy === 'group' } : {}) };
+  const payload = { type: 'chat_mention', id: msg.id, server: c.name, sid: c.sid, channel: ch.name, cid: ch.cid, from: msg.author?.username, pfp: msg.author?.pfp || null, body: msg.enc ? 'sent a message' : body || 'sent a picture', ...(dm ? { dm: `${c.sid}@${require('./config').domain()}`, group: c.join_policy === 'group' } : {}) };
   const off = [];
   for (const u of db.all("SELECT u.* FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ? AND u.kind <> 'bot'", c.id)) {
     if (u.id === Number(authorId) || !snap.canView(ch, u.id)) continue;

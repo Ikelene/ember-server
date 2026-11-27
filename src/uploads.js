@@ -147,6 +147,16 @@ function removeFiles(rels) {
 
 // a user upload (message attachment). -> the §11 response. expiresAt: when the sweeper deletes it (null = kept)
 // communityId: the server it was sent to (its storage limit counts it, PROTOCOL §19)
+// sealed (PROTOCOL §4d): a file encrypted on the device. The bytes are kept exactly as they came: nothing is sniffed,
+// compressed or stripped (random ciphertext can look like a media header), and it is only ever a plain download
+function storeSealed(buf, userId, { expiresAt = null, communityId = null } = {}) {
+  const d = new Date();
+  const rel = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${randHex(12)}.bin`;
+  writeStored(rel, buf);
+  const hash = sha256(buf);
+  db.run("INSERT INTO uploads (path, sha256, name, size, mime, type, user_id, created_at, expires_at, community_id, sealed) VALUES (?, ?, 'file.bin', ?, 'application/octet-stream', 'file', ?, ?, ?, ?, 1)", rel, hash, buf.length, userId ?? null, now(), expiresAt, communityId ?? null);
+  return { url: `${normalizeOrigin(config.publicUrl())}/uploads/${rel}`, name: 'file.bin', size: buf.length, mime: 'application/octet-stream', type: 'file', sha256: hash, sealed: true, ...(expiresAt ? { expires_at: expiresAt } : {}) };
+}
 function storeUpload(buf, originalName, userId, { expiresAt = null, communityId = null } = {}) {
   const sn = sniff(buf);
   const media = !!sn;
@@ -202,10 +212,10 @@ function beforeUpload(c, snap, me) {
   return s;
 }
 // after: the file's type, the storage it would take, image compression, when it expires -> the §11 response
-async function acceptUpload(c, me, buf, name, s, { expiresInDays } = {}) {
+async function acceptUpload(c, me, buf, name, s, { expiresInDays, sealed = false } = {}) {
   const kind = kindOf(buf, name);
-  if (!s.types.includes('any') && !s.types.includes(kind)) throw err('file_type_not_allowed', 415, { allowed: s.types });
-  const sn = sniff(buf);
+  if (!sealed && !s.types.includes('any') && !s.types.includes(kind)) throw err('file_type_not_allowed', 415, { allowed: s.types });
+  const sn = sealed ? null : sniff(buf);
   if (s.compress && sn && sn.type === 'image' && !animatedImage(buf, sn.ext)) {
     const out = await require('./images').compress(buf, sn.ext, s, dimensions(buf, sn.ext));
     buf = out.buffer;
@@ -220,7 +230,8 @@ async function acceptUpload(c, me, buf, name, s, { expiresInDays } = {}) {
   }
   const pick = Number(expiresInDays);
   if (Number.isInteger(pick) && pick >= 1 && pick <= 3650 && (days == null || pick < days)) days = pick;
-  return storeUpload(buf, name, me.id, { expiresAt: days == null ? null : now() + days * 86400000, communityId: c.id });
+  const kept = { expiresAt: days == null ? null : now() + days * 86400000, communityId: c.id };
+  return sealed ? storeSealed(buf, me.id, kept) : storeUpload(buf, name, me.id, kept);
 }
 
 // expired uploads: the file and its row go; messages that sent it keep a note that it expired

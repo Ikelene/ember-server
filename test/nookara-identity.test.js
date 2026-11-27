@@ -8,6 +8,7 @@ const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');
 const { tmpDir, api, fakeIdp, mockHomeserver } = require('./helpers');
+const nke1 = require('./nke1');
 
 process.env.EMBER_DEV = '1';
 process.env.EMBER_NOOKARA_REGISTRATION = 'off';
@@ -222,7 +223,7 @@ test('a v: account starts a DM with a remote member: hosted here, pointers to th
   // the DM works for nat through this homeserver's own routes
   assert.ok((await nat.get('/api/v2/social/dms')).body.dms.some(x => x.id === dm.id));
   messages._sendLimit.reset();
-  assert.equal((await nat.post(`/api/v1/channels/${dm.channel}/messages`, { message: 'hi remi' })).status, 200);
+  assert.equal((await nat.post(`/api/v1/channels/${dm.channel}/messages`, { enc: nke1.sealed('hi remi') })).status, 200);
   dms._test.flush(); await s2s.idle();
   const act = seen.remote.find(x => x.path === '/_ember/s2s/v1/dm_activity');
   assert.deepEqual([act.body.to, act.body.dm, act.body.sender.id], ['l:1@m.example', dm.id, `v:77@${DOMAIN}`]);
@@ -232,11 +233,11 @@ test('a v: account starts a DM with a remote member: hosted here, pointers to th
   const x = await api(base).post('/api/v2/auth/remote', { token: remoteHs.mint({ sub: 'l:1@m.example' }) });
   assert.equal(x.status, 200, JSON.stringify(x.body));
   messages._sendLimit.reset();
-  assert.equal((await api(base, x.body.access_token).post(`/api/v1/channels/${dm.channel}/messages`, { message: 'hey nat' })).status, 200);
+  assert.equal((await api(base, x.body.access_token).post(`/api/v1/channels/${dm.channel}/messages`, { enc: nke1.sealed('hey nat') })).status, 200);
   dms._test.flush(); await s2s.idle();
   const natAct = seen.nookara.find(y => y.path === '/_ember/s2s/v1/dm_activity');
   assert.ok(natAct, JSON.stringify(seen.nookara.map(y => y.path)));
-  assert.deepEqual([natAct.body.to, natAct.body.dm, natAct.body.sender.id, natAct.body.preview], [`v:77@${DOMAIN}`, dm.id, 'l:1@m.example', 'hey nat']);
+  assert.deepEqual([natAct.body.to, natAct.body.dm, natAct.body.sender.id, natAct.body.preview], [`v:77@${DOMAIN}`, dm.id, 'l:1@m.example', undefined]); // sealed: no preview
   remoteHs.handle = null; nookaraSide.handle = null;
 });
 
