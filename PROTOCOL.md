@@ -1842,10 +1842,12 @@ Table `pushers (user_id, pushkey, app_id, gateway_url, device_name, show_preview
 **Sending.** Whenever a message pings someone who has no gateway connection here (the rules of §12.3's offline push: a mention, a reply, a role, `@everyone`, or their "all messages" setting; never a muted channel or server, never with `push` switched off for it), each of their pushers gets:
 ```
 POST <gateway_url>
+Ember-Signature: keyId="<domain>#<kid>", created=<unix seconds>, sig="<base64url Ed25519>"
 X-Ember-Homeserver: <this homeserver's domain>
 { "notification": { "pushkey": "…", "app_id": "…", "kind": "mention" | "reply", "title": "nat mentioned you", "preview": "…", "url": "https://chat.example/#/s/<sid>/<cid>", "homeserver": "chat.example", "counts": { "unread": 3 } } }
 -> { "rejected": ["<pushkey>", …] }
 ```
+- The request is signed exactly like a server-to-server request (§4c.1): the same key (the one the homeserver's JWKS publishes), over the same five lines (`POST`, the gateway URL's path and query, the gateway's host, `created`, the body's `sha-256`). A gateway finds the key the way an s2s receiver does and answers `401` (`invalid_signature_header`, `homeserver_mismatch`, `signature_expired`, `unknown_kid`, `invalid_signature`) to a request that is unsigned or does not check out, `403 homeserver_mismatch` when `notification.homeserver` is not the domain that signed, and `502 homeserver_unreachable` when the homeserver's keys cannot be fetched. Nookara's gateway requires it.
 - `title` is at most 100 characters, `preview` at most 300 and only sent to a pusher with `show_preview: true`. `url` is only sent when `public_url` is `https`. `counts.unread` is the number of channels the person has something unread in.
 - For a DM message `preview` is always `sent a message` (with the sender's name in front in a summary): DMs are sealed (§4d) and no homeserver can say more.
 - `kind` is `mention`, `reply` or `dm`; `call` and `other` are the gateway's other kinds and are not sent yet. `dm` (§4c.4) is every message in a DM, to each member who is not connected: by the host to its own accounts, and by a member's own homeserver when the host reports activity (`dm_activity`). Its `title` is the sender's name (`"nat"`, `"nat in <group>"`, or `"3 new messages from nat"` / `"... in <group>"` for the summary), its `url` is `<public_url>/#/dm/<dm id>`, and `counts.unread` also counts DMs hosted elsewhere that have something unread.

@@ -24,7 +24,7 @@ function gatewayServer() {
     req.on('data', d => { body += d; });
     req.on('end', async () => {
       const n = JSON.parse(body).notification;
-      got.push({ path: req.url, homeserver: req.headers['x-ember-homeserver'], type: req.headers['content-type'], n });
+      got.push({ path: req.url, homeserver: req.headers['x-ember-homeserver'], type: req.headers['content-type'], sig: req.headers['ember-signature'], host: req.headers.host, raw: body, n });
       if (slow) await sleep(300);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ rejected: reject.has(n.pushkey) ? [n.pushkey] : [] }));
@@ -105,6 +105,19 @@ test('a mention of someone who is not connected goes to each of their pushers; a
   assert.deepEqual(tablet.n, { pushkey: 'bob-tablet/with+odd=chars', app_id: 'cc.nookara.tablet', kind: 'mention', title: 'alice mentioned you', homeserver: 'localhost', counts: { unread: 1 } });
   assert.ok(ca.frames.some(f => f.type === 'chat_mention'));
   await until(async () => (await bob.a.get('/api/v2/pushers')).body.pushers.every(p => p.last_ok_at));
+});
+
+test('gateway requests carry the s2s signature, which checks out against the JWKS', async () => {
+  const crypto = require('crypto'), s2s = require('../src/social/s2s');
+  const g = got.find(x => x.n.pushkey === 'bob-phone');
+  const p = /^keyId="([^"#]+)#([^"]+)", created=(\d+), sig="([A-Za-z0-9_-]+)"$/.exec(g.sig);
+  assert.ok(p, g.sig);
+  assert.equal(p[1], 'localhost');
+  const jwk = (await api(base).get('/.well-known/ember/jwks.json')).body.keys.find(k => k.kid === p[2]);
+  assert.ok(jwk);
+  const signed = s2s.canonical({ method: 'POST', target: g.path, host: g.host, created: p[3], body: g.raw });
+  assert.ok(crypto.verify(null, Buffer.from(signed), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(p[4], 'base64url')));
+  assert.ok(!crypto.verify(null, Buffer.from(signed + 'x'), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(p[4], 'base64url')));
 });
 
 test('more pings in the same channel soon after become one summary; a reply says so', async () => {

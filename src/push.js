@@ -2,7 +2,7 @@
 // Push through a push gateway (PROTOCOL §20). A client registers a pusher: the key its push provider gave it and the gateway
 // that can reach that provider (Nookara's by default). Whenever someone who is not connected is pinged (notify.js: mentions,
 // replies, @everyone, "all messages"), every pusher of theirs gets a notification:
-//   POST <gateway> { notification: { pushkey, app_id, kind, title, preview?, url?, homeserver, counts: { unread } } } -> { rejected: [pushkey] }
+//   POST <gateway> (signed like an s2s request, §4c.1) { notification: { pushkey, app_id, kind, title, preview?, url?, homeserver, counts: { unread } } } -> { rejected: [pushkey] }
 // It works for every kind of account (local, Nookara, another homeserver's). Nothing here ever waits in the message path:
 // sends are queued per gateway, give up after 5 s, and a gateway's `rejected` keys are forgotten.
 const db = require('./db');
@@ -91,7 +91,9 @@ function post(url, body) {
   queues.set(url, q);
   q.chain = q.chain.then(async () => {
     try {
-      const r = await safe.request('POST', url, { headers: { 'Content-Type': 'application/json', 'X-Ember-Homeserver': config.domain() }, body: JSON.stringify(body), timeout: TIMEOUT, maxBytes: 64 * 1024 });
+      // signed the way server-to-server requests are (§4c.1): the gateway checks it against our JWKS
+      const payload = JSON.stringify(body), headers = { ...require('./social/s2s').sign({ method: 'POST', url, body: payload }), 'Content-Type': 'application/json' };
+      const r = await safe.request('POST', url, { headers, body: payload, timeout: TIMEOUT, maxBytes: 64 * 1024 });
       const key = body.notification.pushkey;
       if (r.status < 200 || r.status >= 300) return;
       const rejected = r.json()?.rejected;
