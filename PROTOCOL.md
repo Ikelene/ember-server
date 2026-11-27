@@ -1082,7 +1082,7 @@ Like Discord's. An **overwrite** is `{ type: "role" | "member", id, allow, deny 
 | `mention_everyone` | MENTION_EVERYONE 128 | `@everyone` / `@here` and roles that are not mentionable |
 | `manage_messages` | MANAGE_MESSAGES 64 | delete others' messages; pin |
 | `pin_messages` | PIN_MESSAGES | pin and unpin |
-| `read_message_history` | READ_HISTORY | history, pins, search and starboard entries (without it: `messages: []`, `read_history: false`). Live messages still arrive, but a reply comes with `reply: { id, earlier: true }` and no text of the earlier message. Edits of messages are not sent, and a pin comes only as `chat_message_pinned { server, channel, id, pinned }`. Bots get `403 missing_access` for one message |
+| `read_message_history` | READ_HISTORY | history, pins, search and starboard entries (without it: `messages: []`, `read_history: false`). Live messages still arrive, but a reply comes with `reply: { id, earlier: true }` and no text of the earlier message. Edits of messages are not sent, and a pin comes only as `chat_message_pinned { server, channel, id, pinned }`. Bots get `403 missing_access` for one message, `MESSAGE_CREATE` with `referenced_message: null` (`message_reference` still names it) and no `MESSAGE_UPDATE` |
 | `use_external_emojis` | USE_EXTERNAL_EMOJIS | other servers' custom emojis in messages (`403 no_external_emojis { emojis }` otherwise) |
 | `connect` | CONNECT | join the voice channel |
 | `speak` | SPEAK | publish the microphone (`audio` track) |

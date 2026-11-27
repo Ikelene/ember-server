@@ -383,7 +383,11 @@ function dispatch(communityId, obj) {
     here.forEach(g => gwSend(g, 'GUILD_UPDATE', guildObj(c, snap, true, auth.userById(g.botId))));
     return;
   } else return;
-  here.filter(g => sees(g, ch) && (!only || only(g))).forEach(g => gwSend(g, t, d));
+  // a bot without Read message history there (PROTOCOL §6.5): a new message without the earlier one it replies to
+  // (referenced_message null, as Discord sends when it is not available), no edits
+  const reads = g => !ch || !(t === 'MESSAGE_CREATE' || t === 'MESSAGE_UPDATE') || snap.chCan(ch, g.botId, P.READ_HISTORY);
+  const bare = t === 'MESSAGE_CREATE' ? { ...d, referenced_message: d.referenced_message ? null : d.referenced_message } : null;
+  here.filter(g => sees(g, ch) && (!only || only(g))).forEach(g => { if (reads(g)) gwSend(g, t, d); else if (bare) gwSend(g, t, bare); });
 }
 
 module.exports = {
