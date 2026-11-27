@@ -268,9 +268,10 @@ function flush() {
   clearTimeout(timer); timer = null;
   const list = [...pending.values()];
   pending.clear();
-  for (const e of list) s2s.later(e.domain, '/dm_activity', e.body, status => { if (status === 410) pointerGone(e); });
+  for (const e of list) s2s.later(e.domain, '/dm_activity', e.body, { then: 'dm_activity', ctx: { community: e.community, user: e.user } });
 }
 // their homeserver has no pointer any more: they left a group there
+s2s.after('dm_activity', (status, body, e) => { if (status === 410 && e) pointerGone(e); });
 function pointerGone(e) {
   const c = db.get("SELECT * FROM communities WHERE id = ? AND kind = 'dm'", e.community), u = auth.userById(e.user);
   if (c && u && isGroup(c) && isMember(c, u.id)) takeOut(c, u);

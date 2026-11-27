@@ -140,3 +140,48 @@ test('requests are counted per homeserver', async () => {
   config.update({ federation: { rate_limits: { s2s_per_minute: 600 } } });
   limits.reset();
 });
+
+test('the outbox: kept in the database until answered, carried on after a restart, the newest of a key replaces one waiting, given up when too old', async () => {
+  accept('all');
+  const s2s = require('../src/social/s2s'), db = require('../src/db');
+  const out = await mock('out.example'), got = [];
+  let reply = () => [200, { ok: true }];
+  out.handle = (req, res) => {
+    let body = ''; req.on('data', d => { body += d; });
+    req.on('end', () => { got.push({ path: req.url, body: JSON.parse(body || 'null') }); const [st, json] = reply(); res.writeHead(st, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); });
+  };
+  const rows = () => db.all('SELECT * FROM s2s_outbox');
+  s2s._test.setRetry([5, 5]);
+  // "a restart": a call left in the table is sent once start() runs
+  s2s.stop();
+  db.run("INSERT INTO s2s_outbox (domain, path, body, tries, next_at, created_at) VALUES ('out.example', '/unblock', '{\"from\":\"l:1@b.example\"}', 0, 0, ?)", Date.now());
+  s2s.start(); await s2s.idle();
+  assert.deepEqual(got.map(g => g.path), ['/_ember/s2s/v1/unblock']);
+  assert.equal(rows().length, 0);
+  // a handler by name hears the answer and what was kept beside the call
+  let heard = null;
+  s2s.after('test_then', (status, body, ctx) => { heard = [status, ctx]; });
+  s2s.later('out.example', '/block', { from: 'l:1@b.example' }, { then: 'test_then', ctx: { n: 7 } });
+  await s2s.idle();
+  assert.deepEqual(heard, [200, { n: 7 }]);
+  // no answer: tried again later; a newer call with the same key replaces the one still waiting
+  reply = () => [503, { error: 'busy' }];
+  s2s._test.setRetry([60000]);
+  s2s.later('out.example', '/presence', { from: 'l:1@b.example', status: 'online' }, { key: 'presence:l:1@b.example' });
+  for (let i = 0; i < 200 && !rows()[0]?.tries; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(rows()[0].tries, 1);
+  s2s.later('out.example', '/presence', { from: 'l:1@b.example', status: 'idle' }, { key: 'presence:l:1@b.example' });
+  s2s.later('out.example', '/presence', { from: 'l:1@b.example', status: 'offline' }, { key: 'presence:l:1@b.example' });
+  assert.deepEqual(rows().map(r => JSON.parse(r.body).status), ['offline']);
+  reply = () => [200, { ok: true }];
+  s2s.stop(); db.run('UPDATE s2s_outbox SET next_at = 0'); s2s.start(); await s2s.idle();
+  assert.deepEqual(got.at(-1).body, { from: 'l:1@b.example', status: 'offline' });
+  // older than the limit: given up instead of tried again
+  reply = () => [503, { error: 'busy' }];
+  s2s._test.setMaxAge(1000);
+  const n = got.length;
+  db.run("INSERT INTO s2s_outbox (domain, path, body, tries, next_at, created_at) VALUES ('out.example', '/presence', '{}', 0, 0, ?)", Date.now() - 5000);
+  s2s.start(); await s2s.idle();
+  assert.deepEqual([got.length, rows().length], [n + 1, 0]);
+  s2s._test.setMaxAge(24 * 3600 * 1000); s2s._test.setRetry([2000, 15000]);
+});

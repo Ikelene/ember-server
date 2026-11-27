@@ -124,7 +124,7 @@ function presenceChanged(u, online) {
     if (p?.local) gateway().pushToUser(p.user.id, { type: 'social_presence', id: my, status });
     else if (p) domains.add(p.domain);
   }
-  for (const d of domains) s2s.later(d, '/presence', { from: my, status });
+  for (const d of domains) s2s.later(d, '/presence', { from: my, status }, { key: 'presence:' + my }); // only the newest one waits
 }
 
 function register(app) {

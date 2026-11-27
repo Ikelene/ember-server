@@ -24,7 +24,6 @@ const where = require('./where');
 const PREFIX = '/_ember/s2s/v1';
 const MAX_AGE = 300, MAX_AHEAD = 60; // seconds
 const TIMEOUT = 8000;
-let RETRY = [2000, 15000];           // waits between the tries of a queued call
 
 const digest = body => crypto.createHash('sha256').update(body || Buffer.alloc(0)).digest('base64url');
 // the bytes a signature covers. target: the request path with its query, exactly as sent; host: the receiver's host[:port]
@@ -65,26 +64,76 @@ async function call(domain, method, path, body) {
   const { error, ...extra } = r.body && typeof r.body === 'object' ? r.body : {};
   throw err(code, r.status >= 500 || r.status < 400 ? 502 : r.status, { ...extra, homeserver: domain });
 }
-// a call nobody waits for (removals, renames, activity): in order per homeserver, tried up to three times.
-// done(status, body) hears the last answer, or (0, null) when none came
-const queues = new Map(); // domain -> promise chain
+// ---------- the outbox ----------
+// A call nobody waits for (removals, renames, activity, presence) goes into s2s_outbox and stays there until it is answered,
+// so a restart loses none. In order per homeserver; no answer (or a 5xx / 429) is tried again after RETRY[n], and given up
+// after the last wait or once the call is older than MAX_QUEUE_AGE. A call our own rules refuse is not tried again.
+// done: { then, ctx, key } (then: a handler registered with after(name, fn), which hears fn(status, body, ctx), (0, null) when
+// no answer came; key: a newer call with the same key replaces one still waiting), or a function that hears (status, body)
+// (kept in memory only: a restart forgets it)
+let RETRY = [2000, 15000, 60000, 300000, 900000, 3600000, 3600000, 3 * 3600000, 6 * 3600000, 12 * 3600000];
+let MAX_QUEUE_AGE = 24 * 3600 * 1000;
+const MAX_PER_DOMAIN = 5000;
 const sleep = ms => new Promise(r => { const t = setTimeout(r, ms); t.unref?.(); });
+const handlers = new Map(); // name -> fn(status, body, ctx)
+const inMemory = new Map(); // outbox id -> fn(status, body)
+const workers = new Map();  // domain -> { running, timer, busy }
+const after = (name, fn) => { handlers.set(name, fn); };
 function later(domain, path, body, done = null) {
-  const run = async () => {
-    let last = { status: 0, body: null };
-    for (let i = 0; i <= RETRY.length; i++) {
-      if (!db.raw()) return;
-      try { last = await request(domain, 'POST', path, body); if (last.status < 500 && last.status !== 429) break; }
-      catch (e) { last = { status: 0, body: null }; if (e.status !== 502) break; } // refused by our own rules: no point trying again
-      if (i < RETRY.length) await sleep(RETRY[i]);
-    }
-    if (done && db.raw()) { try { await done(last.status, last.body); } catch (e) { console.error('[s2s]', path, e.message); } }
-  };
-  const chain = (queues.get(domain) || Promise.resolve()).then(run).catch(e => console.error('[s2s]', domain, path, e.message));
-  queues.set(domain, chain);
-  chain.then(() => { if (queues.get(domain) === chain) queues.delete(domain); });
+  if (!db.raw()) return;
+  const o = done && typeof done === 'object' ? done : {}, t = now();
+  const busy = workers.get(domain)?.busy ?? 0;
+  if (o.key) db.run('DELETE FROM s2s_outbox WHERE domain = ? AND key = ? AND id <> ?', domain, String(o.key), busy);
+  if (db.get('SELECT COUNT(*) AS n FROM s2s_outbox WHERE domain = ?', domain).n >= MAX_PER_DOMAIN) { console.error('[s2s]', domain, 'outbox full, dropped', path); return; }
+  const id = db.run('INSERT INTO s2s_outbox (domain, path, body, key, then_name, ctx, tries, next_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+    domain, path, JSON.stringify(body ?? null), o.key ? String(o.key) : null, o.then || null, o.ctx === undefined ? null : JSON.stringify(o.ctx), t, t).lastInsertRowid;
+  if (typeof done === 'function') inMemory.set(Number(id), done);
+  kick(domain);
 }
-const idle = async () => { while (queues.size) await Promise.all([...queues.values()]); }; // tests
+function kick(domain) {
+  const w = workers.get(domain) || { running: false, timer: null, busy: 0 };
+  workers.set(domain, w);
+  if (w.running || w.timer) return;
+  drain(domain, w).catch(e => console.error('[s2s]', domain, e.message));
+}
+async function drain(domain, w) {
+  w.running = true;
+  try {
+    for (;;) {
+      if (!db.raw()) return;
+      const row = db.get('SELECT * FROM s2s_outbox WHERE domain = ? ORDER BY id LIMIT 1', domain);
+      if (!row) { if (workers.get(domain) === w) workers.delete(domain); return; }
+      const wait = row.next_at - now();
+      if (wait > 0) { w.timer = setTimeout(() => { w.timer = null; kick(domain); }, wait); w.timer.unref?.(); return; }
+      w.busy = row.id;
+      let last = { status: 0, body: null }, again = false;
+      try { last = await request(domain, 'POST', row.path, JSON.parse(row.body)); again = last.status >= 500 || last.status === 429; }
+      catch (e) { again = e.status === 502; } // refused by our own rules: no point trying again
+      w.busy = 0;
+      if (!db.raw()) return;
+      const tries = row.tries + 1, gap = RETRY[tries - 1];
+      if (again && gap !== undefined && now() + gap - row.created_at <= MAX_QUEUE_AGE) {
+        db.run('UPDATE s2s_outbox SET tries = ?, next_at = ? WHERE id = ?', tries, now() + gap, row.id);
+        continue;
+      }
+      db.run('DELETE FROM s2s_outbox WHERE id = ?', row.id);
+      await finish(row, last);
+    }
+  } finally { w.running = false; }
+}
+async function finish(row, last) {
+  const fn = inMemory.get(row.id), named = row.then_name ? handlers.get(row.then_name) : null;
+  inMemory.delete(row.id);
+  try {
+    if (fn) await fn(last.status, last.body);
+    if (named) await named(last.status, last.body, row.ctx ? JSON.parse(row.ctx) : null);
+  } catch (e) { console.error('[s2s]', row.path, e.message); }
+}
+// after a restart: carry on with what was left
+function start() { stop(); if (db.raw()) for (const r of db.all('SELECT DISTINCT domain FROM s2s_outbox')) kick(r.domain); }
+function stop() { for (const w of workers.values()) { clearTimeout(w.timer); w.timer = null; } workers.clear(); }
+// tests: until the outbox is empty
+const idle = async () => { while (db.raw() && (db.get('SELECT 1 FROM s2s_outbox LIMIT 1') || [...workers.values()].some(w => w.running))) await sleep(5); };
 
 // ---------- receiving ----------
 function parseHeader(v) {
@@ -149,4 +198,7 @@ function register(app) {
 }
 const discovery = () => ({ social: where.urls() });
 
-module.exports = { PREFIX, MAX_AGE, canonical, digest, sign, request, call, later, idle, verify, parties, localAccount, on, register, discovery, assertPeer, _test: { setRetry(list) { RETRY = list; } } };
+module.exports = {
+  PREFIX, MAX_AGE, canonical, digest, sign, request, call, later, after, start, stop, idle, verify, parties, localAccount, on, register, discovery, assertPeer,
+  _test: { setRetry(list) { RETRY = list; }, setMaxAge(ms) { MAX_QUEUE_AGE = ms; } },
+};

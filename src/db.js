@@ -356,6 +356,14 @@ const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS dm_reports_status ON dm_reports(status, id);`);
   },
+  // v29: the outbox of server-to-server calls nobody waits for (PROTOCOL §4c.1): kept until they are answered or given up,
+  // so a restart loses none. then_name / ctx: the handler that hears the answer (social/s2s.js after()); key: a newer call
+  // with the same key replaces one still waiting (presence)
+  `CREATE TABLE IF NOT EXISTS s2s_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL, key TEXT, then_name TEXT, ctx TEXT,
+    tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS s2s_outbox_domain ON s2s_outbox(domain, id);`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

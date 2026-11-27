@@ -18,8 +18,8 @@ function register(app) {
   require('./reports').register(app);
   require('./dms').register(app);
 }
-const start = () => require('./dms').start();
-const stop = () => require('./dms').stop();
+const start = () => { s2s.start(); require('./dms').start(); }; // (s2s: carries on with the outbox a restart left)
+const stop = () => { require('./dms').stop(); s2s.stop(); };
 const discovery = () => s2s.discovery();
 
 module.exports = { register, discovery, start, stop };
