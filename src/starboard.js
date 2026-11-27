@@ -20,9 +20,10 @@ const watches = (board, ch) => {
 function onStar({ ch, c, snap }, messageId, count) {
   for (const b of snap.channels.filter(x => x.type === 'starboard' && watches(x, ch))) {
     const base = { type: 'chat_starboard', server: c.sid, channel: b.cid, id: String(messageId), stars: count };
-    if (db.get('SELECT 1 FROM starboard WHERE board_id = ? AND message_id = ?', b.id, messageId)) { gateway.emit(c.id, base); continue; }
+    const seen = { filter: uid => snap.canView(ch, uid) }; // (only people who can see the starred message's channel hear about it)
+    if (db.get('SELECT 1 FROM starboard WHERE board_id = ? AND message_id = ?', b.id, messageId)) { gateway.emit(c.id, base, seen); continue; }
     if (count < minOf(b)) continue;
-    if (db.run('INSERT OR IGNORE INTO starboard (board_id, message_id, starred_at) VALUES (?, ?, ?)', b.id, messageId, Date.now()).changes) gateway.emit(c.id, { ...base, added: true });
+    if (db.run('INSERT OR IGNORE INTO starboard (board_id, message_id, starred_at) VALUES (?, ?, ?)', b.id, messageId, Date.now()).changes) gateway.emit(c.id, { ...base, added: true }, seen);
   }
 }
 

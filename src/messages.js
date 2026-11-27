@@ -138,6 +138,7 @@ function messageView(r, snap) {
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
     ...(r.sticker_id ? { sticker: stickerOf(r.sticker_id) } : {}),
+    ...(r.suppress_embeds ? { suppress_embeds: true } : {}), // (the author may not embed links there: no link previews)
     ...(r.enc ? { enc: json(r.enc, null) } : {}), // a sealed DM message (PROTOCOL §4d): body is '', this is all there is
   };
 }
@@ -282,6 +283,7 @@ function insertMessage(ctx, f) {
     f.components?.length ? JSON.stringify(f.components) : null, f.interaction ? JSON.stringify(f.interaction) : null, f.stickerId || null, f.enc ? JSON.stringify(f.enc) : null);
   const id = Number(res.lastInsertRowid);
   if (f.alias) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', f.alias.name, f.alias.avatar || null, id);
+  if (f.suppressEmbeds) db.run('UPDATE messages SET suppress_embeds = 1 WHERE id = ?', id);
   if (f.bridge && f.bridgeFrom) require('./bridge/store').setFrom(id, f.bridgeFrom);
   db.run('UPDATE channels SET last_message_id = ? WHERE id = ?', id, ch.id);
   ch.last_message_id = id;
@@ -376,7 +378,9 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (!body.trim() && !atts.length && !embeds?.length && !components?.length && !stickerId) throw err('empty_message');
   if (!snap.isMember(me.id)) throw err('not_a_member', 403);
   if (!force && !snap.canPost(ch, me.id)) throw err(ch.locked && ch.type !== 'voice' ? 'channel_locked' : 'no_send_permission', 403);
-  if (atts.length && !force && !(snap.chPerms(ch, me.id) & P.ATTACH)) throw err('no_attach_permission', 403);
+  const here = snap.chPerms(ch, me.id); // (what this member may do in this channel: overwrites included)
+  if (atts.length && !force && !(here & P.ATTACH)) throw err('no_attach_permission', 403);
+  if (!force && !(here & P.USE_EXTERNAL_EMOJIS) && externalEmojis(body, c).length) throw err('no_external_emojis', 403, { emojis: externalEmojis(body, c) });
   assertLength(c, text);
   mod().beforePost(ctx, me, body); // timeouts, AutoMod's blocked words and spam limits
   if (!sendLimit.hit(me.id)) throw err('rate_limited', 429);
@@ -385,12 +389,21 @@ async function postMessage(me, ctx, text, { replyTo, attachments, signature, sco
   if (replyTo != null && /^\d{1,15}$/.test(String(replyTo))) reply = db.get('SELECT id FROM messages WHERE id = ? AND channel_id = ?', Number(replyTo), ch.id)?.id ?? null;
   const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: reply, editOf: null, sticker: stickerId });
   // @everyone / @here and role mentions only count when allowed (Mention everyone, or a mentionable role)
-  const big = snap.can(me.id, P.MENTION_EVERYONE);
+  const big = (here & P.MENTION_EVERYONE) !== 0;
   let everyone = 0;
   if (big && /(^|\s)@everyone\b/.test(body)) everyone = 1; else if (big && /(^|\s)@here\b/.test(body)) everyone = 2;
   const tokens = [...body.matchAll(/<@&(r[0-9a-f]{10})>/g)].map(m => m[1]);
   const roleIds = snap.roles.filter(r => tokens.includes(r.rid) && !r.is_default && (r.mentionable || big)).map(r => r.id).slice(0, 20);
-  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds, via: viaOf(origin, ua, app), components, interaction, alias: aliasRow || null, stickerId });
+  // no Embed links here: no embeds of its own, and clients show no link previews for it (suppress_embeds)
+  const noEmbeds = !force && !(here & P.EMBED_LINKS);
+  return insertMessage(ctx, { userId: me.id, body, replyTo: reply, attachments: atts, everyone, roleIds, sig, embeds: noEmbeds ? null : embeds, suppressEmbeds: noEmbeds, via: viaOf(origin, ua, app), components, interaction, alias: aliasRow || null, stickerId });
+}
+// custom emojis of other servers in a message: <:name:eid> / <a:name:eid> whose eid is not this server's
+function externalEmojis(body, c) {
+  const ids = [...String(body || '').matchAll(/<a?:[\w~]{1,32}:([A-Za-z0-9_-]{1,40})>/g)].map(m => m[1]);
+  if (!ids.length) return [];
+  const own = new Set(db.all(`SELECT eid FROM emojis WHERE community_id = ? AND eid IN (${db.inList(ids)})`, c.id, ...ids).map(r => r.eid));
+  return [...new Set(ids.filter(id => !own.has(id)))];
 }
 function systemMessage(ctx, body, extra = {}) { return insertMessage(ctx, { system: true, body, ...extra }); }
 
@@ -456,7 +469,7 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
 }
 function deleteMessage(id, me) {
   const { r, ch, c, snap } = messageCtx(id, me);
-  if (Number(r.user_id) !== Number(me.id) && !snap.can(me.id, P.MANAGE_MESSAGES)) throw err('not_allowed', 403);
+  if (Number(r.user_id) !== Number(me.id) && !snap.chCan(ch, me.id, P.MANAGE_MESSAGES)) throw err('not_allowed', 403);
   db.run('DELETE FROM messages WHERE id = ?', r.id);
   gateway.emit(c.id, { type: 'chat_message_delete', channel: ch.cid, server: c.sid, id: String(r.id) });
   runHooks(deleteHooks, { id: String(r.id), ch, c });
@@ -472,6 +485,7 @@ const UNI_REACT = /^(\p{Regional_Indicator}{2}|[#*0-9]️?⃣|\p{Extended_Pictog
 function react(id, me, emojiRaw, on) {
   const { r, ch, c, snap } = messageCtx(id, me);
   if (on) { const until = mod().timeoutUntil(c, me.id); if (until) throw err('timed_out', 403, { until }); } // (taking one off is fine)
+  if (on && !snap.chCan(ch, me.id, P.ADD_REACTIONS)) throw err('no_reaction_permission', 403);
   let emoji = String(emojiRaw || '').trim();
   let eid = customReaction(emoji);
   // Also accept the composer's :name: spelling within this community.
@@ -533,8 +547,11 @@ function attachVia(rows, snap, me, msgs) {
 }
 
 // ---------- history / search / pins / read ----------
+// without Read message history in a channel there is no history (live messages still come over the gateway)
+const readsHistory = (snap, ch, uid) => snap.chCan(ch, uid, P.READ_HISTORY);
 function history(cid, me, { before, after, limit, kids } = {}) {
   const ctx = C.findChannel(cid, me);
+  if (!readsHistory(ctx.snap, ctx.ch, me.id)) return { channel: C.channelView(ctx.snap, ctx.ch), messages: [], has_more: false, read_history: false };
   limit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
   let where = 'm.channel_id = ?';
   const params = [ctx.ch.id];
@@ -548,7 +565,7 @@ const likeEsc = s => s.replace(/[\\%_]/g, x => '\\' + x);
 function search(cid, me, q) {
   const { ch, c, snap } = C.findChannel(cid, me);
   q = String(q || '').trim().slice(0, 100);
-  if (!q || c.kind === 'dm') return { messages: [] }; // (a DM is sealed: there is nothing here to search)
+  if (!q || c.kind === 'dm' || !readsHistory(snap, ch, me.id)) return { messages: [] }; // (a DM is sealed: there is nothing here to search)
   const rows = db.all(`${SELECT_MSG} WHERE m.channel_id = ? AND m.body LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT ?`, ch.id, `%${likeEsc(q)}%`, S().get(c).messages.search_results);
   return { messages: rows.map(r => messageView(r, snap)) };
 }
@@ -562,7 +579,7 @@ function searchServer(sid, me, raw, { offset } = {}) {
   const inCh = take(/(?:^|\s)in:#?([a-z0-9_-]{1,40})/gi);
   const has = take(/(?:^|\s)has:(image|video|file|link|embed|sound|audio)/gi);
   q = q.trim();
-  let list = snap.visible(me.id).filter(c => !['voice', 'link', 'roles', 'starboard'].includes(c.type) && !(c.type === 'game' && C.cfgOf(c).purpose !== 'chat'));
+  let list = snap.visible(me.id).filter(c => !['voice', 'link', 'roles', 'starboard'].includes(c.type) && !(c.type === 'game' && C.cfgOf(c).purpose !== 'chat') && readsHistory(snap, c, me.id));
   if (inCh.length) list = list.filter(c => inCh.includes(c.name.toLowerCase()));
   if (!list.length || (!q && !from.length && !has.length)) return { messages: [], total: 0 };
   let where = `m.channel_id IN (${db.inList(list)}) AND m.system = 0`;
@@ -586,7 +603,7 @@ function searchServer(sid, me, raw, { offset } = {}) {
 function pinMessage(id, me, on) {
   const { r, ch, c, snap } = messageCtx(id, me);
   // in a DM (two people or a group) any member pins and unpins, as in Nookara's DMs; in a server it takes Manage messages
-  if (c.kind === 'dm' ? !snap.isMember(me.id) : !snap.can(me.id, P.MANAGE_MESSAGES)) throw err('not_allowed', 403);
+  if (c.kind === 'dm' ? !snap.isMember(me.id) : !(snap.chCan(ch, me.id, P.PIN_MESSAGES) || snap.chCan(ch, me.id, P.MANAGE_MESSAGES))) throw err('not_allowed', 403);
   if (r.system) throw err('not_allowed', 403);
   if (on && !r.pinned_at) {
     if (db.get('SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL', ch.id).n >= MAX_PINS) throw err('too_many_pins');
@@ -601,6 +618,7 @@ function pinMessage(id, me, on) {
 }
 function pins(cid, me) {
   const { ch, snap } = C.findChannel(cid, me);
+  if (!readsHistory(snap, ch, me.id)) return { messages: [] };
   const rows = db.all(`${SELECT_MSG} WHERE m.channel_id = ? AND m.pinned_at IS NOT NULL ORDER BY m.pinned_at DESC LIMIT ${MAX_PINS}`, ch.id);
   return { messages: attachVia(rows, snap, me, withReactions(rows.map(r => messageView(r, snap)))) };
 }

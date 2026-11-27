@@ -9,7 +9,7 @@ const db = require('./db');
 const auth = require('./auth');
 const C = require('./communities');
 const uploads = require('./uploads');
-const { ALL_PERMS, CHANNEL_BITS } = require('./perms');
+const { ALL_PERMS, CHANNEL_BITS, upgradeRole, upgradeOverwrite } = require('./perms');
 const { err, normalizeOrigin, randHex, sha256, now, clean } = require('./util');
 
 const FORMAT = EXPORT_FORMAT;
@@ -39,6 +39,8 @@ function exportCommunity(sid, me) {
     return ref;
   };
   const roleByRid = id => snap.roles.find(r => r.id === id)?.rid;
+  const owList = o => (o ? [...[...o.roles].map(([id, x]) => ({ type: 'role', id: roleByRid(id), allow: x.allow, deny: x.deny })),
+    ...[...o.members].map(([id, x]) => ({ type: 'member', id: auth.userById(id)?.principal, allow: x.allow, deny: x.deny }))].filter(x => x.id) : []);
   const emojis = db.all('SELECT * FROM emojis WHERE community_id = ? ORDER BY id', c.id).map(e => ({ eid: e.eid, name: e.name, animated: !!e.animated, file: localFile(`${origin()}/uploads/${e.file}`) }));
   const stickers = db.all('SELECT * FROM stickers WHERE community_id = ? ORDER BY id', c.id).map(s => ({ tid: s.tid, name: s.name, animated: !!s.animated, file: localFile(`${origin()}/uploads/${s.file}`) }));
   const community = {
@@ -47,8 +49,11 @@ function exportCommunity(sid, me) {
     categories: C.categoriesOf(c),
     channels: snap.channels.map(ch => ({
       cid: ch.cid, name: ch.name, topic: ch.topic, category: ch.category, position: ch.position, locked: !!ch.locked, type: ch.type, config: C.cfgOf(ch),
-      perms: [...(snap.ow.get(ch.id) || new Map())].map(([rid, o]) => ({ role: roleByRid(rid), allow: o.allow, deny: o.deny })).filter(x => x.role),
+      perms: [...(snap.ow.get(ch.id) || new Map())].map(([rid, o]) => ({ role: roleByRid(rid), allow: o.allow, deny: o.deny })).filter(x => x.role), // (older readers)
+      overwrites: owList(snap.cow.get(ch.id)), perms_synced: !!ch.perms_synced,
     })),
+    category_overwrites: Object.fromEntries([...snap.kow].map(([name, o]) => [name, owList(o)])),
+    perm_version: 2, // the permission bits of PROTOCOL §6.5 (an export without it is upgraded on import, perms.upgradeRole)
     roles: snap.roles.map(r => ({ rid: r.rid, name: r.name, color: r.color || null, position: r.position, permissions: r.permissions, upload_max_mb: r.upload_max_mb ?? null, hoist: !!r.hoist, mentionable: !!r.mentionable, is_default: !!r.is_default })),
     emojis,
     stickers,
@@ -169,15 +174,17 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     const roleMap = new Map();
     const everyoneNew = db.get('SELECT * FROM roles WHERE community_id = ? AND is_default = 1', c.id);
     const roleList = cj.roles.filter(r => r && typeof r.rid === 'string').slice(0, C.LIMITS.roles);
-    for (const r of roleList.filter(x => x.is_default)) { db.run('UPDATE roles SET permissions = ?, upload_max_mb = ? WHERE id = ?', (Number(r.permissions) || 0) & ALL_PERMS & ~0, validRoleUpload(r.upload_max_mb), everyoneNew.id); roleMap.set(r.rid, everyoneNew); }
+    const v2 = cj.perm_version === 2, bitsOf = r => (v2 ? Number(r.permissions) || 0 : upgradeRole(r.permissions, !!r.is_default)) & ALL_PERMS;
+    for (const r of roleList.filter(x => x.is_default)) { db.run('UPDATE roles SET permissions = ?, upload_max_mb = ? WHERE id = ?', bitsOf(r), validRoleUpload(r.upload_max_mb), everyoneNew.id); roleMap.set(r.rid, everyoneNew); }
     let pos = 1;
     for (const r of roleList.filter(x => !x.is_default).sort((a, b) => (a.position || 0) - (b.position || 0))) {
-      roleMap.set(r.rid, C.insertRole(c.id, { name: clean(r.name, 40) || 'role', color: /^#[0-9a-f]{6}$/i.test(r.color || '') ? r.color : null, position: pos++, permissions: (Number(r.permissions) || 0) & ALL_PERMS, hoist: r.hoist, mentionable: r.mentionable, upload_max_mb: validRoleUpload(r.upload_max_mb) }));
+      roleMap.set(r.rid, C.insertRole(c.id, { name: clean(r.name, 40) || 'role', color: /^#[0-9a-f]{6}$/i.test(r.color || '') ? r.color : null, position: pos++, permissions: bitsOf(r), hoist: r.hoist, mentionable: r.mentionable, upload_max_mb: validRoleUpload(r.upload_max_mb) }));
     }
     // Server settings (joining, message rules, AutoMod, audit log, uploads), with role ids moved to the new roles
     if (st.rules) db.run('UPDATE communities SET settings = ? WHERE id = ?', JSON.stringify(require('./settings').imported(st.rules, rid => roleMap.get(rid)?.rid)), c.id);
-    // channels + overwrites
-    const chMap = new Map();
+    // channels + overwrites (member ones once the members are in)
+    const chMap = new Map(), overwritesLater = [];
+    if (v2 && cj.category_overwrites && typeof cj.category_overwrites === 'object') for (const [name, l] of Object.entries(cj.category_overwrites)) for (const o of Array.isArray(l) ? l.slice(0, 200) : []) overwritesLater.push({ category: clean(name, 40), o });
     const cats = [...new Set([...(Array.isArray(cj.categories) ? cj.categories : []), ...cj.channels.map(x => x?.category)].map(x => clean(x, 40)).filter(Boolean))].slice(0, 30);
     if (!cats.length) cats.push('Text channels');
     C.setCategories(c, cats);
@@ -190,11 +197,9 @@ function importCommunity(me, buffer, parsed, opts = {}) {
       i++;
       chMap.set(x.cid, row);
       pending.push([row, type, x.config]);
-      for (const o of Array.isArray(x.perms) ? x.perms : []) {
-        const role = roleMap.get(o?.role);
-        const allow = (Number(o?.allow) || 0) & CHANNEL_BITS, deny = (Number(o?.deny) || 0) & CHANNEL_BITS;
-        if (role && (allow || deny)) db.run('INSERT OR REPLACE INTO channel_perms (channel_id, role_id, allow, deny) VALUES (?, ?, ?, ?)', row.id, role.id, allow & ~deny, deny);
-      }
+      const list = v2 && Array.isArray(x.overwrites) ? x.overwrites : (Array.isArray(x.perms) ? x.perms : []).map(o => ({ type: 'role', id: o?.role, allow: upgradeOverwrite(Number(o?.allow) || 0, type === 'voice'), deny: upgradeOverwrite(Number(o?.deny) || 0, type === 'voice') }));
+      for (const o of list) overwritesLater.push({ channel_id: row.id, o });
+      db.run('UPDATE channels SET perms_synced = ? WHERE id = ?', v2 ? (x.perms_synced ? 1 : 0) : (list.length ? 0 : 1), row.id);
     }
     let cloudlinks = 0;
     for (const [row, type, cfg] of pending) {
@@ -351,6 +356,17 @@ function importCommunity(me, buffer, parsed, opts = {}) {
       toAnnounce.push(u.id);
     }
     if (opts.report) opts.report.members = tally;
+    // the overwrites: a role by its new row, a member who is one here now (see members above)
+    const catsNow = C.categoriesOf(db.get('SELECT * FROM communities WHERE id = ?', c.id));
+    for (const { channel_id, category, o } of overwritesLater) {
+      const allow = (Number(o?.allow) || 0) & CHANNEL_BITS, deny = (Number(o?.deny) || 0) & CHANNEL_BITS;
+      if (!(allow || deny) || (category != null && !catsNow.includes(category))) continue;
+      let tid = null;
+      if (o?.type === 'member') { const u = resolve(String(o.id || '')); if (u && db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)) tid = u.id; }
+      else tid = roleMap.get(o?.id)?.id ?? null;
+      if (tid == null) continue;
+      db.run('INSERT OR REPLACE INTO perm_overwrites (community_id, channel_id, category, target_type, target_id, allow, deny) VALUES (?, ?, ?, ?, ?, ?, ?)', c.id, channel_id ?? null, category ?? null, o.type === 'member' ? 'member' : 'role', tid, allow & ~deny, deny);
+    }
     setImmediate(() => { const fresh = db.get('SELECT * FROM communities WHERE id = ?', c.id); if (!fresh) return; const snap = C.snapOf(fresh); for (const uid of toAnnounce) require('./gateway').pushToUser(uid, { type: 'chat_server_added', server: C.serverView(fresh, snap, auth.userById(uid)) }); });
     return db.get('SELECT * FROM communities WHERE id = ?', c.id);
   });

@@ -142,7 +142,7 @@ test('create a community: defaults, detail shape', async () => {
   sid = d.server.sid;
   assert.match(sid, /^s[0-9a-f]{10}$/);
   assert.equal(d.server.role, 'owner');
-  assert.equal(d.server.perms, 7167 | 8192 | 16384 | 32768);
+  assert.equal(d.server.perms, require('../src/perms').ALL_PERMS); // (the owner: every permission, the channel ones of §6.5 too)
   assert.equal(d.server.join_policy, 'request');
   assert.equal(d.server.instance, base.replace('127.0.0.1', 'localhost'));
   assert.equal(d.server.allow_uploads, true);
@@ -150,7 +150,7 @@ test('create a community: defaults, detail shape', async () => {
   assert.equal(d.roles.length, 1);
   assert.equal(d.roles[0].name, '@everyone');
   assert.equal(d.roles[0].is_default, true);
-  assert.equal(d.roles[0].permissions, 1 | 256 | 8192);
+  assert.equal(d.roles[0].permissions, require('../src/perms').EVERYONE_DEFAULT); // send, attach, change nickname, and the member channel permissions
   assert.equal(d.channels.length, 2);
   const general = d.channels.find(c => c.type === 'text');
   const voice = d.channels.find(c => c.type === 'voice');
@@ -386,13 +386,13 @@ test('rate limit: 8 messages per 5 seconds', async () => {
 
 test('roles, hierarchy, channel overwrites and visibility fan-out', async () => {
   const wb = await wsClient(base).login(bob.session); clients.push(wb);
-  const role = await alice.a.post(`/api/v1/servers/${sid}/roles`, { name: 'Mods', permissions: 16 | 64 | 512 | 65536, color: '#ff0000' });
+  const role = await alice.a.post(`/api/v1/servers/${sid}/roles`, { name: 'Mods', permissions: 16 | 64 | 512 | (1 << 29), color: '#ff0000' });
   assert.equal(role.status, 200);
-  assert.equal(role.body.role.permissions, 16 | 64 | 512); // 65536 is not a permission bit (16384 is Manage nicknames)
+  assert.equal(role.body.role.permissions, 16 | 64 | 512); // 1 << 29 is not a permission bit
   const rid = role.body.role.rid;
   assert.equal((await bob.a.post(`/api/v1/servers/${sid}/roles`, { name: 'nope' })).status, 403);
   const everyone = (await alice.a.get(`/api/v1/servers/${sid}`)).body.roles.find(r => r.is_default);
-  assert.equal((await alice.a.patch(`/api/v1/servers/${sid}/roles/${everyone.rid}`, { permissions: 1 | 256 | 128 })).body.role.permissions, 1 | 256 | 128);
+  assert.equal((await alice.a.patch(`/api/v1/servers/${sid}/roles/${everyone.rid}`, { permissions: 1 | 256 | 128 })).body.role.permissions, 1 | 256 | 128 | require('../src/perms').MEMBER_DEFAULT); // (bits from before §6.5: the channel ones it does not name stay)
   await alice.a.patch(`/api/v1/servers/${sid}/roles/${everyone.rid}`, { permissions: 1 | 256 });
 
   // a private channel only Mods can see

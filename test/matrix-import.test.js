@@ -159,7 +159,7 @@ test('the import makes the community, and bridges the rooms it can', async () =>
   assert.deepEqual(require('../src/db').all('SELECT name FROM emojis ORDER BY name').map(e => e.name), ['tea_cup', 'wave']);
   // an invite-only room: hidden from @everyone, shown to the roles that came over
   const db = require('../src/db');
-  const perms = db.all('SELECT r.name, cp.allow, cp.deny FROM channel_perms cp JOIN roles r ON r.id = cp.role_id JOIN channels c ON c.id = cp.channel_id WHERE c.cid = ?', ch.staff.cid);
+  const perms = db.all("SELECT r.name, o.allow, o.deny FROM perm_overwrites o JOIN roles r ON r.id = o.target_id AND o.target_type = 'role' JOIN channels c ON c.id = o.channel_id WHERE c.cid = ?", ch.staff.cid);
   assert.deepEqual(perms.map(x => [x.name, x.allow, x.deny]).sort(), [['@everyone', 0, 1024], ['Admin', 1024, 0], ['Moderator', 1024, 0]]);
   // bridged: the bot became the bridge's bot; every text room it is in (or could walk into) is linked, but not the encrypted one
   assert.equal(MX.configured(), true); assert.equal(MX.botId(), BOT);

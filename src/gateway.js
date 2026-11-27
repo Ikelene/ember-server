@@ -175,8 +175,8 @@ async function onFrame(sock, msg) {
         break;
       }
       case 'chat_typing': {
-        const { ch, c } = C().findChannel(msg.channel, me);
-        if (C().getSettings(me).share_typing === false) break;
+        const { ch, c, snap } = C().findChannel(msg.channel, me);
+        if (C().getSettings(me).share_typing === false || !snap.canPost(ch, me.id)) break; // (only someone who may send there types there)
         const t = Date.now();
         if (t - (st.typingAt || 0) < 1500 && msg.typing !== false) break;
         st.typingAt = t;
@@ -188,6 +188,7 @@ async function onFrame(sock, msg) {
         if (!st.scopes.includes('voice')) return reply({ type: 'voice_sound_failed', reason: 'insufficient_scope' });
         const room = V().roomOf(sock), ch = room && V().voiceChannelOf(room);
         if (!ch) return reply({ type: 'voice_sound_failed', reason: 'not_in_voice' });
+        if (!C().snapById(ch.community_id).chCan(ch, me.id, P.USE_SOUNDBOARD)) return reply({ type: 'voice_sound_failed', reason: 'no_soundboard_permission' });
         const sb = require('./soundboard'), r = msg.sound && typeof msg.sound === 'object' ? sb.external(me, ch.community_id, msg.sound) : sb.playable(me, msg.sound, ch.community_id);
         if (r.error) return reply({ type: 'voice_sound_failed', reason: r.error });
         for (const s of V().socketsIn(room)) send(s, { type: 'voice_sound', by: me.username, channel: ch.cid, sound: r.sound });

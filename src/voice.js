@@ -99,7 +99,7 @@ function voiceDenied(me, room) {
   if (!ch) return 'not_allowed';
   const snap = C.snapById(ch.community_id);
   if (!snap.isMember(me.id)) return 'not_a_member';
-  if (!snap.canView(ch, me.id) || !(snap.chPerms(ch, me.id) & P.SEND)) return 'not_allowed';
+  if (!snap.chCan(ch, me.id, P.CONNECT)) return 'not_allowed'; // (Connect in this channel, overwrites included: PROTOCOL §6.5)
   if (require('./moderation').timeoutUntil(snap.c, me.id)) return 'timed_out';
   const limit = Number(C.cfgOf(ch).user_limit) || 0;
   const here = voiceIn.get(room);
@@ -222,6 +222,11 @@ async function handle(sock, me, msg, reply) {
       const tracks = msg.tracks.slice(0, 4).map(t => ({ location: 'local', mid: clean(t?.mid, 32), trackName: clean(t?.trackName, 40) }))
         .filter(t => t.mid && /^(audio|camera|screen|screen_audio)$/.test(t.trackName) && !names.has(t.trackName) && names.add(t.trackName));
       if (!tracks.length) throw err('no_tracks', 400);
+      // what this member may send in this channel: Speak (microphone), Video (camera), Stream (screen and its sound)
+      { const ch = voiceChannelOf(p.room), snap = ch && C.snapById(ch.community_id);
+        const need = { audio: P.SPEAK, camera: P.VIDEO, screen: P.STREAM, screen_audio: P.STREAM };
+        const no = snap && me.id ? tracks.filter(t => !snap.chCan(ch, me.id, need[t.trackName])).map(t => t.trackName) : []; // (a bridged voice link has no account here: its own platform decided)
+        if (no.length) throw err('no_voice_permission', 403, { tracks: no }); }
       const out = await backendOf(p).publish(p.publish, msg.sessionDescription, tracks);
       // a 200 can still hold an error for one allocation: only advertise tracks Cloudflare accepted
       const accepted = allocated(tracks, out.tracks);

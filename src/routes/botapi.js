@@ -92,7 +92,7 @@ function register(app) {
 
   get('/guilds/:gid', (req, bot) => { const { c, snap } = guild(bot, req.params.gid); return B.guildObj(c, snap, false, bot); });
   get('/guilds/:gid/roles', (req, bot) => { const { c, snap } = guild(bot, req.params.gid); return snap.roles.map(r => B.roleObj(c, r)); });
-  get('/guilds/:gid/channels', (req, bot) => { const { c, snap } = guild(bot, req.params.gid); return snap.visible(bot.id).map(ch => B.channelObj(ch, c)); });
+  get('/guilds/:gid/channels', (req, bot) => { const { c, snap } = guild(bot, req.params.gid); return snap.visible(bot.id).map(ch => B.channelObj(ch, c, snap)); });
   get('/guilds/:gid/members/:uid', (req, bot) => {
     const { c, snap } = guild(bot, req.params.gid);
     const u = /^\d{1,15}$/.test(req.params.uid) && auth().userById(Number(req.params.uid));
@@ -133,7 +133,7 @@ function register(app) {
   put('/guilds/:gid/members/:uid/roles/:rid', setRole(true));
   del('/guilds/:gid/members/:uid/roles/:rid', setRole(false));
 
-  get('/channels/:cid', (req, bot) => { const x = channel(bot, req.params.cid); return B.channelObj(x.ch, x.c); });
+  get('/channels/:cid', (req, bot) => { const x = channel(bot, req.params.cid); return B.channelObj(x.ch, x.c, x.snap); });
   post('/channels/:cid/typing', (req, bot) => {
     const { ch, c } = channel(bot, req.params.cid);
     require('../gateway').emit(c.id, { type: 'chat_typing', server: c.sid, channel: ch.cid, username: bot.username, user_id: bot.principal, typing: true });

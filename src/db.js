@@ -408,6 +408,39 @@ const MIGRATIONS = [
     if (!has('users', 'payment_linked_at')) d.exec('ALTER TABLE users ADD COLUMN payment_linked_at INTEGER');
     if (!has('tier_payments', 'payer_nookara_id')) d.exec('ALTER TABLE tier_payments ADD COLUMN payer_nookara_id TEXT');
   },
+  // v36: full channel permission overwrites (perms.js, PROTOCOL §6.5): for roles and single members, on a channel or on a
+  // category (channels with perms_synced = 1 use their category's), with every channel permission. The old per-role see / send /
+  // attach settings (channel_perms) move over as role overwrites of their channel, which stops following its category. Every
+  // @everyone gets the new member permissions (reactions, link previews, history, outside emojis, voice) so nothing changes for
+  // anyone; roles with Manage messages get Pin messages; on voice channels an old send allow / deny also covers the voice ones
+  d => {
+    d.exec(`CREATE TABLE IF NOT EXISTS perm_overwrites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+      channel_id INTEGER REFERENCES channels(id) ON DELETE CASCADE, category TEXT,
+      target_type TEXT NOT NULL, target_id INTEGER NOT NULL, allow INTEGER NOT NULL DEFAULT 0, deny INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS perm_overwrites_channel ON perm_overwrites(channel_id, target_type, target_id) WHERE channel_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS perm_overwrites_category ON perm_overwrites(community_id, category, target_type, target_id) WHERE category IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS perm_overwrites_community ON perm_overwrites(community_id);`);
+    if (!d.prepare('PRAGMA table_info(channels)').all().some(x => x.name === 'perms_synced')) d.exec('ALTER TABLE channels ADD COLUMN perms_synced INTEGER NOT NULL DEFAULT 1');
+    if (!d.prepare('PRAGMA table_info(messages)').all().some(x => x.name === 'suppress_embeds')) d.exec('ALTER TABLE messages ADD COLUMN suppress_embeds INTEGER'); // (its author may not embed links there)
+    const SEND = 1, VOICE = (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24) | (1 << 25), MANAGE_MESSAGES = 64, PIN = 1 << 20;
+    const MEMBER = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | VOICE;
+    if (d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'channel_perms'").get()) {
+      const ins = d.prepare("INSERT OR REPLACE INTO perm_overwrites (community_id, channel_id, target_type, target_id, allow, deny) VALUES (?, ?, 'role', ?, ?, ?)");
+      for (const o of d.prepare('SELECT cp.*, ch.community_id, ch.type FROM channel_perms cp JOIN channels ch ON ch.id = cp.channel_id').all()) {
+        const voice = o.type === 'voice', allow = Number(o.allow) | (voice && (o.allow & SEND) ? VOICE : 0), deny = Number(o.deny) | (voice && (o.deny & SEND) ? VOICE : 0);
+        ins.run(o.community_id, o.channel_id, o.role_id, allow, deny);
+        d.prepare('UPDATE channels SET perms_synced = 0 WHERE id = ?').run(o.channel_id);
+      }
+      d.exec('DROP TABLE channel_perms');
+    }
+    d.prepare('UPDATE roles SET permissions = permissions | ? WHERE is_default = 1').run(MEMBER & ~VOICE);
+    // (joining voice used to need Send messages: an @everyone without it does not get the voice ones either; other roles with
+    // Send messages give them, as Send did)
+    d.prepare('UPDATE roles SET permissions = permissions | ? WHERE (permissions & ?) <> 0').run(VOICE, SEND);
+    d.prepare('UPDATE roles SET permissions = permissions | ? WHERE (permissions & ?) <> 0').run(PIN, MANAGE_MESSAGES);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

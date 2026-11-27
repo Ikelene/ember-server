@@ -37,11 +37,15 @@ class Snap {
     this.roles = db.all('SELECT * FROM roles WHERE community_id = ? ORDER BY is_default DESC, position, id', c.id);
     this.everyone = this.roles.find(r => r.is_default) || null;
     this.channels = db.all('SELECT * FROM channels WHERE community_id = ? ORDER BY position, id', c.id);
-    this.ow = new Map();
-    for (const o of db.all('SELECT cp.* FROM channel_perms cp JOIN channels ch ON ch.id = cp.channel_id WHERE ch.community_id = ?', c.id)) {
-      if (!this.ow.has(o.channel_id)) this.ow.set(o.channel_id, new Map());
-      this.ow.get(o.channel_id).set(o.role_id, { allow: o.allow, deny: o.deny });
+    // overwrites (PROTOCOL §6.5): per channel and per category, each { roles: Map(roleId -> ow), members: Map(userId -> ow) }
+    this.cow = new Map(); this.kow = new Map();
+    for (const o of db.all('SELECT * FROM perm_overwrites WHERE community_id = ?', c.id)) {
+      const map = o.channel_id != null ? this.cow : this.kow, key = o.channel_id != null ? o.channel_id : o.category;
+      if (!map.has(key)) map.set(key, { roles: new Map(), members: new Map() });
+      map.get(key)[o.target_type === 'member' ? 'members' : 'roles'].set(Number(o.target_id), { allow: Number(o.allow), deny: Number(o.deny) });
     }
+    // what applies to a channel: its own overwrites, or its category's while it follows them (perms_synced)
+    this.ow = { get: id => { const ch = this.channel(id); return ch ? this.owFor(ch)?.roles : undefined; } }; // (role overwrites by channel id, as before)
     this._mr = new Map(); this._mem = new Map(); this._nicks = null; this._profiles = null;
   }
   // a member's profile on this server (server-profile.js), null = they use their global one. Cached like nicknames
@@ -73,7 +77,10 @@ class Snap {
   // nobody owns a DM the way a server is owned: its members only have what its @everyone role gives (social/dms.js decides the rest)
   isOwner(uid) { return this.c.kind !== 'dm' && Number(this.c.owner_id) === Number(uid); }
   perms(uid) { return perms.basePerms({ isMember: this.isMember(uid), isOwner: this.isOwner(uid), roles: this.roles, roleIds: this.roleIds(uid) }); }
-  chPerms(ch, uid) { return perms.channelPerms(this.perms(uid), { overwrites: this.ow.get(ch.id), everyoneId: this.everyone?.id, roleIds: this.roleIds(uid) }); }
+  owFor(ch) { return ch.perms_synced && ch.category ? this.kow.get(ch.category) : this.cow.get(ch.id); }
+  chPerms(ch, uid) { const o = this.owFor(ch); return perms.channelPerms(this.perms(uid), { overwrites: o?.roles, everyoneId: this.everyone?.id, roleIds: this.roleIds(uid), member: o?.members.get(Number(uid)) || null }); }
+  // may this member do `bit` in this channel? (seeing it first; the owner and Administrator always may)
+  chCan(ch, uid, bit) { return this.canView(ch, uid) && (this.chPerms(ch, uid) & bit) === bit; }
   canView(ch, uid) {
     if (!ch || !this.isMember(uid)) return false;
     const g = perms.gameView(ch, this.perms(uid)); // Ember Link console / not-set-up channels
@@ -137,6 +144,7 @@ const canManageClones = (c, uid) => { const s = snapOf(c); return s.isMember(uid
 const roleView = r => ({
   rid: r.rid, name: r.name, color: r.color || null, icon: r.icon_url || null, position: r.position,
   upload_max_mb: r.upload_max_mb ?? null, permissions: Number(r.permissions), hoist: !!r.hoist, mentionable: !!r.mentionable, is_default: !!r.is_default,
+  permission_names: perms.namesOf(Number(r.permissions), perms.ROLE_NAMES),
 });
 const validUploadMax = v => Number.isInteger(v) && v > 0 ? v : null;
 // the most one file may be on this server: its limit (PROTOCOL §19; the homeserver's max_upload_mb unless a tier or an override says otherwise), 500 MB when unlimited
@@ -177,6 +185,7 @@ function publicConfig(ch, snap) {
   if (ch.type === 'game') return require('./game/game').publicChannelConfig(ch); // Ember Link
   return {}; // text
 }
+// the role overwrites that apply (older clients read these), and all of them in the full shape (PROTOCOL §6.5)
 function overwritesOf(snap, ch) {
   return [...(snap.ow.get(ch.id) || new Map())].map(([roleId, o]) => ({ rid: snap.roles.find(r => r.id === roleId)?.rid, allow: o.allow, deny: o.deny })).filter(x => x.rid);
 }
@@ -188,6 +197,7 @@ function channelView(snap, ch) {
     position: ch.position, locked: !!ch.locked, icon: ch.icon || null, last_message_id: String(ch.last_message_id || 0),
     type: ch.type || 'text', config: publicConfig(ch, snap), bridged: bridges[0], bridges,
     private: isPrivate(snap, ch) || undefined, overwrites: overwritesOf(snap, ch),
+    permission_overwrites: require('./overwrites').listOf(snap, snap.owFor(ch)), perms_synced: !!ch.perms_synced,
   };
 }
 function memberView(snap, u) {
@@ -277,7 +287,7 @@ function serverDetail(sid, me) {
     server: serverView(c, snap, me),
     categories: categoriesOf(c),
     roles: snap.roles.map(roleView),
-    voice: require('./voice').stateOf(snap.channels),
+    voice: require('./voice').stateOf(list), // (who is in the voice channels you can see, never the hidden ones)
     channels: list.map(ch => ({
       ...channelView(snap, ch), unread: Number(ch.last_message_id) > (read.get(ch.id) ?? Number(ch.last_message_id)),
       last_read_id: String(read.get(ch.id) ?? ch.last_message_id ?? 0), mentions: pings.get(ch.id) || 0, unread_count: counts.get(ch.id) || 0, can_post: snap.canPost(ch, me.id),
@@ -529,7 +539,8 @@ function leaveServer(sid, me) {
 // otherwise the principals of the members who can (the same canView as everywhere else)
 function channelViewers(cid, me) {
   const { ch, c, snap } = findChannel(cid, me);
-  if (!snap.ow.get(ch.id)?.size && perms.gameView(ch, 0) === null) return { all: true };
+  const o = snap.owFor(ch);
+  if (!o?.roles.size && !o?.members.size && perms.gameView(ch, 0) === null) return { all: true };
   const users = db.all('SELECT u.id, u.principal FROM users u JOIN members m ON m.user_id = u.id WHERE m.community_id = ?', c.id);
   return { all: false, ids: users.filter(u => snap.canView(ch, u.id)).map(u => u.principal) };
 }
@@ -785,19 +796,15 @@ function deleteChannel(cid, me) {
   channelsChanged(c);
   audit(c, me, 'channel_delete', { target: { kind: 'channel', id: ch.cid, name: ch.name }, details: { type: ch.type } });
 }
-// Manage channels: [{ rid, allow, deny }] (see / send / attach)
+// the older route (PUT /api/v1/channels/:cid/perms): [{ rid, allow, deny }] replaces the channel's role overwrites, its member
+// overwrites stay. Any channel permission now (overwrites.js has the full API and the rules)
 function setChannelPerms(cid, me, list) {
   const { ch, c, snap } = findChannel(cid, me);
-  if (!snap.can(me.id, P.MANAGE_CHANNELS)) throw err('not_allowed', 403);
-  const rows = (Array.isArray(list) ? list : []).slice(0, 100).map(x => ({ role: snap.roles.find(r => r.rid === String(x?.rid || '')), allow: (Number(x?.allow) || 0) & CHANNEL_BITS, deny: (Number(x?.deny) || 0) & CHANNEL_BITS }))
-    .filter(x => x.role && (x.allow || x.deny));
-  db.tx(() => {
-    db.run('DELETE FROM channel_perms WHERE channel_id = ?', ch.id);
-    for (const x of rows) db.run('INSERT OR REPLACE INTO channel_perms (channel_id, role_id, allow, deny) VALUES (?, ?, ?, ?)', ch.id, x.role.id, x.allow & ~x.deny, x.deny);
-  });
-  channelsChanged(c);
-  gateway.emit(c.id, { type: 'chat_perms_changed', server: c.sid });
-  audit(c, me, 'channel_perms', { target: { kind: 'channel', id: ch.cid, name: ch.name }, details: { roles: rows.map(x => x.role.name) } });
+  const own = snap.owFor(ch);
+  const keep = [...(own?.members || new Map())].map(([id, o]) => ({ type: 'member', id: auth.userById(id)?.principal, allow: o.allow, deny: o.deny })).filter(x => x.id);
+  const roles = (Array.isArray(list) ? list : []).slice(0, 100).filter(x => snap.roles.some(r => r.rid === String(x?.rid || '')))
+    .map(x => ({ type: 'role', id: String(x.rid), allow: (Number(x?.allow) || 0) & CHANNEL_BITS, deny: (Number(x?.deny) || 0) & CHANNEL_BITS }));
+  require('./overwrites').replaceAll(c.sid, me, { cid: ch.cid }, [...roles, ...keep]);
   const s2 = snapOf(c);
   return channelView(s2, s2.channel(ch.id));
 }
@@ -827,6 +834,7 @@ function setLayout(sid, me, body = {}) {
       }
     }
     for (const ch of db.all('SELECT * FROM channels WHERE community_id = ?', c.id)) if (!cats.includes(ch.category)) db.run('UPDATE channels SET category = ? WHERE id = ?', home(ch.category), ch.id);
+    for (const o of db.all('SELECT DISTINCT category FROM perm_overwrites WHERE community_id = ? AND category IS NOT NULL', c.id)) if (!cats.includes(o.category)) db.run('DELETE FROM perm_overwrites WHERE community_id = ? AND category = ?', c.id, o.category);
   });
   channelsChanged(c);
   audit(c, me, 'channel_layout', { details: { categories: cats } });
@@ -858,7 +866,7 @@ function createRole(sid, me, body = {}) {
   const pos = top === Infinity ? Math.max(0, ...snap.roles.map(r => r.position)) + 1 : Math.max(1, top);
   const row = db.tx(() => {
     db.run('UPDATE roles SET position = position + 1 WHERE community_id = ? AND is_default = 0 AND position >= ?', c.id, pos);
-    return insertRole(c.id, { upload_max_mb: roleUploadMax(body.upload_max_mb), name: clean(body.name, 40) || 'new role', color: roleColor(body.color), position: pos, permissions: perms.grantable(body.permissions, mine), hoist: !!body.hoist, mentionable: !!body.mentionable });
+    return insertRole(c.id, { upload_max_mb: roleUploadMax(body.upload_max_mb), name: clean(body.name, 40) || 'new role', color: roleColor(body.color), position: pos, permissions: perms.grantable(perms.bitsFrom(body.permissions) ?? 0, mine), hoist: !!body.hoist, mentionable: !!body.mentionable });
   });
   rolesChanged(c);
   audit(c, me, 'role_create', { target: { kind: 'role', id: row.rid, name: row.name } });
@@ -877,7 +885,14 @@ function updateRole(sid, me, rid, body = {}) {
     if (body.mentionable !== undefined) set.mentionable = body.mentionable ? 1 : 0;
   }
   if (body.upload_max_mb !== undefined) set.upload_max_mb = roleUploadMax(body.upload_max_mb);
-  if (body.permissions !== undefined) set.permissions = perms.grantable(body.permissions, mine, r.permissions);
+  if (body.permissions !== undefined) {
+    // a client from before the channel permissions (PROTOCOL §6.5) sends a role's bits without them: what it does not know stays
+    // as it was, so an older role editor never takes reactions or voice away (full_permissions: true sends the whole field)
+    const NEW = perms.MEMBER_DEFAULT | P.PIN_MESSAGES, want = perms.bitsFrom(body.permissions);
+    if (want === null) throw err('invalid_permissions');
+    const req = body.full_permissions === true || (want & NEW) ? want : want | (Number(r.permissions) & NEW);
+    set.permissions = perms.grantable(req, mine, r.permissions);
+  }
   if (Object.keys(set).length) {
     db.run(`UPDATE roles SET ${Object.keys(set).map(k => k + ' = ?').join(', ')} WHERE id = ?`, ...Object.values(set), r.id);
     rolesChanged(c);
@@ -892,6 +907,7 @@ function deleteRole(sid, me, rid) {
   if (r.is_default) throw err('not_allowed', 403);
   roleAccess(snap, me, r);
   db.run('DELETE FROM roles WHERE id = ?', r.id);
+  db.run("DELETE FROM perm_overwrites WHERE community_id = ? AND target_type = 'role' AND target_id = ?", c.id, r.id); // (its overwrites go with it)
   rolesChanged(c);
   audit(c, me, 'role_delete', { target: { kind: 'role', id: r.rid, name: r.name } });
   gateway.emit(c.id, { type: 'chat_members_stale', server: c.sid });
@@ -1065,7 +1081,7 @@ function linkInfo(sid, cid, me) {
   if (!c.listed) throw err('not_found', 404);
   const base = perms.basePerms({ isMember: true, isOwner: false, roles: snap.roles, roleIds: new Set() });
   const g = perms.gameView(ch, base);
-  const open = g !== null ? g : perms.canView(base, perms.channelPerms(base, { overwrites: snap.ow.get(ch.id), everyoneId: snap.everyone?.id, roleIds: new Set() }), true);
+  const open = g !== null ? g : perms.canView(base, perms.channelPerms(base, { overwrites: snap.owFor(ch)?.roles, everyoneId: snap.everyone?.id, roleIds: new Set() }), true);
   return { server, channel: open ? chView : null, joined: false };
 }
 

@@ -12,8 +12,8 @@ const base = (ids = [], extra = {}) => basePerms({ roles, roleIds: new Set(ids),
 
 test('owner has every permission', () => assert.equal(base([], { isOwner: true }), ALL_PERMS));
 test('non-members have nothing', () => assert.equal(base([], { isMember: false }), 0));
-test('@everyone applies to everybody', () => assert.equal(base([]), P.SEND | P.ATTACH | P.CHANGE_NICKNAME));
-test('roles are OR-ed with @everyone', () => assert.equal(base([2, 3]), P.SEND | P.ATTACH | P.CHANGE_NICKNAME | P.KICK | P.MANAGE_MESSAGES | P.MENTION_EVERYONE));
+test('@everyone applies to everybody', () => assert.equal(base([]), EVERYONE_DEFAULT));
+test('roles are OR-ed with @everyone', () => assert.equal(base([2, 3]), EVERYONE_DEFAULT | P.KICK | P.MANAGE_MESSAGES | P.MENTION_EVERYONE));
 test('ADMIN grants everything', () => { assert.equal(base([4]), ALL_PERMS); assert.equal(channelPerms(base([4]), {}) & P.VIEW, P.VIEW); });
 
 const ow = entries => new Map(entries);

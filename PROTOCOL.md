@@ -901,7 +901,7 @@ Core subset for v1:
 - **Servers:** `GET/POST /servers`, `GET/PATCH/DELETE /servers/:sid`, `PUT /servers/:sid/layout`, `POST /servers/:sid/join`, `POST /servers/:sid/leave`, `GET /invite/:code` (public), `POST /join/:code`, `POST/DELETE /servers/:sid/icon|banner`
 - **Members:** `GET /servers/:sid/members` (each member also has `joined_at`, ms), `DELETE /servers/:sid/members/:uid` (`?ban=1`), `DELETE /servers/:sid/bans/:uid`, `GET /servers/:sid/bans`
 - **Roles:** CRUD on `/servers/:sid/roles[/:rid]`, `PUT /servers/:sid/roles/order`, `PUT/DELETE /servers/:sid/members/:uid/roles/:rid`
-- **Channels:** `POST /servers/:sid/channels`, `PATCH/DELETE /channels/:cid`, `PUT /channels/:cid/perms`
+- **Channels:** `POST /servers/:sid/channels`, `PATCH/DELETE /channels/:cid`, `PUT /channels/:cid/perms` (older), and the overwrites of §6.5
 - **Messages:** `GET/POST /channels/:cid/messages`, `POST /channels/:cid/read`, `PATCH/DELETE /messages/:id`, `GET /messages/:id/reactions`, `PUT/DELETE /messages/:id/reactions/:emoji`, `PUT/DELETE /messages/:id/pin`, `GET /channels/:cid/pins`, `GET /channels/:cid/search`, `GET /channels/:cid/viewers` (`{ all: true }` when nothing limits who sees it, else `{ all: false, ids: [principals] }`; Ember shows only those in the member list)
 - **Identities and settings:**
   - `GET /identities?ids=` takes principal ids and returns `{ users: [user…] }`.
@@ -1017,6 +1017,14 @@ Permission bits are the same as Nookara's `chat.js:42-49`:
 | | | UNMARKED_ALIASES (instances only) | 4096 |
 | | | CHANGE_NICKNAME (instances only; @everyone has it by default) | 8192 |
 | | | MANAGE_NICKNAMES (instances only) | 16384 |
+| | | CUSTOMIZE_PROFILE (instances only) | 32768 |
+| ADD_REACTIONS | 65536 (1 << 16) | CONNECT | 2097152 (1 << 21) |
+| EMBED_LINKS | 131072 (1 << 17) | SPEAK | 4194304 (1 << 22) |
+| READ_HISTORY | 262144 (1 << 18) | VIDEO | 8388608 (1 << 23) |
+| USE_EXTERNAL_EMOJIS | 524288 (1 << 19) | STREAM | 16777216 (1 << 24) |
+| PIN_MESSAGES | 1048576 (1 << 20) | USE_SOUNDBOARD | 33554432 (1 << 25) |
+
+The bits from 1 << 16 up are the channel permissions of §6.5 (instances only). @everyone has all of them by default except Pin messages. Roles carry `permission_names` next to `permissions` (the names in §6.5), and a role's `permissions` may be sent as a list of those names. A role editor from before them sends a number without any of them; those bits then stay as they were, so an older client never takes reactions or voice away. `full_permissions: true` sends the whole field.
 
 The permission algorithm is the same as `permsOf` / `channelPermsOf` / `canView` / `canPost`. The community owner has all permissions. **Instance admins have no implicit power inside communities** unless they're a member with roles. The one exception is that instance admins may delete the community (returning the instance to setup).
 
@@ -1059,6 +1067,76 @@ Audit log: `GET /servers/:sid/audit?category=&action=&before=&limit=` (Manage se
 Dashboard: `GET /servers/:sid/dashboard` (Manage server) -> `{ members, bots, banned, messages, open_reports, timeouts, disk, storage: [{ key, label, bytes }], health: { runtime, memory, heap, uptime_s, version, commit_short }, channels: { with_messages, empty, by_messages, by_storage } }`.
 
 ---
+
+### 6.5 Channel permission overwrites
+
+Like Discord's. An **overwrite** is `{ type: "role" | "member", id, allow, deny }` on a channel or on a category. `id` is a role's `rid` (`"everyone"` also works for @everyone) or a member's principal. A member can be an account of another homeserver, such as `l:5@b.example`. `allow` and `deny` hold channel permissions, given as a number or a list of names:
+
+| name | bit | what it allows in the channel |
+|---|---|---|
+| `view_channel` | VIEW 1024 | see it: in channel lists, counts, search, voice state, link previews; its live events |
+| `send_messages` | SEND 1 | post messages; type (typing indicators) |
+| `attach_files` | ATTACH 256 | upload files there |
+| `embed_links` | EMBED_LINKS | link previews of your messages (without it, the message carries `suppress_embeds: true` and keeps no `embeds`; clients show no previews for it) |
+| `add_reactions` | ADD_REACTIONS | add reactions (removing your own always works) |
+| `mention_everyone` | MENTION_EVERYONE 128 | `@everyone` / `@here` and roles that are not mentionable |
+| `manage_messages` | MANAGE_MESSAGES 64 | delete others' messages; pin |
+| `pin_messages` | PIN_MESSAGES | pin and unpin |
+| `read_message_history` | READ_HISTORY | history, pins and search (without it: `messages: []`, `read_history: false`; live messages still arrive) |
+| `use_external_emojis` | USE_EXTERNAL_EMOJIS | other servers' custom emojis in messages (`403 no_external_emojis { emojis }` otherwise) |
+| `connect` | CONNECT | join the voice channel |
+| `speak` | SPEAK | publish the microphone (`audio` track) |
+| `video` | VIDEO | publish the camera (`camera`) |
+| `stream` | STREAM | share the screen (`screen`, `screen_audio`); `403 no_voice_permission { tracks }` for what is not allowed |
+| `use_soundboard` | USE_SOUNDBOARD | play soundboard sounds there (`voice_sound_failed { reason: "no_soundboard_permission" }`) |
+| `manage_channel` | MANAGE_CHANNELS 2 | (channel-level Manage channels) |
+| `manage_permissions` | MANAGE_ROLES 8 | edit this channel's overwrites |
+
+Server-wide bits (Administrator, Manage server, kick, ban, nicknames, ...) are not channel permissions: `400 not_a_channel_permission { bits, names }`. `GET /api/v1/permissions` (no session) -> `{ channel: { name: bit }, role: { name: bit }, channel_bits, all }`.
+
+**Resolution** (per member and channel). This is Discord's order:
+1. Start from the member's server permissions: @everyone OR their roles.
+2. Apply the channel's @everyone overwrite: its deny, then its allow.
+3. Apply the overwrites of every role the member holds: the denies OR'd and taken away, then the allows OR'd and given. A role allow wins over another role's deny.
+4. Apply the member's own overwrite: deny, then allow.
+
+The owner and Administrator skip all of it. Seeing is required for everything else. Someone with server-level Manage channels always sees every channel, so they can fix it. The overwrites that apply are the channel's own, or its category's while it follows them (`perms_synced: true`, the default for a new channel).
+
+**API** (`:type` is `role` | `member`, `:id` is a rid or a principal, URL-encoded):
+- `GET /api/v1/servers/:sid/channels/:cid/overwrites` -> `{ overwrites (those that apply), own (the channel's own), perms_synced, category }`. Each overwrite is `{ type, id, name, everyone? (roles), display_name? (members), allow, deny, allow_names, deny_names }`.
+- `PUT …/overwrites { overwrites: [ { type, id, allow, deny } ] }` replaces them all (at most 200).
+- `PUT …/overwrites/:type/:id { allow, deny }` sets one, and `DELETE …/overwrites/:type/:id` removes it. An overwrite with nothing in it is removed too.
+- `POST …/overwrites/sync` makes the channel follow its category again; its own overwrites go. Editing a channel that follows its category first gives it its own copy of the category's overwrites, and it stops following.
+- `/api/v1/servers/:sid/categories/:name/overwrites[/:type/:id]` works the same for a category (no sync). A category that is removed from the layout takes its overwrites with it.
+- `GET /api/v1/servers/:sid/channels/:cid/permissions/:principal` -> `{ member, channel, view, post, owner, administrator, allow, names, server, server_names }`, what the member may do there. Allowed for the member themselves and for whoever manages the channel's permissions.
+- The older `PUT /api/v1/channels/:cid/perms { overwrites: [ { rid, allow, deny } ] }` still works. It replaces the role overwrites and keeps the member ones.
+- Channel views carry `permission_overwrites` (the full list that applies) and `perms_synced`, next to the older `overwrites: [ { rid, allow, deny } ]` (role ones). Changes send `chat_channels_update` and `chat_perms_changed { server, channel | category }`, and are recorded in the audit log: `channel_overwrite_update`, `channel_overwrite_delete`, `channel_overwrites_replace`, `channel_overwrites_sync`.
+
+**Who may edit.** The owner, Administrator, or someone with Manage roles (`manage_permissions`) or Manage channels (`manage_channel`) in that channel. A channel-level allow is enough.
+- You cannot change a bit you do not have there yourself: `403 cannot_grant { names }`.
+- You cannot edit the overwrite of a role at or above your highest role (`403 role_too_high`), or of a member above you (`403 member_too_high`).
+- The owner has no overwrites (`400 owner_not_affected`).
+- A change that would leave you unable to see the channel or edit its permissions is refused: `400 would_lock_you_out`.
+- Other errors: `invalid_overwrite_type`, `invalid_permissions`, `role_not_found`, `member_not_found`, `category_not_found`, `no_category`.
+
+**Hidden channels never leak.** A channel someone cannot see is not in:
+- their channel lists, unread and mention counts, or `voice` state;
+- search, pins or history (`404 channel_not_found`);
+- message links (`link-info` answers `channel: null`);
+- starboard entries and their events;
+- gateway events, including typing and voice state;
+- notifications;
+- what bots get (bot channel objects carry Discord-shaped `permission_overwrites`, and the Discord permission bits include the new ones);
+- effective-permission answers about it (`404` for someone who cannot see it).
+
+**Exports and the v36 migration.**
+- Exports carry `perm_version: 2`, each channel's `overwrites` (members by principal) and `perms_synced`, and `category_overwrites: { name: [...] }`. On import, member overwrites come back for people who are members there.
+- An export without `perm_version`, like a database at schema v35, is upgraded:
+  - The old per-role see / send / attach settings become role overwrites of their channel, which then stops following its category.
+  - On voice channels a send allow or deny also covers the voice bits.
+  - @everyone gets the member channel permissions; it gets the voice ones only if it had Send, which joining voice used to need.
+  - Roles with Send get the voice bits, and roles with Manage messages get Pin messages.
+- Not here (Ember has no such features yet): threads, and voice moderation (server mute, deafen, move members).
 
 ### 6.7 Server profiles
 

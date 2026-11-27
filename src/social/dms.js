@@ -121,7 +121,7 @@ async function create(me, body = {}) {
     const r = db.run("INSERT INTO communities (sid, slug, name, description, owner_id, invite_code, join_policy, listed, created_at, categories, kind, allow_uploads) VALUES (?, NULL, ?, '', ?, ?, ?, 0, ?, '[]', 'dm', 1)",
       sid, name, me.id, 'dm-' + randId(''), group ? 'group' : 'dm', t);
     const id = r.lastInsertRowid;
-    C().insertRole(id, { name: '@everyone', permissions: P.SEND | P.ATTACH, is_default: 1, position: 0 });
+    C().insertRole(id, { name: '@everyone', permissions: P.SEND | P.ATTACH | require('../perms').MEMBER_DEFAULT, is_default: 1, position: 0 }); // (reactions, history, voice: PROTOCOL §6.5)
     db.run("INSERT INTO channels (cid, community_id, name, type, config, created_at) VALUES (?, ?, 'dm', 'text', '{}', ?)", cid, id, t);
     for (const u of [me, ...users]) db.run('INSERT INTO members (community_id, user_id, joined_at) VALUES (?, ?, ?)', id, u.id, t);
     return db.get('SELECT * FROM communities WHERE id = ?', id);

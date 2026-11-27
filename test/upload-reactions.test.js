@@ -36,7 +36,7 @@ for (const mode of ['local', 'nookara']) test(`${mode}: ordinary member uploads,
   const S = `/api/v1/servers/${sid}`;
   assert.equal((await member.a.post(S + '/join')).status, 200);
   const detail = (await member.a.get(S)).body, everyone = detail.roles.find(r => r.is_default);
-  assert.equal(everyone.permissions, 257 | 8192);
+  assert.equal(everyone.permissions, require('../src/perms').EVERYONE_DEFAULT);
   assert.ok(detail.roles.every(r => r.upload_max_mb === null));
   assert.equal(detail.server.my_upload_max_mb, 25); // no config override, no extra role
   const uploadPath = `/api/v1/media/upload?sid=${sid}&cid=${cid}`;

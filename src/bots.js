@@ -164,19 +164,35 @@ const uidOf = (() => { return principal => db.get('SELECT id FROM users WHERE pr
 // a message's alias for the bot API: principals become numeric ids like every other id there (member_id = the matched member)
 const botAlias = a => (a ? { name: a.name, avatar_url: a.avatar_url || null, unmarked: !!a.unmarked, ...(a.member_id && uidOf(a.member_id) ? { member_id: String(uidOf(a.member_id)) } : {}) } : null);
 const userObj = u => ({ id: String(u.id), username: u.username, global_name: u.display_name || u.username, discriminator: '0', avatar: u.pfp ? BOT_API.avatar : null, avatar_url: u.pfp || null, bot: u.kind === 'bot', ...(db.get('SELECT 1 FROM bots WHERE user_id = ? AND gallery_verified = 1', Number(u.id)) ? { verified: true } : {}) });
+// Ember permission bits -> Discord's. Channel permissions map to Discord's own (Video and Stream both to Discord's Stream);
+// a role or member that had the old always-on four (view, history, embeds, reactions) has them through @everyone now
+const DISCORD_BITS = [[P.SEND, 2048n], [P.MANAGE_CHANNELS, 16n], [P.MANAGE_SERVER, 32n], [P.MANAGE_ROLES, 1n << 28n], [P.KICK, 2n], [P.BAN, 4n],
+  [P.MANAGE_MESSAGES, 8192n], [P.MENTION_EVERYONE, 131072n], [P.ATTACH, 32768n], [P.CHANGE_NICKNAME, 1n << 26n], [P.MANAGE_NICKNAMES, 1n << 27n],
+  [P.VIEW, 1024n], [P.ADD_REACTIONS, 64n], [P.EMBED_LINKS, 16384n], [P.READ_HISTORY, 65536n], [P.USE_EXTERNAL_EMOJIS, 262144n | (1n << 37n)],
+  [P.PIN_MESSAGES, 1n << 51n], [P.CONNECT, 1n << 20n], [P.SPEAK, 1n << 21n], [P.VIDEO, 512n], [P.STREAM, 512n], [P.USE_SOUNDBOARD, 1n << 42n]];
+function bitsToDiscord(p) {
+  let d = 0n;
+  for (const [b, x] of DISCORD_BITS) if (p & b) d |= x;
+  return d;
+}
 function permsToDiscord(p) {
-  let d = 1024n | 65536n | 16384n | 64n; // view, read history, embed links, add reactions
+  let d = 1024n | bitsToDiscord(p); // (view: every member sees the server's channels unless an overwrite hides one)
   if (p & P.ADMIN) d |= 8n;
-  const map = [[P.SEND, 2048n], [P.MANAGE_CHANNELS, 16n], [P.MANAGE_SERVER, 32n], [P.MANAGE_ROLES, 1n << 28n], [P.KICK, 2n], [P.BAN, 4n], [P.MANAGE_MESSAGES, 8192n], [P.MENTION_EVERYONE, 131072n], [P.ATTACH, 32768n], [P.CHANGE_NICKNAME, 1n << 26n], [P.MANAGE_NICKNAMES, 1n << 27n]];
-  for (const [b, x] of map) if (p & b) d |= x;
   return String(d);
 }
+// a channel's overwrites as Discord's permission_overwrites (type 0 = role, 1 = member)
+const discordOverwrites = (snap, c, ch) => {
+  const o = snap.owFor(ch);
+  if (!o) return [];
+  return [...[...o.roles].map(([id, x]) => { const r = snap.roles.find(k => k.id === id); return r ? { id: roleId(c, r), type: 0, allow: String(bitsToDiscord(x.allow)), deny: String(bitsToDiscord(x.deny)) } : null; }),
+    ...[...o.members].map(([id, x]) => ({ id: String(id), type: 1, allow: String(bitsToDiscord(x.allow)), deny: String(bitsToDiscord(x.deny)) }))].filter(Boolean);
+};
 const roleId = (c, r) => (r.is_default ? String(c.id) : String(ROLE_BASE + r.id));
 const roleObj = (c, r) => ({ id: roleId(c, r), name: r.name, color: r.color ? parseInt(r.color.slice(1), 16) : 0, position: r.position, permissions: permsToDiscord(Number(r.permissions)), hoist: !!r.hoist, mentionable: !!r.mentionable, managed: false });
-const channelObj = (ch, c) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: [], [BOT_API.channelType]: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
+const channelObj = (ch, c, snap = null) => ({ id: String(ch.id), type: ch.type === 'voice' ? 2 : 0, guild_id: String(c.id), name: ch.name, topic: ch.topic || null, position: ch.position, parent_id: null, nsfw: false, permission_overwrites: snap ? discordOverwrites(snap, c, ch) : [], [BOT_API.channelType]: ch.type || 'text', last_message_id: ch.last_message_id ? String(ch.last_message_id) : null });
 const guildObj = (c, snap, full, bot) => {
   const out = { id: String(c.id), name: c.name, icon: c.icon_url ? BOT_API.avatar : null, icon_url: c.icon_url || null, owner_id: String(c.owner_id), description: c.description || null, member_count: C.memberCount(c.id), roles: snap.roles.map(r => roleObj(c, r)) };
-  if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c)); out.voice_states = botVoice.voiceStates(c, snap, uidOf); }
+  if (full) { out.channels = snap.channels.filter(ch => !bot || snap.canView(ch, bot.id)).map(ch => channelObj(ch, c, snap)); out.voice_states = botVoice.voiceStates(c, snap, uidOf); }
   return out;
 };
 const mimeOf = a => (a.type === 'gif' ? 'image/gif' : a.type === 'image' ? (/\.webp(\?|$)/i.test(a.url) ? 'image/webp' : /\.jpe?g(\?|$)/i.test(a.url) ? 'image/jpeg' : 'image/png') : a.type === 'video' ? 'video/mp4' : a.type === 'audio' ? 'audio/mpeg' : 'application/octet-stream');
