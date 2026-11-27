@@ -432,3 +432,28 @@ test('holds: only for homeservers this one has nothing to do with; they escalate
     limits.reset();
   }
 });
+
+test('throttled: every homeserver refused anything in the last ten minutes, remote sign-ins included, before and during a hold', async () => {
+  fresh();
+  config.update({ federation: { rate_limits: { exchanges_per_minute: 2, hold_after: 3, new_divisor: 1 } } });
+  try {
+    const view = async () => (await bo.a.get('/api/v2/homeserver/federation')).body;
+    const mine = v => v.throttled.find(x => x.domain === 'thr.example');
+    for (let i = 0; i < 2; i++) assert.equal((await signIn('thr.example', { id: 'l:' + (i + 1), name: 'u' + i })).status, 200);
+    let r = await signIn('thr.example', { id: 'l:3', name: 'u3' });
+    assert.deepEqual([r.status, r.body.error], [429, 'homeserver_rate_limited']);
+    let t = mine(await view());
+    assert.deepEqual([t.refused, t.held, t.known], [{ exchanges: 1 }, false, false], 'listed from the first refusal');
+    await signIn('thr.example', { id: 'l:4', name: 'u4' });
+    r = await signIn('thr.example', { id: 'l:5', name: 'u5' }); // the third: a hold
+    assert.ok(r.body.retry_after > 60);
+    await signIn('thr.example', { id: 'l:6', name: 'u6' }); // refused while held: still counted
+    const v = await view();
+    t = mine(v);
+    assert.deepEqual([t.refused, t.held], [{ exchanges: 4 }, true]);
+    assert.deepEqual(v.held.map(h => h.domain), ['thr.example']);
+  } finally {
+    config.update({ federation: { rate_limits: { exchanges_per_minute: 30, hold_after: 5, new_divisor: 4 } } });
+    limits.reset();
+  }
+});

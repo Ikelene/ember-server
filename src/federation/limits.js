@@ -23,7 +23,8 @@ const LEVEL_RESET = 24 * 3600 * 1000;
 const KNOWN_TTL = 60 * 1000;
 const MEMBER_DAYS = 1; // (a member for a day at least: joining an open server just now does not make a homeserver known)
 const hits = new Map();     // "domain|action" -> [timestamps]
-const overruns = new Map(); // domain -> [{ t, action }] refused actions
+const overruns = new Map(); // domain -> [{ t, action }] refused actions (what a hold is decided on; cleared when one starts)
+const refusals = new Map(); // domain -> [{ t, action }] every refusal of the last ten minutes, holds included (what admins see)
 const holds = new Map();    // domain -> { until, since, minutes, level, refused: { action: n } }
 const levels = new Map();   // domain -> { level, at } (the last hold, for escalation)
 const knownCache = new Map(); // domain -> { known, at }
@@ -53,13 +54,20 @@ function holdMinutes(domain, t) {
   return { level, minutes: Math.min(STEPS[level] ?? Infinity, rules().hold_minutes) };
 }
 // count one action of `domain`; throws 429 homeserver_rate_limited { retry_after (seconds) } when it is over its limit or on hold
+function noteRefusal(domain, action, t) {
+  const list = (refusals.get(domain) || []).filter(x => t - x.t < OVERRUN_WINDOW);
+  list.push({ t, action });
+  if (list.length > 10000) list.splice(0, list.length - 10000);
+  refusals.set(domain, list);
+}
 function hit(domain, action, t = Date.now()) {
   const h = holds.get(domain);
-  if (h) { if (h.until > t) throw refuse(h.until - t); holds.delete(domain); }
+  if (h) { if (h.until > t) { noteRefusal(domain, action, t); throw refuse(h.until - t); } holds.delete(domain); }
   const [, ms] = WINDOWS[action], key = `${domain}|${action}`;
   const list = (hits.get(key) || []).filter(x => t - x < ms);
   if (list.length < limitFor(domain, action)) { list.push(t); hits.set(key, list); return; }
   hits.set(key, list);
+  noteRefusal(domain, action, t);
   const r = rules(), over = (overruns.get(domain) || []).filter(x => t - x.t < OVERRUN_WINDOW);
   over.push({ t, action }); overruns.set(domain, over);
   if (over.length >= r.hold_after && !known(domain, t)) {
@@ -75,20 +83,21 @@ function hit(domain, action, t = Date.now()) {
 }
 // for admins: every hold that is on, with what was refused
 const held = (t = Date.now()) => [...holds].filter(([, h]) => h.until > t).map(([domain, h]) => ({ domain, until: h.until, since: h.since, minutes: h.minutes, level: h.level, refused: h.refused }));
-// for admins: homeservers refused something in the last ten minutes (not held), with how often
+// for admins: every homeserver refused anything in the last ten minutes (over a limit, or while on hold), with how often
 function throttled(t = Date.now()) {
   const out = [];
-  for (const [domain, list] of overruns) {
+  for (const [domain, list] of refusals) {
     const recent = list.filter(x => t - x.t < OVERRUN_WINDOW);
-    if (!recent.length) continue;
+    if (!recent.length) { refusals.delete(domain); continue; }
     const refused = {};
     for (const o of recent) refused[o.action] = (refused[o.action] || 0) + 1;
-    out.push({ domain, refused, known: known(domain, t), last: recent[recent.length - 1].t });
+    const h = holds.get(domain);
+    out.push({ domain, refused, known: known(domain, t), held: !!(h && h.until > t), last: recent[recent.length - 1].t });
   }
   return out;
 }
 const release = domain => { const was = holds.delete(domain); overruns.delete(domain); levels.delete(domain); return was; };
-const reset = () => { hits.clear(); overruns.clear(); holds.clear(); levels.clear(); knownCache.clear(); };
+const reset = () => { hits.clear(); overruns.clear(); refusals.clear(); holds.clear(); levels.clear(); knownCache.clear(); };
 setInterval(() => { const t = Date.now(); for (const [k, v] of hits) if (!v.length || t - v[v.length - 1] > 3600 * 1000) hits.delete(k); }, 600 * 1000).unref();
 
 module.exports = { hit, held, throttled, release, reset, limitFor, known, _test: { forgetKnown: () => knownCache.clear() } };
