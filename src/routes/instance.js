@@ -41,7 +41,7 @@ function discovery() {
     homeserver: { domain: cfg.domain, name: cfg.name, description: cfg.description, icon_url: cfg.icon_url },
     // client-neutral invite links: <url_base><slug>/<code>; clients: [{ name, url, icon_url? }], url templates with {address} {slug} {domain} {code}
     invites: { url_base: cfg.invites.url_base, clients: cfg.invites.clients },
-    creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account }, // who may make a server here (admins / allowlist / request / anyone)
+    creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account, ...(cfg.creation.mode === 'request' ? { request_url: require('../server-requests').requestUrl() } : {}) }, // who may make a server here (admins / allowlist / request / anyone); request: where to ask
     communities_count: C.communityCount(),
     communities: C.listedCommunities().map(C.discoveryView),
     community: C.discoveryCommunity(),

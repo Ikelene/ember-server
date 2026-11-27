@@ -104,7 +104,37 @@ test('creation rules: admins by default, then anyone / allowlist / request, and 
   await creation({ mode: 'request' });
   r = await carol.a.post('/api/v1/servers', { name: 'Please' });
   assert.equal(r.status, 403); assert.equal(r.body.error, 'creation_requires_approval');
+  const RQ = '/api/v2/server-requests', AQ = '/api/v2/homeserver/server-requests';
+  assert.equal(r.body.request_url, (await api(base).get('/.well-known/ember')).body.creation.request_url);
+  assert.match(r.body.request_url, /\/api\/v2\/server-requests$/);
   await alice.a.del(S((await make(alice, { name: 'Admins need no approval' })).sid));
+  // the queue: carol asks, alice (an admin) approves; carol's server is made then, hers
+  assert.equal((await carol.a.post(RQ, {})).body.error, 'name_required');
+  assert.equal((await carol.a.post(RQ, { name: 'X', slug: 'Bad Slug' })).body.error, 'invalid_slug');
+  r = await carol.a.post(RQ, { name: 'Carol Club', slug: 'carol-club', description: 'for carols', note: 'please?' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const req1 = r.body.request;
+  assert.deepEqual([req1.status, req1.slug, req1.account.username], ['pending', 'carol-club', 'carol']);
+  assert.equal((await carol.a.post(RQ, { name: 'Second' })).body.error, 'request_pending');
+  assert.equal((await dave.a.post(RQ, { name: 'Same address', slug: 'carol-club' })).body.error, 'slug_taken');
+  assert.equal((await carol.a.get(AQ)).status, 403);
+  assert.deepEqual((await alice.a.get(AQ)).body.requests.map(x => x.name), ['Carol Club']);
+  r = await alice.a.post(`${AQ}/${req1.id}/approve`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.request.status, 'approved');
+  const made = (await carol.a.get(S(r.body.request.sid))).body;
+  assert.deepEqual([made.server.name, made.server.slug, made.server.role], ['Carol Club', 'carol-club', 'owner']);
+  assert.equal((await alice.a.post(`${AQ}/${req1.id}/approve`)).body.error, 'request_not_found');
+  // dave asks and is turned down, with a reason; a request can also be taken back
+  const req2 = (await dave.a.post(RQ, { name: 'Dave Den' })).body.request;
+  r = await alice.a.post(`${AQ}/${req2.id}/reject`, { reason: 'not now' });
+  assert.deepEqual([r.body.request.status, r.body.request.reason], ['rejected', 'not now']);
+  const req3 = (await dave.a.post(RQ, { name: 'Dave Den 2' })).body.request;
+  assert.deepEqual((await dave.a.del(`${RQ}/${req3.id}`)).body.requests.map(x => x.status), ['cancelled', 'rejected']);
+  assert.equal((await alice.a.get(AQ + '?status=rejected')).body.requests.length, 1);
+  await carol.a.del(S(made.server.sid));
+  await creation({ mode: 'admins' });
+  assert.equal((await carol.a.post(RQ, { name: 'Later' })).body.error, 'requests_not_used');
   await creation({ mode: 'admins' });
   assert.equal((await api(base).get('/.well-known/ember')).body.communities_count, 2);
   assert.deepEqual((await alice.a.get('/api/v1/servers')).body.servers.map(s => s.sid), [A.sid]);

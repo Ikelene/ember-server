@@ -383,6 +383,14 @@ const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS users_approval ON users(approval) WHERE approval IS NOT NULL;`);
   },
+  // v32: asking for a server (creation mode `request`, server-requests.js)
+  `CREATE TABLE IF NOT EXISTS server_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, slug TEXT,
+    description TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', reason TEXT,
+    created_at INTEGER NOT NULL, decided_at INTEGER, decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL, sid TEXT
+  );
+  CREATE INDEX IF NOT EXISTS server_requests_status ON server_requests(status, id);
+  CREATE INDEX IF NOT EXISTS server_requests_user ON server_requests(user_id, status);`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

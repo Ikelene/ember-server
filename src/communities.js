@@ -305,7 +305,7 @@ function assertMayCreate(me) {
   if (!me || me.kind === 'bot') throw err('forbidden', 403);
   if (auth.isAdmin(me)) return;
   const rule = config.get().creation;
-  if (rule.mode === 'request') throw err('creation_requires_approval', 403); // (the approval queue comes later)
+  if (rule.mode === 'request') throw err('creation_requires_approval', 403, { request_url: require('./server-requests').requestUrl() }); // ask instead (server-requests.js)
   const listed = rule.mode === 'allowlist' && (rule.allowlist.includes(String(me.principal).toLowerCase()) || rule.allowlist.includes(String(me.username).toLowerCase()));
   if (rule.mode !== 'anyone' && !listed) throw err('forbidden', 403);
   if (!auth.claimed()) throw err('instance_not_claimed', 409);
