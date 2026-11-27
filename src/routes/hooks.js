@@ -4,6 +4,8 @@
 // token is the key. Errors use Discord's { message, code } shape here.
 const webhooks = require('../webhooks');
 const uploads = require('../uploads');
+const db = require('../db');
+const C = require('../communities');
 
 function register(app) {
   const route = (fn) => async (req, res) => {
@@ -21,7 +23,8 @@ function register(app) {
   app.post(P, A, route(async (req, res) => {
     let body = req.body || {}, files = [];
     if (/^multipart\//i.test(req.headers['content-type'] || '')) {
-      const f = await uploads.readForm(req);
+      const h = webhooks.byToken(req.params.wid, req.params.token); // before any file is read
+      const f = await uploads.readForm(req, { maxBytes: C.botUploadBytes(db.get('SELECT * FROM communities WHERE id = ?', h.community_id)) });
       body = f.fields; files = f.files;
     }
     if (body.payload_json != null) {

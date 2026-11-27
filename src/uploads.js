@@ -293,16 +293,22 @@ function readMultipart(req, { maxBytes, field = 'file' } = {}) {
 }
 
 // multipart with several files (webhook / bot messages): -> { fields, files: [{ buffer, filename, mimetype }] }
-function readForm(req, { maxBytes = 8 * 1024 * 1024, maxFiles = 10 } = {}) {
+// maxBytes is per file (callers pass the server's upload limit, after checking the token); the whole request is held in memory,
+// so all files together are capped at maxTotal
+function readForm(req, { maxBytes = 8 * 1024 * 1024, maxFiles = 10, maxTotal = Math.max(maxBytes, 80 * 1024 * 1024) } = {}) {
   return new Promise((resolve, reject) => {
     let bb;
     try { bb = Busboy({ headers: req.headers, limits: { fileSize: maxBytes, files: maxFiles, fields: 40, fieldSize: 256 * 1024 } }); } catch { return reject(err('bad_request', 400)); }
-    const fields = {}, files = []; let tooBig = false;
+    const fields = {}, files = []; let tooBig = false, total = 0;
     bb.on('field', (k, v) => { fields[k] = v; });
     bb.on('file', (name, stream, info) => {
       const chunks = [];
-      stream.on('data', d => chunks.push(d));
-      stream.on('limit', () => { tooBig = true; });
+      stream.on('data', d => {
+        total += d.length;
+        if (total > maxTotal) tooBig = true;
+        if (tooBig) chunks.length = 0; else chunks.push(d);
+      });
+      stream.on('limit', () => { tooBig = true; chunks.length = 0; });
       stream.on('end', () => { if (info.filename) files.push({ buffer: Buffer.concat(chunks), filename: info.filename, mimetype: info.mimeType }); });
     });
     bb.on('error', () => reject(err('bad_request', 400)));

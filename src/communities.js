@@ -130,6 +130,9 @@ function effectiveUploadMax(c, snap, me) {
   const ids = me && snap.isMember(me.id) ? snap.roleIds(me.id) : new Set();
   return Math.min(ceiling, Math.max(validUploadMax(c.upload_max_mb) ?? ceiling, ...snap.roles.filter(r => me && snap.isMember(me.id) && (r.is_default || ids.has(r.id))).map(r => r.upload_max_mb || 0)));
 }
+// per-file byte cap for bot / webhook / interaction uploads: the same Server settings > Uploads limit people get.
+// `me` is the bot (its roles count); webhooks have no member, so they get the server's own limit.
+const botUploadBytes = (c, me = null) => effectiveUploadMax(c, snapOf(c), me) * 1024 * 1024;
 function serverView(c, snap, me) {
   const isMember = !!(me && snap.isMember(me.id));
   const base = me ? snap.perms(me.id) : 0;
@@ -1114,7 +1117,7 @@ function setNotify(me, target, body = {}) {
 module.exports = { linkInfo,
   canManageClones,
   LIMITS, CHANNEL_TYPES, JOIN_POLICIES, Snap, snapOf, snapById, findCommunity, memberCommunity, findChannel, userByPrincipalOrThrow, memberCount, categoriesOf, cfgOf,
-  effectiveUploadMax, roleView, serverView, channelView, memberView, setNick, readState, mentionCounts, myServers, serverDetail,
+  effectiveUploadMax, botUploadBytes, roleView, serverView, channelView, memberView, setNick, readState, mentionCounts, myServers, serverDetail,
   createCommunity, insertRole, insertChannel, updateServer, deleteCommunity, addMember, removeMember, memberChanged, leaveServer, memberList, channelViewers, moderateMember, banList, discover, discoveryCommunity, assertMayCreate, mirrorToConfig, syncFromConfig,
   findInvite, inviteInfo, listInvites, createInvite, deleteInvite, joinServer, listRequests, resolveRequest,
   channelName, createChannel, updateChannel, deleteChannel, setChannelPerms, setLayout, channelsChanged, onChannelsChanged, setCategories,

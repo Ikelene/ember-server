@@ -144,4 +144,4 @@ function execute(wid, tok, body, files) {
   };
 }
 
-module.exports = { list, create, update, remove, setAvatar, info, removeByToken, execute, cleanEmbeds, withFiles, MAX_PER_COMMUNITY };
+module.exports = { list, create, update, remove, setAvatar, info, byToken, removeByToken, execute, cleanEmbeds, withFiles, MAX_PER_COMMUNITY };
