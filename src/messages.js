@@ -585,7 +585,8 @@ function searchServer(sid, me, raw, { offset } = {}) {
 }
 function pinMessage(id, me, on) {
   const { r, ch, c, snap } = messageCtx(id, me);
-  if (!snap.can(me.id, P.MANAGE_MESSAGES)) throw err('not_allowed', 403);
+  // in a DM (two people or a group) any member pins and unpins, as in Nookara's DMs; in a server it takes Manage messages
+  if (c.kind === 'dm' ? !snap.isMember(me.id) : !snap.can(me.id, P.MANAGE_MESSAGES)) throw err('not_allowed', 403);
   if (r.system) throw err('not_allowed', 403);
   if (on && !r.pinned_at) {
     if (db.get('SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL', ch.id).n >= MAX_PINS) throw err('too_many_pins');

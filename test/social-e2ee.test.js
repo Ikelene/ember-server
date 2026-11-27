@@ -511,6 +511,12 @@ test('a group DM: the owner adds someone, who gets what is sent from then on; a 
   const sealBob = (text, to) => nke1.seal({ dm, from: BOB, text, to, signer: K.bob });
   const before = sealBob('before bo', [K.bob, K.bea]);
   const m1 = (await post(bob, cid, { enc: before.enc })).body.message;
+  // any member pins and unpins in a DM (no Manage messages there), not only the owner
+  assert.equal((await bea.a.put(`/api/v1/messages/${m1.id}/pin`)).status, 200);
+  assert.ok(db.get('SELECT pinned_at FROM messages WHERE id = ?', Number(m1.id)).pinned_at);
+  assert.equal((await bea.a.del(`/api/v1/messages/${m1.id}/pin`)).status, 200);
+  assert.equal(db.get('SELECT pinned_at FROM messages WHERE id = ?', Number(m1.id)).pinned_at, null);
+  assert.equal((await bo.a.put(`/api/v1/messages/${m1.id}/pin`)).status >= 400, true); // (not a member yet)
   // only the owner adds; someone in it already is not added twice
   assert.equal((await bea.a.post(`/api/v2/social/dms/${enc(dm)}/members`, { members: ['bo'] })).body.error, 'owner_only');
   assert.equal((await bob.a.post(`/api/v2/social/dms/${enc(dm)}/members`, { members: ['bea'] })).body.error, 'already_member');
