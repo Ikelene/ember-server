@@ -72,7 +72,7 @@ function register(app) {
       return { ...b, ...(problem ? { problem, action: problem === 'bot_not_in_server' ? 'reinvite_bot' : problem === 'bridge_not_set_up' ? 'homeserver_bot_needed' : problem === 'matrix_bot_needed' ? 'owner_sets_matrix_bot' : problem === 'guild_already_linked' ? 'resolve_conflict' : 'check' } : {}) };
     });
     const main = require('./db').get('SELECT invite_code FROM communities WHERE id = ?', c.id).invite_code;
-    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut };
+    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut, members: report.members || { added: 0, already: 0, skipped: [] } };
   });
 }
 

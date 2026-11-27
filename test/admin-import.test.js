@@ -87,3 +87,34 @@ test('old links keep working: invite codes and the main code come along; bridge 
   assert.deepEqual(r.body.invite_code, { from: 'OldMain99', to: 'OldMain99' });
   assert.deepEqual([r.body.bridges.length, r.body.bridges[0].platform, r.body.bridges[0].channels], [1, 'fluxer', 1]);
 });
+
+test('members: Nookara accounts (v:) come along where Nookara accounts are this homeserver\'s; local accounts of another instance are counted, not made', async () => {
+  const { unzipSync, zipSync, strToU8, strFromU8 } = require('fflate');
+  const db = require('../src/db'), config = require('../src/config');
+  // a hosted container's export: its members are Nookara accounts (and, on an odd one, a local account of that container)
+  const files = unzipSync(new Uint8Array(zip));
+  files['manifest.json'] = strToU8(JSON.stringify({ ...JSON.parse(strFromU8(files['manifest.json'])), source: 'https://e-old.nookara.cc' }));
+  const mod = JSON.parse(strFromU8(files['community.json'])).roles.find(x => !x.is_default)?.rid;
+  files['members.jsonl'] = strToU8(strFromU8(files['members.jsonl']) + [{ user: { id: 'v:777', username: 'vic', display_name: 'Vic' }, roles: mod ? [mod] : [], joined_at: 5 }, { user: { id: 'l:9', username: 'lou' }, roles: [], joined_at: 6 }].map(x => JSON.stringify(x)).join('\n') + '\n');
+  const general = Object.keys(files).find(k => k.startsWith('messages/'));
+  files[general] = strToU8(strFromU8(files[general]) + JSON.stringify({ id: 'm-vic', author: { id: 'v:777', username: 'vic', display_name: 'Vic' }, body: 'hi from vic', created_at: 7 }) + '\n');
+  const hosted = Buffer.from(zipSync(files));
+  // plain local accounts: Nookara accounts are not this homeserver's
+  let r = await upload(alice.session, { owner: bob.user.id, slug: 'hosted-a' }, hosted);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.members.added, 0);
+  const mine = r => r.body.members.skipped.filter(x => x.id !== alice.user.id); // (alice: the export's own owner, a local account of "there" too)
+  assert.deepEqual(mine(r).map(x => [x.id, x.why]), [['v:777', 'not_an_account_here'], ['l:9', 'local_account_elsewhere']]);
+  // a homeserver that hosts Nookara identities (nookara.cc's): v:777 is a member with its role, and the author of its message
+  config.update({ accounts: { nookara_identity: true } });
+  try {
+    r = await upload(alice.session, { owner: bob.user.id, slug: 'hosted-b' }, hosted);
+    assert.equal(r.body.members.added, 1);
+    assert.deepEqual(mine(r).map(x => [x.id, x.username, x.why]), [['l:9', 'lou', 'local_account_elsewhere']]);
+    const c = db.get('SELECT id FROM communities WHERE sid = ?', r.body.sid), vic = db.get("SELECT * FROM users WHERE principal = 'v:777'");
+    assert.ok(db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, vic.id));
+    if (mod) assert.ok(db.get('SELECT 1 FROM member_roles WHERE community_id = ? AND user_id = ?', c.id, vic.id), 'with its role');
+    assert.equal(db.get("SELECT m.user_id FROM messages m JOIN channels ch ON ch.id = m.channel_id WHERE ch.community_id = ? AND m.body = 'hi from vic'", c.id).user_id, vic.id);
+    assert.ok(!db.get("SELECT 1 FROM users WHERE username = 'lou'"), 'no account is made for a local account of another instance');
+  } finally { config.update({ accounts: { nookara_identity: null } }); }
+});

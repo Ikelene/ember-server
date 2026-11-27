@@ -330,18 +330,27 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     // the importer reads everything they just imported
     for (const uid of new Set([me.id, c.owner_id])) for (const ch of chMap.values()) db.run('INSERT OR REPLACE INTO read_state (user_id, channel_id, last_read_id) SELECT ?, id, last_message_id FROM channels WHERE id = ?', uid, ch.id);
 
-    // members: accounts of this instance's kind come back with their roles (the owner and the importer are already members)
+    // members: accounts of this homeserver come back with their roles (the owner and the importer are already members). Those
+    // are Nookara accounts (v:) where Nookara accounts are this homeserver's (accounts mode nookara, or a homeserver that also
+    // hosts Nookara identities, like nookara.cc's), and its own local accounts on a restore here. Local accounts of another
+    // instance have no account here: they are left out and counted (report.members)
     const toAnnounce = [];
+    const nookaraHere = nookara || config.nookaraIdentity();
+    const tally = { added: 0, already: 0, skipped: [] };
     for (const m of entries['members.jsonl'] ? jsonl(entries['members.jsonl']) : []) {
       const u = resolve(m.user);
-      if (!u || u.id === me.id || u.kind !== (nookara ? KIND_NOOKARA : 'local') || (!nookara && !sameInstance)) continue;
-      if (db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)) continue;
-      if (C.memberCount(c.id) >= C.LIMITS.members) break;
+      const p = typeof m.user?.id === 'string' ? m.user.id : null;
+      const ours = u && ((u.kind === KIND_NOOKARA && nookaraHere) || (u.kind === 'local' && !nookara && sameInstance));
+      if (!ours) { if (p && p !== me.principal) tally.skipped.push({ id: p, username: clean(m.user?.username, 64) || null, why: p.startsWith('l:') ? 'local_account_elsewhere' : 'not_an_account_here' }); continue; }
+      if (u.id === me.id || db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)) { tally.already++; continue; }
+      if (C.memberCount(c.id) >= C.LIMITS.members) { tally.skipped.push({ id: p, username: u.username, why: 'member_cap' }); continue; }
+      tally.added++;
       C.addMember(c, u.id, { quiet: true, announce: false });
       db.run('UPDATE members SET joined_at = ? WHERE community_id = ? AND user_id = ?', Number(m.joined_at) || now(), c.id, u.id);
       for (const rid of Array.isArray(m.roles) ? m.roles : []) { const r = roleMap.get(rid); if (r && !r.is_default) db.run('INSERT OR IGNORE INTO member_roles (community_id, user_id, role_id) VALUES (?, ?, ?)', c.id, u.id, r.id); }
       toAnnounce.push(u.id);
     }
+    if (opts.report) opts.report.members = tally;
     setImmediate(() => { const fresh = db.get('SELECT * FROM communities WHERE id = ?', c.id); if (!fresh) return; const snap = C.snapOf(fresh); for (const uid of toAnnounce) require('./gateway').pushToUser(uid, { type: 'chat_server_added', server: C.serverView(fresh, snap, auth.userById(uid)) }); });
     return db.get('SELECT * FROM communities WHERE id = ?', c.id);
   });
