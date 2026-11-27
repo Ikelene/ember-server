@@ -55,7 +55,8 @@ const pkce = () => { const verifier = crypto.randomBytes(32).toString('base64url
 async function nookaraSignIn(claims) {
   const k = pkce();
   const q = { response_type: 'code', client_id: 'ember', redirect_uri: `${APP}/ember/auth/callback.html`, state: 'st1', code_challenge: k.challenge, code_challenge_method: 'S256' };
-  const get = u => fetch(base + u, { redirect: 'manual' });
+  let cookie = ''; // a browser: the sign-in is bound to its ember_csrf cookie
+  const get = async u => { const r = await fetch(base + u, { redirect: 'manual', headers: cookie ? { Cookie: cookie } : {} }); const c = r.headers.getSetCookie()[0]; if (c) cookie = c.split(';')[0]; return r; };
   const s = await get(`/login/start/nookara?${new URLSearchParams(q)}`);
   assert.equal(s.status, 302, await s.text());
   const to = new URL(s.headers.get('location'));
