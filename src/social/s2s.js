@@ -26,14 +26,16 @@ const MAX_AGE = 300, MAX_AHEAD = 60; // seconds
 const TIMEOUT = 8000;
 
 const digest = body => crypto.createHash('sha256').update(body || Buffer.alloc(0)).digest('base64url');
-// the bytes a signature covers. target: the request path with its query, exactly as sent; host: the receiver's host[:port]
-const canonical = ({ method, target, host, created, body }) => [String(method).toUpperCase(), target, String(host).toLowerCase(), String(created), 'sha-256=' + digest(body)].join('\n');
+// the bytes a signature covers. target: the request path with its query, exactly as sent; host: the receiver's host[:port].
+// purpose: what else the key signs with this scheme adds a sixth line ("purpose: push", §20), so a signature made for one
+// use is never good for another
+const canonical = ({ method, target, host, created, body, purpose = null }) => [String(method).toUpperCase(), target, String(host).toLowerCase(), String(created), 'sha-256=' + digest(body), ...(purpose ? ['purpose: ' + purpose] : [])].join('\n');
 
 // ---------- sending ----------
 // the headers of a request this homeserver makes. body: the exact bytes sent (string / Buffer), or null
-function sign({ method, url, body = null, created = Math.floor(now() / 1000) }) {
+function sign({ method, url, body = null, created = Math.floor(now() / 1000), purpose = null }) {
   const u = new URL(url), { kid, key } = keys.current();
-  const sig = crypto.sign(null, Buffer.from(canonical({ method, target: u.pathname + u.search, host: u.host, created, body })), key).toString('base64url');
+  const sig = crypto.sign(null, Buffer.from(canonical({ method, target: u.pathname + u.search, host: u.host, created, body, purpose })), key).toString('base64url');
   return { 'Ember-Signature': `keyId="${config.domain()}#${kid}", created=${created}, sig="${sig}"`, 'X-Ember-Homeserver': config.domain() };
 }
 // may this homeserver talk to `domain` at all? The rules for accounts coming in hold for requests going out

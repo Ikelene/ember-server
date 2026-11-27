@@ -115,8 +115,11 @@ test('gateway requests carry the s2s signature, which checks out against the JWK
   assert.equal(p[1], 'localhost');
   const jwk = (await api(base).get('/.well-known/ember/jwks.json')).body.keys.find(k => k.kid === p[2]);
   assert.ok(jwk);
-  const signed = s2s.canonical({ method: 'POST', target: g.path, host: g.host, created: p[3], body: g.raw });
+  const signed = s2s.canonical({ method: 'POST', target: g.path, host: g.host, created: p[3], body: g.raw, purpose: 'push' });
   assert.ok(crypto.verify(null, Buffer.from(signed), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(p[4], 'base64url')));
+  // the same request read as an s2s one (no purpose line) does not verify: a gateway cannot replay it as one
+  const asS2s = s2s.canonical({ method: 'POST', target: g.path, host: g.host, created: p[3], body: g.raw });
+  assert.ok(!crypto.verify(null, Buffer.from(asS2s), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(p[4], 'base64url')));
   assert.ok(!crypto.verify(null, Buffer.from(signed + 'x'), crypto.createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(p[4], 'base64url')));
 });
 
