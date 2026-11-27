@@ -169,12 +169,24 @@ test('discovery: social urls from config while nookara_identity is on; this home
 
 test('social routes answer social_elsewhere for v: accounts; local accounts and DMs still work here', async () => {
   const nat = api(base, (await nookaraSignIn({ sub: '77', preferred_username: 'nat' })).body.access_token);
-  for (const [m, p, b] of [['get', '/api/v2/social/friends'], ['post', '/api/v2/social/friends', { handle: 'alice' }], ['post', '/api/v2/social/blocks/l%3A1'], ['put', '/api/v2/social/keys', { keys: [] }], ['get', '/api/v2/social/keys/l%3A1%40m.example']]) {
+  for (const [m, p, b] of [['get', '/api/v2/social/friends'], ['post', '/api/v2/social/friends', { handle: 'alice' }], ['post', '/api/v2/social/blocks/l%3A1'], ['put', '/api/v2/social/keys', { keys: [] }], ['get', '/api/v2/social/keys/l%3A1%40m.example'],
+    ['get', '/api/v2/social/e2ee/me'], ['post', '/api/v2/social/e2ee', {}], ['post', '/api/v2/social/e2ee/unlock', { kind: 'passcode', auth: 'x' }], ['post', '/api/v2/social/e2ee/link', {}]]) { // (their keys are Nookara's to keep)
     const r = await nat[m](p, b);
     assert.deepEqual([r.status, r.body.error, r.body.api_url], [409, 'social_elsewhere', nookaraSide.origin + '/api/v2'], `${m} ${p}`);
   }
   assert.equal((await alice.get('/api/v2/social/friends')).status, 200);
   assert.equal((await nat.get('/api/v2/social/dms')).status, 200);
+  assert.equal((await alice.get('/api/v2/social/e2ee/me')).body.has, false);
+  // a DM message of a Nookara account is reported to Nookara, wherever the DM is hosted (PROTOCOL §4d)
+  const sent = nke1.seal({ dm: `d1@${DOMAIN}`, from: `v:77@${DOMAIN}`, text: 'x', to: [nke1.account()], signer: nke1.account() });
+  const r = await alice.post('/api/v2/social/reports', { message: { dm: `d1@${DOMAIN}`, id: '5', from: `v:77@${DOMAIN}`, envelope: sent.enc }, revealed_key: sent.k, reason: 'spam' });
+  assert.deepEqual([r.status, r.body], [409, { error: 'report_elsewhere', url: nookaraSide.origin + '/api/report/dm-message', api_url: nookaraSide.origin + '/api/v2' }]);
+  // its key document is asked for where its keys are
+  const doc = { id: `v:77@${DOMAIN}`, format: 'nke1', owner: '77', keys: [(k => ({ kid: k.kid, kind: 'account', alg: 'p256', public_key: k.sig_pub, enc_public_key: k.enc_pub, created_at: 1 }))(nke1.account())], clients: { seq: 0, list: [] }, clients_sig: null, clients_seq: 0, past: [] };
+  nookaraSide.handle = (req, res) => json(res, req.url.startsWith('/_ember/s2s/v1/keys/') ? 200 : 404, req.url.startsWith('/_ember/s2s/v1/keys/') ? doc : { error: 'not_found' });
+  assert.deepEqual((await alice.get(`/api/v2/social/keys/${encodeURIComponent(doc.id)}`)).body, doc);
+  nookaraSide.handle = null;
+  require('../src/db').run("DELETE FROM social_cache WHERE kind = 'keys'");
 });
 
 test('s2s for a v: account arriving here while its social API is elsewhere: 421 misdirected', async () => {

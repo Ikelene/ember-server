@@ -15,6 +15,7 @@ function register(app) {
   require('./friends').register(app);
   require('./keys').register(app);
   require('./e2ee').register(app);
+  require('./reports').register(app);
   require('./dms').register(app);
 }
 const start = () => require('./dms').start();
