@@ -145,13 +145,14 @@ async function keyFor(kid) {
 
 const bad = code => err(code, 401);
 // verifies signature, iss, aud, exp (60s skew) and jti replay. -> claims
-async function verifyNookaraJwt(token, nowMs = Date.now()) {
+// typ: the header type the token must have (undefined / "JWT" for a sign-in; "ember-payment-link+jwt" for payments.js)
+async function verifyNookaraJwt(token, nowMs = Date.now(), { typ = null } = {}) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3 || token.length > 8192) throw bad('invalid_token');
   let header, claims;
   try { header = JSON.parse(fromB64url(parts[0]).toString()); claims = JSON.parse(fromB64url(parts[1]).toString()); } catch { throw bad('invalid_token'); }
   if (!header || header.alg !== 'EdDSA' || typeof header.kid !== 'string' || !claims || typeof claims !== 'object') throw bad('invalid_token');
-  if (header.typ !== undefined && header.typ !== 'JWT') throw bad('invalid_token'); // e.g. a pay receipt (compat TYP.receipt) is never a login token (§12.5)
+  if (typ ? header.typ !== typ : header.typ !== undefined && header.typ !== 'JWT') throw bad('invalid_token'); // e.g. a pay receipt (compat TYP.receipt) is never a login token (§12.5), a payment link is never one either
   let key;
   try { key = await keyFor(header.kid); } catch (e) { console.error('[auth] JWKS fetch failed:', e.message); throw err(ERR.unreachable, 502); }
   if (!key) throw bad('unknown_kid');

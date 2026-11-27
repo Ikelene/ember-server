@@ -29,9 +29,10 @@ async function startServer({ dataDir, port, host = env('HOST'), restart } = {}) 
   });
   require('./routes/instance').register(app, { restart: doRestart });
   require('./login').register(app); // homeserver accounts and login (PROTOCOL §4a)
-  require('./registration').register(app);
-  require('./server-requests').register(app);
-  require('./admin-import').register(app); // an admin imports a server for its owner (moving Nookara-hosted servers here) // asking for a server (creation mode request, PROTOCOL §5a) // registration by invite / approval, account passwords (PROTOCOL §4a)
+  require('./registration').register(app); // registration by invite / approval, account passwords (PROTOCOL §4a)
+  require('./server-requests').register(app); // asking for a server (creation mode request, PROTOCOL §5a)
+  require('./admin-import').register(app); // an admin imports a server for its owner (moving Nookara-hosted servers here)
+  require('./payments').register(app); // paying with a linked Nookara account (PROTOCOL §19.0c)
   require('./account-page').register(app); // the account page (GET /account)
   require('./invite-page').register(app); // client-neutral invite links (GET /i/<slug>/<code>)
   require('./federation').register(app); // cross-homeserver sign-in and federation safety (PROTOCOL §4b)

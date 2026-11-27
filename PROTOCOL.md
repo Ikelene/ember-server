@@ -1685,13 +1685,30 @@ What a server may have is decided per server, by the homeserver it lives on. In 
 
 ### 19.0a Tiers
 
-A server's **owner** buys one of the homeserver's tiers with Nookara credits, through the pay requests of §12.5. Only a homeserver registered with Nookara can sell (`409 tiers_unavailable` otherwise, and `tiers_available: false`); the buyer needs a Nookara account (`402 velora_required`).
+A server's **owner** buys one of the homeserver's tiers with Nookara credits, through the pay requests of §12.5. Only a homeserver registered with Nookara can sell (`409 tiers_unavailable` otherwise, and `tiers_available: false`); the buyer pays from a Nookara account: their own, or one they linked for payments (19.0c; `402 nookara_link_required` until they do).
 
 - `POST /api/v2/servers/:sid/tier { tier }` -> `{ status: "pending", pay_request: { id, status, approve_url, amount, tier, expires_at }, tier, until }`. The instance asks for a pay request with `amount = price_credits`, a `reason` naming the tier and server, and `ref = "tier:<tier>:server:<sid>:<period start ms>"`. Asking again while one is open returns the same request. Errors: `owner_only` (403), `unknown_tier` (404), `tiers_unavailable` (409), and the pay-request errors of §12.5.
 - `GET /api/v2/servers/:sid/tier` (owner) -> `{ tier, until, status: "none" | "pending" | "paid" | "declined" | "expired" | "failed", pay_request, tiers_available }`. It asks Nookara about an open request right away; the instance also polls every few seconds while one is open.
 - The person approves on Nookara (`approve_url`). The receipt (`ember-receipt+jwt` / `bonfire-receipt+jwt`) is checked as in §12.5 (signature, `aud`, `sub`, `amount`, `ref`, `rcp` unused). Then `server_tiers (community_id PK, tier, until, receipt_jti, updated_at)` is set (`receipt_jti` holds the receipt's `rcp`) and the owner gets `{ type: "chat_tier_update", server, status, tier, until }`. A receipt that does not check out sets nothing (`status: "failed"`, `pay_request.error`).
 - **Periods stack.** Buying the tier a server already holds starts the new period where the running one ends (`until += period_weeks`). Another tier starts now and replaces it.
 - **Running out.** After `until` the server is back on the defaults (and its override, if any). Nothing renews by itself. A tier that the homeserver removed from its list no longer gives anything, so rename a tier rather than delete one that servers hold.
+
+### 19.0c Paying from another account
+
+A Nookara account (`v:`) pays from itself. Any other account (a local account, an account of another homeserver) links a Nookara account **for payments only** first. Nothing else is shared: the link does not sign anyone in, and Nookara learns only the account's id and handle.
+
+**On the homeserver**
+- `GET /api/v2/account/payments` -> `{ own_nookara_account, linked, nookara_id, linked_at, available }`. `available` is false while the homeserver is not registered with Nookara.
+- `POST /api/v2/account/payments/link { return_to? }` -> `{ url }`. Open `url` in a browser: Nookara's consent page `NOOKARA/ember/payments/link?instance=<public_url>&account=<full id>&handle=<user@domain>&state=&return_to=<public_url>/account/payments/linked`. `return_to` (optional) is where the browser ends up afterwards: an origin in `ember_clients` only, and `?payments_linked=1` (or `&`) is added. Errors: `own_nookara_account` (400, it pays from itself), `payments_unavailable` (409), `invalid_return_to` (400). The state lasts 15 minutes and is used once.
+- `GET /account/payments/linked?state=&token=` is where Nookara sends the browser back. `token` is an EdDSA JWT signed with Nookara's IdP key (the JWKS of §3): header `typ: "ember-payment-link+jwt"` (a login token is refused here, and this token is refused as a login token), `iss` = Nookara, `aud` = this homeserver's public URL, `sub` = the Nookara user id, `account` = the account's full id (it must be the account that started), `jti` (used once), `exp`. The homeserver keeps `sub` as `users.payment_nookara_id`.
+- `DELETE /api/v2/account/payments/link` -> the view above. The link ends here at once, and Nookara is told with `POST NOOKARA/bonfire/relay/payment-link/revoke { account, user_id }` (instance-signed, §12; best effort, since Nookara checks its side on every pay request). Error: `not_linked` (404).
+- A tier purchase (19.0a) by an account with no way to pay: `402 { error: "nookara_link_required", link_url }`. `link_url` is the `POST` above; clients show a "Link a Nookara account for payments" prompt and start it.
+- When linked, the pay request (§12.5) is `{ user_id: <linked Nookara id>, account: <full id>, amount, reason, ref }`, and `tier_payments.payer_nookara_id` remembers who was asked. The receipt's `sub` must be that id.
+
+**On Nookara**
+- The consent page needs the Nookara user to be signed in. It names the homeserver and the account, and says that the homeserver will be able to ask this Nookara account to approve payments (each one is still approved on Nookara). Agreeing stores `ember_payment_links (instance key, account, user_id, handle, created_at, revoked_at)` and sends the browser to `return_to` with `state` and the token. Only an instance registered with Nookara can be linked, and `return_to` must be on the instance's origin.
+- A pay request that carries `account` is accepted only while an unrevoked link exists for (the signing instance, `account`, `user_id`), and it is then shown with the account's handle. Otherwise it fails with `403 payment_link_missing`. Without `account`, §12.5 is unchanged: `user_id` must have subscribed to the instance.
+- The Nookara user lists and revokes links in their account settings (`GET /api/ember/payment-links`, `DELETE /api/ember/payment-links/:id`). A revoked link refuses the homeserver's next pay request, and the homeserver shows `payment_link_missing` until the account links again.
 
 ### 19.0b Nookara-hosted instances (the old managed mode)
 

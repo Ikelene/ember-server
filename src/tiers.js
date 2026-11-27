@@ -33,7 +33,9 @@ async function buy(sid, me, body = {}) {
   if (!available()) throw err('tiers_unavailable', 409);
   const def = L.tiers().find(t => t.id === String(body?.tier || ''));
   if (!def) throw err('unknown_tier', 404);
-  if (!me.nookara_id) throw err(ERR.required, 402); // credits are paid from a Nookara account
+  // credits are paid from a Nookara account: its own, or (any other account) the one it linked for payments (payments.js)
+  const payer = require('./payments').payerOf(require('./auth').userById(me.id));
+  if (!payer) throw require('./payments').requireLink();
   // one open request per server + tier + price: asking again hands back the same one
   let p = db.tx(() => {
     const cur = db.get(`SELECT * FROM tier_payments WHERE community_id = ? AND user_id = ? AND status IN ${OPEN} ORDER BY id DESC LIMIT 1`, c.id, me.id);
@@ -41,14 +43,14 @@ async function buy(sid, me, body = {}) {
     if (cur) set(cur.id, { status: 'expired' });
     const h = held(c.id), t = Date.now();
     const start = h && h.tier === def.id && h.until > t ? h.until : t; // the same tier again: the new period follows the one that is running
-    const id = db.run("INSERT INTO tier_payments (community_id, user_id, tier, amount, period_weeks, ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?)",
-      c.id, me.id, def.id, def.price_credits, def.period_weeks, `tier:${def.id}:server:${c.sid}:${start}`, t, t).lastInsertRowid;
+    const id = db.run("INSERT INTO tier_payments (community_id, user_id, tier, amount, period_weeks, ref, status, created_at, updated_at, payer_nookara_id) VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?)",
+      c.id, me.id, def.id, def.price_credits, def.period_weeks, `tier:${def.id}:server:${c.sid}:${start}`, t, t, payer.nookara_id).lastInsertRowid;
     return row(id);
   });
   if (p.status === 'creating') {
     let out;
     try {
-      out = await client().call('POST', relayPath('/pay-request'), { user_id: String(me.nookara_id), amount: p.amount, reason: `${def.name} for ${c.name}, ${def.period_weeks} week${def.period_weeks === 1 ? '' : 's'}`.slice(0, 200), ref: p.ref });
+      out = await client().call('POST', relayPath('/pay-request'), { user_id: String(p.payer_nookara_id || payer.nookara_id), ...(payer.account ? { account: payer.account } : {}), amount: p.amount, reason: `${def.name} for ${c.name}, ${def.period_weeks} week${def.period_weeks === 1 ? '' : 's'}`.slice(0, 200), ref: p.ref });
     } catch (e) {
       if (!(e.code === ERR.unreachable || e.status === 429 || e.status >= 500)) set(p.id, { status: 'failed', error: e.code || 'payment_failed' });
       throw err(e.code === ERR.notRegistered || e.code === ERR.off ? 'tiers_unavailable' : e.code || 'payment_failed', e.status === 503 ? 409 : e.status || 502, e.extra);
@@ -97,8 +99,10 @@ async function check(p) {
   if (!fresh || fresh.status !== 'pending') return;
   if (out.status === 'paid') {
     const user = require('./auth').userById(fresh.user_id);
+    // the receipt names the Nookara account that paid: the one this request was made for (a linked one, or their own)
+    const payerUser = fresh.payer_nookara_id ? { ...(user || {}), nookara_id: fresh.payer_nookara_id } : user;
     const used = rcp => !!db.get('SELECT 1 FROM tier_payments WHERE rcp = ?', rcp) || !!db.get('SELECT 1 FROM role_purchases WHERE rcp = ?', rcp);
-    try { grant(fresh, await require('./relay/shop').verifyReceipt(out.receipt, fresh, user || {}, used)); } catch (e) {
+    try { grant(fresh, await require('./relay/shop').verifyReceipt(out.receipt, fresh, payerUser || {}, used)); } catch (e) {
       if (e.code === ERR.unreachable) return; // the keys could not be fetched: next round
       set(fresh.id, { status: 'failed', error: e.code || 'receipt_invalid' });
       console.error(`[tiers] rejected a pay receipt for request ${fresh.pay_id}: ${e.code || e.message}`);

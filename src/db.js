@@ -400,6 +400,14 @@ const MIGRATIONS = [
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE, kid TEXT NOT NULL, author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at INTEGER NOT NULL, PRIMARY KEY (message_id, kid)
   );`,
+  // v35: paying with a linked Nookara account (payments.js): the Nookara account an account of any kind pays from, and on a
+  // tier payment the account that pays (its receipt must name it)
+  d => {
+    const has = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c);
+    if (!has('users', 'payment_nookara_id')) d.exec('ALTER TABLE users ADD COLUMN payment_nookara_id TEXT');
+    if (!has('users', 'payment_linked_at')) d.exec('ALTER TABLE users ADD COLUMN payment_linked_at INTEGER');
+    if (!has('tier_payments', 'payer_nookara_id')) d.exec('ALTER TABLE tier_payments ADD COLUMN payer_nookara_id TEXT');
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
