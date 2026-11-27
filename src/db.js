@@ -327,6 +327,35 @@ const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS communities_kind ON communities(kind);`);
   },
+  // v28: end-to-end encrypted DMs (PROTOCOL §4d). Home role: an account's public keys and signed client list
+  // (e2ee_accounts), its keys locked with a passphrase and a recovery code (e2ee_backups), device link requests (e2ee_links).
+  // Host role: messages.enc is the sealed envelope of a DM message (body stays ''), uploads.sealed marks bytes kept untouched.
+  // dm_reports: messages of this homeserver's accounts that someone reported, with the one key that opens each
+  d => {
+    const has = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c);
+    if (!has('messages', 'enc')) d.exec('ALTER TABLE messages ADD COLUMN enc TEXT');
+    if (!has('uploads', 'sealed')) d.exec('ALTER TABLE uploads ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0');
+    d.exec(`CREATE TABLE IF NOT EXISTS e2ee_accounts (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, kid TEXT NOT NULL, enc_pub TEXT NOT NULL, sig_pub TEXT NOT NULL,
+        clients_doc TEXT, clients_sig TEXT, past TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS e2ee_backups (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, type TEXT, salt TEXT NOT NULL, params TEXT,
+        blob_iv TEXT NOT NULL, blob_ct TEXT NOT NULL, auth_hash TEXT NOT NULL, fails INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, kind)
+      );
+      CREATE TABLE IF NOT EXISTS e2ee_links (
+        code_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, enc_pub TEXT NOT NULL, sig_pub TEXT,
+        label TEXT, app TEXT, state TEXT NOT NULL DEFAULT 'waiting', sealed TEXT, expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS e2ee_links_user ON e2ee_links(user_id);
+      CREATE TABLE IF NOT EXISTS dm_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, reporter TEXT NOT NULL, sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL, sender TEXT NOT NULL,
+        dm TEXT NOT NULL, message_id TEXT NOT NULL, envelope TEXT NOT NULL, revealed_key TEXT NOT NULL, edit_of TEXT NOT NULL DEFAULT '0',
+        reason TEXT NOT NULL, details TEXT NOT NULL DEFAULT '', context TEXT, status TEXT NOT NULL DEFAULT 'open', note TEXT NOT NULL DEFAULT '',
+        handled_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (reporter, dm, message_id)
+      );
+      CREATE INDEX IF NOT EXISTS dm_reports_status ON dm_reports(status, id);`);
+  },
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet
