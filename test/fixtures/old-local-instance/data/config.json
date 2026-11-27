@@ -1,0 +1,8 @@
+{
+  "name": "Old Camp",
+  "public_url": "https://chat.oldcamp.example",
+  "accounts_mode": "local",
+  "registration": "open",
+  "velora_registration": "off",
+  "description": "from before homeservers"
+}

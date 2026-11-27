@@ -1,0 +1,37 @@
+{
+  "made_with": "bonfire-server main 837dd2d (before homeservers)",
+  "public_url": "https://chat.oldcamp.example",
+  "users": {
+    "alice": {
+      "id": "l:1",
+      "password": "alice old password",
+      "session": "7IyelPadY9OYrNilFN-SJ_tvcN9f5yAhU3puVjSrFvY"
+    },
+    "bob": {
+      "id": "l:2",
+      "password": "bob old password",
+      "session": "N2TSfOZ9WWqn0U73xrqKjmmRuvDt6P80lR0VEadBhwg",
+      "session2": "Ub6tFet4EJ_RF9u_Doci3t8U_QRB4Fnu-g3a_49Oqhk"
+    },
+    "carl": {
+      "id": "l:3",
+      "password": "carl old password",
+      "session": "Cq8QhF3Pfa2QYnWhae8CWwaTkyy2zI4MVWdVYPOwgZU"
+    }
+  },
+  "server": {
+    "sid": "sa99d5d06b6",
+    "name": "Old Camp",
+    "general": "cce46157848",
+    "role": {
+      "rid": "r113c4bb9d5",
+      "name": "Rangers"
+    },
+    "main_invite": "4R7gNa5B",
+    "invite": "mI1lVyys",
+    "messages": [
+      "1",
+      "2"
+    ]
+  }
+}
