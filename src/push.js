@@ -15,6 +15,7 @@ const { err, now } = require('./util');
 const MAX_PER_USER = 20, TIMEOUT = 5000, MAX_QUEUED = 500;
 const DEFAULT_GATEWAY = 'https://nookara.cc/_ember/push/v1/notify';
 let WINDOW = 30 * 1000;
+let RETRY = [1000, 4000, 15000]; // waits between tries when a gateway answers 429 / 5xx
 const defaultGateway = () => config.get().push.default_gateway || DEFAULT_GATEWAY;
 const trim = (s, n) => { const a = [...String(s ?? '').replace(/\s+/g, ' ').trim()]; return a.length > n ? a.slice(0, n - 1).join('') + '…' : a.join(''); };
 
@@ -93,10 +94,22 @@ function post(url, body) {
     try {
       // signed the way server-to-server requests are (§4c.1), with a sixth line "purpose: push" (§20): the gateway checks it
       // against our JWKS, and a gateway (any address a client names) cannot pass the signature off as an s2s request of ours
-      const payload = JSON.stringify(body), headers = { ...require('./social/s2s').sign({ method: 'POST', url, body: payload, purpose: 'push' }), 'Content-Type': 'application/json' };
-      const r = await safe.request('POST', url, { headers, body: payload, timeout: TIMEOUT, maxBytes: 64 * 1024 });
+      const payload = JSON.stringify(body);
+      // a gateway that is busy (429) or failing (5xx) is tried again after RETRY[n]; any other answer stands. Each try is
+      // signed anew (the signature carries its time)
+      let r;
+      for (let i = 0; ; i++) {
+        const headers = { ...require('./social/s2s').sign({ method: 'POST', url, body: payload, purpose: 'push' }), 'Content-Type': 'application/json' };
+        r = await safe.request('POST', url, { headers, body: payload, timeout: TIMEOUT, maxBytes: 64 * 1024 });
+        if ((r.status !== 429 && r.status < 500) || i >= RETRY.length) break;
+        await new Promise(res => { const t = setTimeout(res, RETRY[i]); t.unref?.(); });
+      }
       const key = body.notification.pushkey;
-      if (r.status < 200 || r.status >= 300) return;
+      if (r.status < 200 || r.status >= 300) { // (a 401 from a gateway: our signature was refused; worth seeing in the log)
+        const code = r.json()?.error;
+        log(url, new Error(`answered ${r.status}${typeof code === 'string' ? ' ' + code.slice(0, 64) : ''}`));
+        return;
+      }
       const rejected = r.json()?.rejected;
       if (Array.isArray(rejected) && rejected.includes(key)) db.run('DELETE FROM pushers WHERE pushkey = ? AND gateway_url = ?', key, url);
       else db.run('UPDATE pushers SET last_ok_at = ? WHERE pushkey = ? AND gateway_url = ?', now(), key, url);
@@ -145,4 +158,4 @@ function register(app) {
 // discovery: `push: { pushers_url }`
 const discovery = () => ({ push: { pushers_url: `${config.publicUrl()}/api/v2/pushers` } });
 
-module.exports = { start, stop, register, discovery, add, remove, list, onOffline, dm, idle, DEFAULT_GATEWAY, _setWindow: ms => { WINDOW = ms; } };
+module.exports = { start, stop, register, discovery, add, remove, list, onOffline, dm, idle, DEFAULT_GATEWAY, _setWindow: ms => { WINDOW = ms; }, _setRetry: list => { RETRY = list; }, _logged: logged };

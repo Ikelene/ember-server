@@ -17,7 +17,7 @@ async function until(fn, ms = 4000) { const t = Date.now(); for (;;) { const v =
 // ---- a stand-in push gateway ----
 const got = []; // { path, homeserver, n: notification }
 const reject = new Set();
-let gwServer, GW, slow = false;
+let gwServer, GW, slow = false, answers = []; // answers: statuses to give before the normal one (a busy or failing gateway)
 function gatewayServer() {
   return http.createServer((req, res) => {
     let body = '';
@@ -26,6 +26,8 @@ function gatewayServer() {
       const n = JSON.parse(body).notification;
       got.push({ path: req.url, homeserver: req.headers['x-ember-homeserver'], type: req.headers['content-type'], sig: req.headers['ember-signature'], host: req.headers.host, raw: body, n });
       if (slow) await sleep(300);
+      const st = answers.shift();
+      if (st) { res.writeHead(st, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: st === 401 ? 'invalid_signature' : 'busy' })); }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ rejected: reject.has(n.pushkey) ? [n.pushkey] : [] }));
     });
@@ -163,4 +165,30 @@ test('a key the gateway rejects is forgotten; a slow gateway never holds a messa
   await carol.a.post('/api/v2/pushers', { app_id: 'a', pushkey: 'bob-new', gateway_url: GW });
   assert.ok(!(await bob.a.get('/api/v2/pushers')).body.pushers.some(p => p.pushkey === 'bob-new'));
   assert.equal((await bob.a.del('/api/v2/pushers/' + encodeURIComponent('bob-tablet/with+odd=chars'))).body.pushers.length, 0);
+});
+
+test('a busy or failing gateway is tried again; an answer that is not 2xx is logged', async () => {
+  push._setRetry([20, 20]);
+  await sleep(300); await push.idle(); got.length = 0;
+  const dan = await reg('dan'); // (nobody connected: carol is)
+  const danId = require('../src/auth').userByPrincipal(dan.user.id).id;
+  await dan.a.post('/api/v2/pushers', { app_id: 'a', pushkey: 'carol-retry', gateway_url: GW });
+  const errors = [], orig = console.error;
+  console.error = (...a) => errors.push(a.join(' '));
+  try {
+    answers.push(503, 429);
+    push.onOffline([danId], { cid: 'retry-1', id: 0, channel: 'x', from: 'alice', body: 'hello', sid: sid });
+    await until(() => got.filter(g => g.n.pushkey === 'carol-retry').length >= 3);
+    await push.idle();
+    assert.equal(got.filter(g => g.n.pushkey === 'carol-retry').length, 3); // two refusals, then delivered
+    assert.ok((await dan.a.get('/api/v2/pushers')).body.pushers.find(p => p.pushkey === 'carol-retry').last_ok_at);
+    // a refused signature is not retried, and it is said in the log
+    push._logged.clear(); got.length = 0;
+    answers.push(401);
+    push.onOffline([danId], { cid: 'retry-2', id: 0, channel: 'x', from: 'alice', body: 'again', sid: sid });
+    await until(() => got.some(g => g.n.pushkey === 'carol-retry'));
+    await push.idle();
+    assert.equal(got.filter(g => g.n.pushkey === 'carol-retry').length, 1);
+    assert.ok(errors.some(e => /\[push\] 127\.0\.0\.1:\d+: answered 401 invalid_signature/.test(e)), errors.join('|'));
+  } finally { console.error = orig; push._setRetry([1000, 4000, 15000]); }
 });
