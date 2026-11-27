@@ -99,9 +99,16 @@ async function accept(me, rawId) {
 function remove(me, rawId) {
   people.mine(me);
   const p = people.mustParse(rawId), my = people.fullId(me);
-  if (!drop(me.id, p.id, OPEN)) throw err('not_friends', 404);
-  if (p.local) drop(p.user.id, my, OPEN);
-  else s2s.later(p.domain, '/friend_remove', { from: my, to: p.id });
+  if (p.local) {
+    if (!drop(me.id, p.id, OPEN)) throw err('not_friends', 404);
+    drop(p.user.id, my, OPEN);
+    return list(me);
+  }
+  // an account elsewhere: idempotent. Its homeserver hears friend_remove whether or not this side still had a row, so a
+  // friendship only one side remembers (a removal lost on the way) is ended there too. A block here is not touched
+  if (row(me.id, p.id)?.state === 'blocked') throw err('not_friends', 404);
+  drop(me.id, p.id, OPEN);
+  s2s.later(p.domain, '/friend_remove', { from: my, to: p.id });
   return list(me);
 }
 // POST /api/v2/social/blocks/:id: whatever was between the two ends; nothing from them is accepted until it is lifted

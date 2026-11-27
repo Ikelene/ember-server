@@ -238,6 +238,19 @@ test('a request after a lost removal or a turned-down one waits to be accepted; 
   assert.deepEqual(ids((await friends(alice)).friends), [BOB]);
 });
 
+test('removing someone elsewhere is idempotent and ends a friendship only the other side still remembers', async () => {
+  await A.call('sql', { query: 'DELETE FROM friends' }); // alice's homeserver forgot; bob's still says friends
+  assert.ok(ids((await friends(bob)).friends).includes(ALICE));
+  const r = await alice.a.del(`/api/v2/social/friends/${enc(BOB)}`);
+  assert.equal(r.status, 200);
+  await settle();
+  assert.ok(!ids((await friends(bob)).friends).includes(ALICE));
+  assert.equal((await alice.a.del(`/api/v2/social/friends/${enc(BOB)}`)).status, 200); // again: fine
+  // friends again for the tests after this one
+  await alice.a.post('/api/v2/social/friends', { handle: 'bob@b.example' });
+  assert.equal((await bob.a.post(`/api/v2/social/friends/${enc(ALICE)}/accept`)).body.status, 'friends');
+});
+
 // ---------- keys ----------
 // (the home API that publishes them: social-e2ee.test.js)
 test('the key document of an account goes between homeservers unchanged', async () => {
