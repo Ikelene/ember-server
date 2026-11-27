@@ -39,6 +39,8 @@ docker compose logs bonfire | grep -A2 "not claimed"     # the setup code
 
 `docker-compose.yml` mounts `./data` at `/data` and uses `restart: unless-stopped` — keep that policy, the admin "restart" button relies on it (see below).
 
+Build from a **git clone** (`git clone https://github.com/Ikelene/ember-server`), not a downloaded zip: `docker build` reads the commit from the `.git` folder in the build context and bakes it into the image (`/app/build-info.json`), so the server knows which version it runs and Server info can tell you when a newer release is out. No build args needed. The published image `ghcr.io/ikelene/ember-server` (tags `latest` and the commit hash) works too: set `image: ghcr.io/ikelene/ember-server:latest` in `docker-compose.yml` instead of `build: .`.
+
 ## Configuration
 
 Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edit it by hand — the server watches the file and reloads it — or change it from the admin API (`GET/PATCH /api/v1/instance/settings`), which rewrites the file.
@@ -75,6 +77,9 @@ Settings live in **`DATA_DIR/config.json`** (created on first boot). You can edi
 | `BONFIRE_DISCORD_TOKEN`, `BONFIRE_FLUXER_TOKEN` | bridge bot tokens, used when none is saved in the instance settings (`PATCH /api/v1/bridge/settings`) |
 | `BONFIRE_MANAGED`, `BONFIRE_PLAN`, `BONFIRE_LIMITS` | Velora-hosted ("managed") instances: plan limits (member cap, upload size, emojis, sounds, bots, bridges, own voice keys) and locked settings. See "Velora-hosted" below, PROTOCOL §19 |
 | `BONFIRE_READ_ONLY` | `1` = refuse every write (reading, signing in and the export still work) |
+| `BONFIRE_UPDATE_CHECK` | `0` = never ask Nookara whether a newer release is out (Server info then says checks are off) |
+| `BONFIRE_LATEST_URL` | where the update check reads the latest release (default `https://nookara.cc/bonfire/server-latest.json`) |
+| `BONFIRE_BUILD_COMMIT`, `BONFIRE_BUILD_COMMIT_DATE`, `BONFIRE_BUILD_AT`, `BONFIRE_BUILD_ID`, `BONFIRE_BUILD_DIRTY` | the build identity, normally baked in at `docker build` (build args). You never need to set these: without them the server reads its `.git` checkout, then `build-info.json`. `BONFIRE_BUILD_FROM_GIT=0` skips the `.git` reading |
 | `BONFIRE_UPDATE_URL`, `BONFIRE_UPDATE_SECRET` | optional one-click "Update server": base URL of the host agent (`bonfire-hostd`) API as seen from this container (e.g. `http://172.17.0.1:8090`) and its bearer secret (`HOSTD_SECRET` or the narrower `HOSTD_CHAT_UPDATE_SECRET`). Unset, or `BONFIRE_MANAGED=1`: `GET /api/v1/instance/update` answers `supported:false` and `POST` answers `501`. See "Updating from the dashboard" |
 | `BONFIRE_IMPORT_ON_BOOT` | path of a `bonfire-export-v1` zip: imported once, as the owner, on a boot where the instance has no community yet, then deleted |
 | `BONFIRE_DEV` | `1` = development only: CloudLink bridges may connect to `ws://localhost`, private addresses and any port |
@@ -122,7 +127,20 @@ The client can play YouTube links "without YouTube": the instance downloads the 
 
 `POST /api/v1/instance/restart` (admins) answers `202`, tells connected clients `instance_restarting`, closes their sockets with code `4010` and exits with **code 75**. Something must start it again: Docker's `restart: unless-stopped`, systemd `Restart=always`, or the `npm run dev` loop. On `SIGTERM`/`SIGINT` the server shuts down cleanly (sockets closed with 1001, database flushed) and exits 0.
 
-## Updating from the dashboard
+## Updating
+
+Every server knows its own build (`GET /api/v1/instance/info` -> `build`): from the build args the release uses, else from the `.git` of the checkout it runs from (no git binary needed), else from the `build-info.json` that `docker build` writes from the `.git` in its build context. It compares that with the latest Nookara release (`https://nookara.cc/bonfire/server-latest.json`, every 10 minutes) and tells instance admins in Ember (Server settings > Server info) when it is out of date, with the steps for how it was installed. A self-hosted server **never updates itself**; you run the update:
+
+| installed as | update with |
+|---|---|
+| git checkout (`npm start`, systemd, pm2) | `git pull && npm ci --omit=dev`, then restart it (Server info has a Restart button; it needs something that starts it again, see "Restart behaviour") |
+| Docker, built from a git clone (`build: .`) | `git pull && docker compose up -d --build` |
+| Docker, published image (`image: ghcr.io/ikelene/ember-server:latest`) | `docker compose pull && docker compose up -d` |
+
+A server built from a zip / tarball (no `.git`, no build args) can't tell which version it runs; Server info says so. Reinstall from a git clone to fix it. A checkout that is ahead of the release (a newer commit, a fork) is not reported as outdated.
+
+### Updating from the dashboard (bonfire-hostd)
+
 
 An instance that runs in a container which `bonfire-hostd` can rebuild can update itself from Server settings -> Danger zone -> Update (instance admins). The instance never touches Docker: with `BONFIRE_UPDATE_URL` and `BONFIRE_UPDATE_SECRET` set it asks the host agent (`GET` / `POST /chat-update`, see `bonfire-hostd/README.md`), which rebuilds the image and recreates the container (the old image is put back when the new one is not healthy). `GET /api/v1/instance/update` (admins) returns `{ supported, reason?, current, latest?, running?, outdated?, update?, reachable? }`; `POST` answers `200 { ok, update }` right away and the server goes away for a minute while it is recreated. Errors: `501 update_not_supported` (not configured), `501 update_managed` (Velora-hosted instances are updated by the host), `409 update_in_progress`, `502 update_service_unreachable` / `update_service_rejected` / `update_service_error`. The secret is never sent to clients. The container needs to reach the host agent's API (`HOSTD_API_HOST` / `HOSTD_API_ALLOW`).
 

@@ -1,5 +1,8 @@
 services:
   bonfire:
+    # built from this git clone; `docker build` reads the commit from .git, so the server knows its version
+    # (update: git pull && docker compose up -d --build). Or use the published image instead of build + image below:
+    #   image: ghcr.io/ikelene/ember-server:latest      (update: docker compose pull && docker compose up -d)
     build: .
     image: bonfire-server
     restart: unless-stopped   # required: the admin "restart" button exits with code 75 and relies on this

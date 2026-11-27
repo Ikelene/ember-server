@@ -119,7 +119,7 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
   "claimed": true,
   "registration": "open" | "closed",
   "features": { "signing": true, "voice": false, "uploads": true, "youtube": false, "minecraft": true, "bridges": { "discord": false, "fluxer": false, "cloudlink": true } },
-  "build": { "version": "0.1.0", "commit": "<40 hex>" | null, "commit_short": "4eb45c9" | null, "commit_date": "<ISO 8601>" | null, "built_at": "<ISO 8601>" | null, "dirty": false, "build_id": "<commit, or commit+8 hex when dirty>" | null },
+  "build": { "source": "env" | "git" | "file" | null, "version": "0.1.0", "commit": "<40 hex>" | null, "commit_short": "4eb45c9" | null, "commit_date": "<ISO 8601>" | null, "built_at": "<ISO 8601>" | null, "dirty": false, "build_id": "<commit, or commit+8 hex when dirty>" | null },
   "max_upload_mb": 25,
   "managed": { "plan": "starter", "limits": { "member_cap": 30, "max_upload_mb": 10, "emojis": 50, "sounds": 10, "bots": 2, "bridges": false, "custom_voice_keys": false }, "host": "velora" } | null,
   "read_only": false,
@@ -137,7 +137,7 @@ Legacy Velora communities may be read-only: server objects include `read_only: b
 - `managed` is non-null on a Velora-hosted instance (§19.2): its plan and limits (`null` = unlimited). `features.bridges` is `false` when the plan has no bridges. `max_upload_mb` is already capped by the plan.
 - `read_only` is true while the instance refuses all writes (§19.3).
 - `previous_urls` lists earlier `public_url`s, newest first (a Velora-hosted server that moved, §19). On the first boot with a new `public_url` the instance rewrites stored copies of the old origin (uploads, icons, attachments, embeds; never the body of a signed message). Signatures name the origin a message was sent to (`instance`, §8), so a client re-checking an older signature tries `public_url` and then each of these.
-- `build` is the running server build (§5c). `commit` / `built_at` are `null` on a server not built by the release script (plain checkout).
+- `build` is the running server build (§5c). `source` says where the server learned it: `env` (`BONFIRE_BUILD_*` build args: the release script, bonfire-hostd), `git` (the `.git` of the checkout it runs from, read at start; `built_at` is `null`), `file` (`build-info.json`, which `docker build` writes from the `.git` in its build context) or `null` (none of them, e.g. a source tarball: `commit` is `null` and no update check is possible).
 
 ---
 
@@ -263,11 +263,13 @@ Restore validates the archive, takes an automatic safety backup with note `befor
   "admin": true,
   "runtime": { "node": "v22.23.3", "uptime_s": 12345, "started_at": "<ISO 8601>", "platform": "linux" },
   "stats": { "members": 12, "channels": 8, "messages": 4521, "upload_count": 80, "upload_bytes": 52428800, "db_bytes": 3145728, "bots": 2, "emojis": 14, "sounds": 3 },
-  "update": { "outdated": true, "latest": { "version": "0.1.0", "commit": "<40 hex>", "commit_short": "abc1234", "commit_date": "<ISO>", "built_at": "<ISO>", "build_id": "<id>", "dirty": false, "message": "<commit subject>" }, "checked_at": "<ISO>" } | null
+  "install": { "kind": "managed" | "host_agent" | "docker_image" | "docker_build" | "git" | "unknown", "image"?: "ghcr.io/ikelene/ember-server", "branch"?: "main", "dirty"?: false },
+  "update": { "outdated": true, "latest": { "version": "0.1.0", "commit": "<40 hex>", "commit_short": "abc1234", "commit_date": "<ISO>", "built_at": "<ISO>", "build_id": "<id>", "dirty": false, "message": "<commit subject>" }, "checked_at": "<ISO>" } | null,
+  "update_reason"?: "no_build_identity" | "check_disabled" | "unreachable"
 }
 ```
 
-`stats` is cached for 30 s. `update` is `null` when the server cannot tell (no `build.build_id`, `BONFIRE_UPDATE_CHECK=0`, Velora unreachable and nothing cached). The comparison is against **`GET https://nookara.cc/bonfire/server-latest.json`** (override: env `BONFIRE_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and `latest.built_at` is newer. Only admins ever see `update`.
+`stats` is cached for 30 s. `update` is `null` when the server cannot tell, and then `update_reason` says why: `no_build_identity` (no `build.build_id`), `check_disabled` (`BONFIRE_UPDATE_CHECK=0`) or `unreachable` (Nookara unreachable and nothing cached). Servers older than this field send `update: null` without a reason. `install.kind` is how the server was installed, so a client can say how to update it: `managed` (Nookara-hosted, updated by Nookara), `host_agent` (one-click through bonfire-hostd, §5b `POST /instance/update`), `docker_image` (a container from the published image: pull + recreate), `docker_build` (a container built from source: `git pull` + rebuild), `git` (a git checkout: `git pull`, `npm ci --omit=dev`, restart; `branch`, `dirty` = local changes), `unknown`. Containers are recognised by `/.dockerenv` / `/run/.containerenv` (or `BONFIRE_CONTAINER=1`), the published image by `BONFIRE_IMAGE`. A server never updates itself; only bonfire-hostd does that. The comparison is against **`GET https://nookara.cc/bonfire/server-latest.json`** (override: env `BONFIRE_LATEST_URL`), which returns the object that appears as `update.latest` (plus `published_at`). The server caches it for 1 hour (10 minutes after a failure) and fails silently. `outdated` is true when `latest.build_id` differs from `build.build_id` and the release is newer: by `commit_date` when the commits differ (a self-built image's `built_at` is only when its admin built it), else by `built_at`. A self-built server (`source` git / file) on the released commit is current. Only admins ever see `update`.
 
 Release flow (operators): `/root/bonfire-release.sh` on the Proxmox host builds the image on the Docker LXC with the commit baked in (`BONFIRE_BUILD_*` build args), publishes `server-latest.json` (`POST VELORA/bonfire/server-latest`, Bearer = the hostd secret), and bonfire-hostd (`POST /update-all`) recreates every hosted container on the new image one at a time, health-checked, rolled back on failure. bonfire-hostd also does this check every 10 minutes by itself.
 
