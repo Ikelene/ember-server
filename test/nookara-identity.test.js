@@ -241,7 +241,7 @@ test('a v: account starts a DM with a remote member: hosted here, pointers to th
   assert.equal((await nat.post(`/api/v1/channels/${dm.channel}/messages`, { enc: nke1.sealed('hi remi') })).status, 200);
   dms._test.flush(); await s2s.idle();
   const act = seen.remote.find(x => x.path === '/_ember/s2s/v1/dm_activity');
-  assert.deepEqual([act.body.to, act.body.dm, act.body.sender.id], ['l:1@m.example', dm.id, `v:77@${DOMAIN}`]);
+  assert.deepEqual([act.body.to, act.body.dm, act.body.sender.id, act.body.e2ee], ['l:1@m.example', dm.id, `v:77@${DOMAIN}`, true]);
 
   // remi, signed in here from m.example, answers: nat's activity goes to social.s2s_url
   remoteHs.aud = pub;

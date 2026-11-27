@@ -256,7 +256,7 @@ function onPost(msg, ctx, meta) {
   for (const u of membersOf(c)) {
     const peer = peerOf(u);
     if (!peer || u.id === meta.userId) continue;
-    const key = `${c.id}|${u.id}`, e = pending.get(key) || { domain: peer.domain, community: c.id, user: u.id, body: { dm: idOf(c), to: peer.to, count: 0, mention: false } };
+    const key = `${c.id}|${u.id}`, e = pending.get(key) || { domain: peer.domain, community: c.id, user: u.id, body: { dm: idOf(c), to: peer.to, count: 0, mention: false, e2ee: true } }; // (every DM hosted here is end-to-end encrypted, §4d)
     // (messages are sealed, PROTOCOL §4d: no preview, and nobody here can tell who is mentioned)
     Object.assign(e.body, { last_message_id: String(msg.id), count: e.body.count + 1, mention: false, name: isGroup(c) ? c.name || null : null,
       sender: author ? { id: people.fullId(author), display_name: author.display_name || author.username } : null });
