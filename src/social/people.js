@@ -135,9 +135,14 @@ function cleanProfile(o, id) {
     presence: { status, ...(activity ? { activity } : {}) }, updated_at: Number.isFinite(o.updated_at) ? o.updated_at : null };
 }
 // the profile of an account of another homeserver: asked over s2s, kept for ten minutes; an old copy is better than none
+// the presence of accounts elsewhere as their homeservers last said it (s2s presence, friends.js): kept in memory, so a list
+// or a profile shows it at once instead of "offline" until the next change. id -> { status, at }
+const remotePresence = new Map();
+const notePresence = (id, status) => { if (remotePresence.size > 100000) remotePresence.clear(); remotePresence.set(id, { status, at: now() }); };
+const withPresence = (p, at) => { const r = remotePresence.get(p.id); return r && r.at >= (at || 0) ? { ...p, presence: { ...(p.presence || {}), status: r.status } } : p; };
 async function profile(id, { fresh = false } = {}) {
   const hit = cached('profile', id);
-  if (hit && !fresh && now() - hit.at < CACHE_TTL) return hit.body;
+  if (hit && !fresh && now() - hit.at < CACHE_TTL) return withPresence(hit.body, hit.at);
   const domain = R.parseSub(id).domain;
   try {
     const p = cleanProfile(await s2s.call(domain, 'GET', '/profile/' + encodeURIComponent(id)), id);
@@ -182,4 +187,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, fullId, handleOf, snippetOf, snippet, cleanSnippet, parseId, mustParse, mine, mineForDms, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };
+module.exports = { remotePresence, notePresence, register, fullId, handleOf, snippetOf, snippet, cleanSnippet, parseId, mustParse, mine, mineForDms, find, findById, lookupLocal, profile, getProfile, localProfile, refreshLater, cached, remember, absolute, CACHE_TTL, _test: { lookupLimit } };

@@ -460,7 +460,7 @@ All under `<s2s_url>`; all `POST` unless marked.
 | `dm_activity` | `{ dm, to, last_message_id, count?, mention?, sender?, name?, e2ee? }`, see 4c.4 | `{ ok: true }`. `410 pointer_gone`, `403 dm_host_mismatch` |
 | `GET profile/<id>` | - | the profile, see 4c.5. `404 user_not_found` |
 | `GET keys/<id>` | - | the account's key document (`{ id, keys: [] }` when it has none), see 4c.6. `404 user_not_found` |
-| `presence` | `{ from, status }` (`online`, `idle`, `dnd`, `offline`) | `{ ok: true }`. Optional: sent when an account connects or leaves, to the homeservers its friends are on; the receiver tells `from`'s friends' connected clients and stores nothing |
+| `presence` | `{ from, status }` (`online`, `idle`, `dnd`, `offline`) | `{ ok: true }`. Optional: sent when an account connects or leaves, to the homeservers its friends are on; the receiver tells `from`'s friends' connected clients and keeps the last status in memory (friends lists and profiles show it) |
 
 `<id>` in a path is the URL-encoded stable id.
 
@@ -471,7 +471,7 @@ All under `<s2s_url>`; all `POST` unless marked.
 | route | result |
 |---|---|
 | `GET /api/v2/users/lookup?handle=<name>` (public, on **every** homeserver; 60 a minute per address) | `{ id, handle, display_name, avatar_url }` of an account hosted there. `<name>@<domain>` is accepted when the domain is its own (`404 wrong_homeserver` otherwise); `404 user_not_found` |
-| `GET /api/v2/social/friends` | `{ friends: [...], incoming: [...], outgoing: [...], blocked: [...] }`, each entry the short form plus `since` (ms) and, for requests, `message` |
+| `GET /api/v2/social/friends` | `{ friends: [...], incoming: [...], outgoing: [...], blocked: [...] }`, each entry the short form plus `since` (ms) and, for requests, `message`. A friend also has `presence: { status }` when it is known: connected or not for an account here; for one elsewhere, what its homeserver last sent (`presence`, 4c.1) or the profile fetched of it. A client starts from these and follows `social_presence` |
 | `POST /api/v2/social/friends { handle }` or `{ id }`, optional `message` | `{ status: "pending" \| "friends", friend }`. `handle` is `alice` (here) or `alice@b.example`: the homeserver finds `b.example` (§4b), asks its `lookup`, then sends `friend_request`. Asking someone who already asked you accepts. Asking again while your earlier request waits sends it again (the other side may have turned it down). A `friend_request` from someone the receiver still counts as a friend means their side lost the friendship (a removal that never arrived): the receiver turns it into a request to accept, never a friendship nobody agreed to. `400 cannot_friend_yourself`, `404 user_not_found`, `403 blocked` (they blocked you), `409 user_blocked` (you blocked them), `409 too_many_friends { limit: 1000 }`, `429 rate_limited` (30 an hour), plus the other homeserver's and the sender-side errors of 4c.1 |
 | `POST /api/v2/social/friends/<id>/accept` | `{ status: "friends", friend }`. `404 no_request` |
 | `DELETE /api/v2/social/friends/<id>` | the lists again: unfriends, takes a request back or turns one down. `404 not_friends` |

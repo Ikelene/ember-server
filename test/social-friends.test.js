@@ -181,6 +181,10 @@ test('friends see each other connect, across homeservers', async () => {
   const aliceWs = await wsClient(A.url).login(alice.session); sockets.push(aliceWs);
   const ev = await bobWs.waitFor(f => f.type === 'social_presence' && f.id === ALICE, 6000);
   assert.equal(ev.status, 'online');
+  // and it is kept: bob's friends list shows it at once (a client that just loaded is not left with "offline"), and
+  // alice's shows bob, an account of her friend's homeserver, as its homeserver said
+  assert.deepEqual((await friends(bob)).friends.find(f => f.id === ALICE).presence, { status: 'online' });
+  await until(async () => (await friends(alice)).friends.find(f => f.id === BOB)?.presence?.status === 'online');
   db.run("UPDATE social_cache SET fetched_at = 0 WHERE id = ?", ALICE);
   assert.equal((await bob.a.get(`/api/v2/social/profile/${enc(ALICE)}`)).body.profile.presence.status, 'online');
   // amy is nobody's friend on B: her homeserver does not say whether she is connected... and bob's is shown to alice only

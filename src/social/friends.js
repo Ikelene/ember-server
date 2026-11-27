@@ -46,7 +46,17 @@ function list(me) {
   people.mine(me);
   const rows = db.all("SELECT * FROM friends WHERE user_id = ? AND state <> 'blocked_by' ORDER BY updated_at DESC, peer", me.id);
   people.refreshLater(rows.map(r => r.peer));
-  const of = state => rows.filter(r => r.state === state).map(r => ({ ...people.snippet(r.peer), since: r.updated_at, ...(r.message ? { message: r.message } : {}) }));
+  // a friend's presence: an account here, whether it is connected; one elsewhere, what its homeserver last said (s2s
+  // presence), else the profile we have of it, else not known
+  const statusOf = peer => {
+    const p = people.parseId(peer);
+    if (p?.local) return gateway().isOnline(p.user.id) ? 'online' : 'offline';
+    return people.remotePresence.get(peer)?.status || people.cached('profile', peer)?.body?.presence?.status || null;
+  };
+  const of = state => rows.filter(r => r.state === state).map(r => {
+    const st = state === 'friend' ? statusOf(r.peer) : null;
+    return { ...people.snippet(r.peer), since: r.updated_at, ...(r.message ? { message: r.message } : {}), ...(st ? { presence: { status: st } } : {}) };
+  });
   return { friends: of('friend'), incoming: of('incoming'), outgoing: of('outgoing'), blocked: of('blocked') };
 }
 
@@ -179,6 +189,7 @@ function register(app) {
     if (!from || !PRESENCE.includes(req.body.status)) throw err('invalid_request', 400);
     if (from.domain !== hs.domain) throw err('from_mismatch', 403);
     const id = `${from.id}@${from.domain}`;
+    people.notePresence(id, req.body.status);
     for (const f of db.all("SELECT user_id FROM friends WHERE peer = ? AND state = 'friend'", id)) gateway().pushToUser(f.user_id, { type: 'social_presence', id, status: req.body.status });
     return { ok: true };
   });
