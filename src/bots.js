@@ -79,7 +79,8 @@ function create(me, { name, description, sid } = {}) {
   checkName(name);
   const cid = limitCid(sid);
   L.assertRoom('bots', managed.botCount(sid ? cid : null), cid);
-  if (db.get('SELECT COUNT(*) AS n FROM bots').n >= MAX_BOTS) throw err('too_many_bots');
+  // (MAX_BOTS is per owner: a homeserver holds the bots of all its accounts, so a cap for the whole homeserver would stop everyone)
+  if (db.get('SELECT COUNT(*) AS n FROM bots WHERE owner_id = ?', me.id).n >= MAX_BOTS) throw err('too_many_bots');
   const id = db.tx(() => {
     const r = db.run("INSERT INTO users (principal, kind, username, display_name, username_lc, created_at) VALUES ('pending', 'bot', ?, ?, ?, ?)", name, name, name.toLowerCase(), now());
     db.run('UPDATE users SET principal = ? WHERE id = ?', 'b:' + r.lastInsertRowid, r.lastInsertRowid);
