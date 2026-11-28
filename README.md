@@ -2,9 +2,9 @@
 
 > Formerly **Bonfire** / `bonfire-server`, with Nookara formerly called Velora. Ember is an open chat protocol: anyone can write an Ember client and use or run Ember servers. See [Upgrading from bonfire-server](#upgrading-from-bonfire-server) for what was renamed and what still accepts the old names.
 
-A small, self-hostable chat server: communities, text + voice channels, special channel types (logs, welcome, link, roles shop, starboard, Minecraft), roles and permissions, invites, join requests, uploads, webhooks, bots, Discord / Fluxer / CloudLink bridges, soundboard, link previews, mentions, message signing and full export / import. One Node process, one SQLite file, no external services (voice uses your own Cloudflare Realtime account).
+A small, self-hostable chat **homeserver**: many servers (communities) at addresses like `camp@your.domain`, text + voice channels, special channel types (logs, welcome, link, roles shop, starboard, Minecraft), roles and permissions, invites, join requests, uploads, webhooks, bots, Discord / Fluxer / CloudLink bridges, soundboard, link previews, mentions, message signing and full export / import. It hosts accounts (its own, or Nookara accounts), and its people can join servers, make friends and DM people on other homeservers. One Node process, one SQLite file, no external services (voice uses your own Cloudflare Realtime account).
 
-It implements the **Ember Instance Protocol v1** - see [PROTOCOL.md](./PROTOCOL.md) - so the Ember web, desktop and Android clients can talk to it, as well as any other clients made by anyone else. Licensed AGPL-3.0-or-later.
+It implements the **Ember protocol** - see [PROTOCOL.md](./PROTOCOL.md). That is protocol v2: homeservers, accounts and sign-in, federation between homeservers, friends and DMs, and channel permissions. v1 clients keep working: they see one server per instance as before. The Ember web, desktop and Android clients talk to it, as can any other client made by anyone else. Licensed AGPL-3.0-or-later.
 
 ## Quick start
 
@@ -38,6 +38,25 @@ docker compose logs ember | grep -A2 "not claimed"     # the setup code
 ```
 
 `docker-compose.yml` mounts `./data` at `/data` and uses `restart: unless-stopped` — keep that policy, the admin "restart" button relies on it (see below).
+
+## Upgrading
+
+With Docker:
+
+```sh
+git pull
+docker compose build
+docker compose up -d --remove-orphans
+docker compose logs ember | grep "\[db\]"     # "backed up the database before updating it (...)"
+```
+
+Without Docker: stop the server, `git pull`, `npm ci --omit=dev`, start it again.
+
+**The database is backed up first.** When a new version has database migrations to run, the server first writes a consistent copy of the database to `data/backups/ember.db.pre-v<from>-to-v<to>-<time>`. The copy is made with SQLite's `VACUUM INTO`, which is safe while the server's write-ahead log is in use. The newest 3 copies are kept. If the copy cannot be written (for example a full disk), **nothing is migrated and the server does not start**, and the log says why. Fix that, or start once with `EMBER_SKIP_MIGRATION_BACKUP=1` to update without a copy. A new, empty database is not copied. An old `bonfire.db` is renamed to `ember.db` first, so the copy is of the database being updated.
+
+**Going back.** Stop the server, put the previous version's code back (`git checkout <previous tag>`, then rebuild), and replace `data/ember.db` with the copy. Remove `data/ember.db-wal` and `data/ember.db-shm` before you start it. Newer databases do not open on older versions without this.
+
+**`--remove-orphans` matters once, coming from bonfire-server.** The compose service was renamed from `bonfire` to `ember`. Both use the same `./data` and port 4100. Without `--remove-orphans`, the old `bonfire` container keeps running, so the new one cannot bind the port, and two servers would use one database. `docker compose up` warns about the orphan container. `--remove-orphans` stops and removes it.
 
 ## Configuration
 
@@ -78,6 +97,7 @@ Everything was renamed: Bonfire is Ember and Velora is Nookara. An existing inst
 | variable | meaning |
 |---|---|
 | `EMBER_DATA` | data directory (default `./data`): `ember.db`, `uploads/`, `config.json`, `setup-code.txt` |
+| `EMBER_SKIP_MIGRATION_BACKUP` | `1` = update the database without the copy it makes first (see [Upgrading](#upgrading)); only when that copy cannot be made |
 | `PORT` | listen port (default `4100`) |
 | `EMBER_HOST` | Address to listen on. Default `::` (IPv4 + IPv6), falling back to `0.0.0.0` when the host has no IPv6 |
 | `EMBER_PUBLIC_URL` | overrides `public_url` |

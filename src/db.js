@@ -452,12 +452,38 @@ function adoptLegacyFile(dir) {
   console.log(`[db] renamed ${LEGACY_DB_FILE} to ${DB_FILE}`);
 }
 
+// Before migrating a database that has data (an update: git pull + docker compose up), a consistent copy of it goes to
+// DATA_DIR/backups/ember.db.pre-v<from>-to-v<to>-<time> (VACUUM INTO: safe with the WAL live). The newest 3 are kept. If the
+// copy fails, nothing is migrated and the server does not start; EMBER_SKIP_MIGRATION_BACKUP=1 migrates without one.
+const KEEP_MIGRATION_BACKUPS = 3;
+function backupBeforeMigrating(from, to) {
+  if (['1', 'true', 'yes'].includes(String(process.env.EMBER_SKIP_MIGRATION_BACKUP || '').toLowerCase())) { console.warn(`[db] migrating v${from} -> v${to} WITHOUT a backup (EMBER_SKIP_MIGRATION_BACKUP)`); return null; }
+  const dir = path.join(config.dir(), 'backups');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(dir, `${DB_FILE}.pre-v${from}-to-v${to}-${stamp}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  } catch (e) {
+    try { fs.rmSync(file, { force: true }); } catch { /* none */ }
+    close();
+    throw Object.assign(new Error(`Could not back up the database before updating it (v${from} -> v${to}): ${e.message}. Nothing was changed. Free some disk space or fix ${dir}, or start with EMBER_SKIP_MIGRATION_BACKUP=1 to update without a backup.`), { code: 'migration_backup_failed' });
+  }
+  console.log(`[db] backed up the database before updating it (v${from} -> v${to}): ${file}`);
+  const old = fs.readdirSync(dir).filter(f => f.startsWith(`${DB_FILE}.pre-v`)).sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs || b.localeCompare(a));
+  for (const f of old.slice(KEEP_MIGRATION_BACKUPS)) { try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* still there */ } }
+  return file;
+}
+let lastMigrationBackup = null;
+
 function open() {
   close();
-  adoptLegacyFile(config.dir());
+  adoptLegacyFile(config.dir()); // (bonfire.db becomes ember.db first: the backup is of the database that will be migrated)
   db = new DatabaseSync(path.join(config.dir(), DB_FILE));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;');
   const have = db.prepare('PRAGMA user_version').get().user_version;
+  lastMigrationBackup = null;
+  if (have > 0 && have < MIGRATIONS.length) lastMigrationBackup = backupBeforeMigrating(have, MIGRATIONS.length); // (a new, empty database has nothing to keep)
   for (let v = have; v < MIGRATIONS.length; v++) tx(() => { const m = MIGRATIONS[v]; if (typeof m === 'function') m(db); else db.exec(m); db.exec(`PRAGMA user_version = ${v + 1}`); });
   return db;
 }
@@ -488,4 +514,4 @@ const metaGet = k => get('SELECT v FROM meta WHERE k = ?', k)?.v ?? null;
 const metaSet = (k, v) => run('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', k, v);
 const metaDel = k => run('DELETE FROM meta WHERE k = ?', k);
 
-module.exports = { open, close, get, all, run, tx, inList, metaGet, metaSet, metaDel, raw: () => db };
+module.exports = { open, close, lastMigrationBackup: () => lastMigrationBackup, migrationCount: () => MIGRATIONS.length, get, all, run, tx, inList, metaGet, metaSet, metaDel, raw: () => db };
