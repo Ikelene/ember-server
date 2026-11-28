@@ -61,7 +61,8 @@ function exportCommunity(sid, me) {
     invite_code: c.invite_code, // the server's own permanent code (old links carry it)
     bridges: bridgesOf(c), // linked Discord / Fluxer guilds and Matrix rooms with their channel maps (no tokens, no webhooks)
   };
-  files['manifest.json'] = strToU8(JSON.stringify({ format: FORMAT, source: origin(), source_kind: 'instance', exported_at: now(), community: c.sid }));
+  // previous_urls: this instance's earlier addresses, newest first (its messages may be signed for one of them, moved-signatures.js)
+  files['manifest.json'] = strToU8(JSON.stringify({ format: FORMAT, source: origin(), source_kind: 'instance', exported_at: now(), community: c.sid, previous_urls: require('./public-url').ownPreviousUrls() }));
   files['community.json'] = strToU8(JSON.stringify(community, null, 1));
 
   const members = db.all('SELECT u.*, m.joined_at FROM members m JOIN users u ON u.id = m.user_id WHERE m.community_id = ? ORDER BY m.joined_at, u.id', c.id);
@@ -333,7 +334,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
           m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null, stickerMap.get(m.sticker) ?? null);
         const nid = Number(res.lastInsertRowid);
         idMap.set(String(m.id), nid);
-        if (sig) { const cands = MS.candidates(m, { source: manifest.source, community: manifest.community, channel: oldCid }); if (cands.length) { db.run('UPDATE messages SET sig_orig = ? WHERE id = ?', JSON.stringify(cands[0]), nid); sigJobs.push({ id: nid, sig, cands }); } }
+        if (sig) { const { cands, why } = MS.candidates(m, { source: manifest.source, origins: [...(Array.isArray(manifest.previous_urls) ? manifest.previous_urls : []), ...(Array.isArray(opts.origins) ? opts.origins : [])], community: manifest.community, channel: oldCid }); if (cands.length) db.run('UPDATE messages SET sig_orig = ? WHERE id = ?', JSON.stringify(cands[0]), nid); sigJobs.push({ id: nid, sig, cands, why, m }); }
         if (u?.kind === 'bot' && m.alias && typeof m.alias === 'object') { // a bot's alias survives only when the author is still that bot
           try { const al = require('./messages').cleanAlias(u, m.alias); if (al) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', al.name, al.avatar, nid); } catch { /* invalid alias: drop it */ }
         }

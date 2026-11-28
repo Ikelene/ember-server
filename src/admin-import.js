@@ -60,9 +60,9 @@ function register(app) {
     if (!buffer) throw err('no_file');
     let bridges;
     if (fields.bridges !== undefined) { try { bridges = JSON.parse(fields.bridges); } catch { bridges = null; } if (!Array.isArray(bridges)) throw err('invalid_bridges'); }
-    const bots = botsField(fields);
+    const bots = botsField(fields), origins = originsField(fields);
     const report = {};
-    const c = exp.importCommunity(owner, buffer, null, { trusted: true, slug, inviteCode: typeof req.query.invite_code === 'string' ? req.query.invite_code : undefined, bridges, bots, report });
+    const c = exp.importCommunity(owner, buffer, null, { trusted: true, slug, inviteCode: typeof req.query.invite_code === 'string' ? req.query.invite_code : undefined, bridges, bots, origins, report });
     if (slug && c.slug !== slug) throw err('slug_taken', 409, { slug, sid: c.sid }); // (taken while it was uploading)
     if (prev) rememberOrigin(prev);
     // each bridge as this homeserver's bot sees it: not set up here, or not in that guild (the owner invites it again)
@@ -76,17 +76,20 @@ function register(app) {
       return { ...b, ...(problem ? { problem, action: problem === 'bot_not_in_server' ? 'reinvite_bot' : problem === 'bridge_not_set_up' ? 'homeserver_bot_needed' : problem === 'matrix_bot_needed' ? 'owner_sets_matrix_bot' : problem === 'guild_already_linked' ? 'resolve_conflict' : 'check' } : {}) };
     });
     const main = require('./db').get('SELECT invite_code FROM communities WHERE id = ?', c.id).invite_code;
-    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut, members: report.members || { added: 0, already: 0, skipped: [] }, bots: report.bots || [], signatures: (await report.signatureCheck) || null };
+    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut, members: report.members || { added: 0, already: 0, skipped: [] }, bots: report.bots || [], signatures: rememberSigned(await report.signatureCheck, []) };
   });
   // POST /api/v2/homeserver/import/signatures?sid=<sid> (multipart `file`: the export the server was imported from): its signed
   // messages get the payload they were signed as and are checked again (for servers imported before that was kept). Safe to repeat.
-  // -> { sid, matched, missing, checked, verified, failed, unknown }
+  // Optional `origins` (JSON array): more origins the messages may have been signed under (the old instance's earlier addresses).
+  // Origins that verified, and the ones given, join previous_urls.
+  // -> { sid, matched, missing, checked, verified, failed, unknown, skipped, failed_reasons, failed_traits, failed_samples, origins }
   app.post('/api/v2/homeserver/import/signatures', { admin: true }, async req => {
     const c = db.get("SELECT * FROM communities WHERE sid = ? AND kind = 'server'", String(req.query?.sid || ''));
     if (!c) throw err('server_not_found', 404);
-    const { buffer } = await uploads.readMultipart(req, { maxBytes: 1024 * 1024 * 1024, fieldSize: 512 * 1024 });
+    const { buffer, fields } = await uploads.readMultipart(req, { maxBytes: 1024 * 1024 * 1024, fieldSize: 512 * 1024 });
     if (!buffer) throw err('no_file');
-    return { sid: c.sid, ...(await require('./moved-signatures').backfill(c, exp.readExport(buffer))) };
+    const origins = originsField(fields) || [];
+    return { sid: c.sid, ...rememberSigned(await require('./moved-signatures').backfill(c, exp.readExport(buffer), origins), origins) };
   });
   // POST /api/v2/homeserver/import/bots?sid=<sid> (multipart `file`: the export the server was imported from; optionally `bots`:
   // JSON, its bots when the export does not carry them, scripts/export-bots.js) -> { sid, bots, members, messages, mentions }.
@@ -99,6 +102,21 @@ function register(app) {
     const bots = botsField(fields);
     return { sid: c.sid, ...botsInto(c, exp.readExport(buffer), bots) };
   });
+}
+function originsField(fields) {
+  if (fields.origins === undefined) return undefined;
+  let v; try { v = JSON.parse(fields.origins); } catch { v = null; }
+  if (!Array.isArray(v) || v.length > 50) throw err('invalid_origins');
+  const out = v.map(o => (typeof o === 'string' ? normalizeOrigin(o) : null));
+  if (out.some(o => !o)) throw err('invalid_origins');
+  return out;
+}
+// the origins signed messages verified under (and those given) join previous_urls, where clients look for signed.instance
+function rememberSigned(res, given) {
+  if (!res) return res;
+  const own = normalizeOrigin(config.publicUrl());
+  for (const o of new Set([...(given || []), ...(res.origins || [])])) if (o && o !== own) rememberOrigin(o);
+  return res;
 }
 function botsField(fields) {
   if (fields.bots === undefined) return undefined;

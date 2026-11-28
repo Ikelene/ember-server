@@ -72,6 +72,10 @@ function checkPublicUrl() {
 
 // earlier origins, newest first (signatures of messages sent before a move name the old instance origin: clients try these too)
 // earlier addresses of this homeserver, newest first, then those of servers that moved here (admin-import.js)
+// this instance's own earlier addresses, newest first
+function ownPreviousUrls() {
+  try { const h = JSON.parse(db.metaGet('public_url_history') || '[]'); return Array.isArray(h) ? h.filter(x => typeof x === 'string').reverse() : []; } catch { return []; }
+}
 function previousUrls() {
   let own = [];
   try { const h = JSON.parse(db.metaGet('public_url_history') || '[]'); own = Array.isArray(h) ? h.filter(x => typeof x === 'string').reverse() : []; } catch { own = []; }
@@ -79,4 +83,4 @@ function previousUrls() {
   return [...new Set([...own, ...moved])];
 }
 
-module.exports = { checkPublicUrl, previousUrls, rewrite, textColumns };
+module.exports = { checkPublicUrl, previousUrls, ownPreviousUrls, rewrite, textColumns };

@@ -27,8 +27,9 @@ const idp = fakeIdp({ iss: 'https://nookara.cc' });
 const dir = tmpDir();
 let inst, a, session, zip, src;
 const db = () => require('../src/db');
-const upload = async (p, qs) => {
+const upload = async (p, qs, fields = {}) => {
   const f = new FormData(); f.append('file', new Blob([zip]), 'server.zip');
+  for (const [k, v] of Object.entries(fields)) f.append(k, typeof v === 'string' ? v : JSON.stringify(v));
   const r = await fetch(`${inst.url}${p}?${new URLSearchParams(qs)}`, { method: 'POST', headers: { Authorization: 'Bearer ' + session }, body: f });
   return { status: r.status, body: await r.json() };
 };
@@ -62,6 +63,13 @@ test('setup: signed messages (one a year old, a reply, one altered after signing
   const ch = db().get('SELECT id FROM channels WHERE cid = ?', cid), u = db().get("SELECT id FROM users WHERE principal = 'v:123'");
   const p = signing.buildPayload({ iss: 'https://nookara.cc', instance: 'https://chat.test', community: sid, channel: cid, author: '123', ts: old, nonce, body: 'from last year', attachments: [] });
   db().run('INSERT INTO messages (channel_id, user_id, body, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)', ch.id, u.id, 'from last year', old, KID, crypto.sign(null, signing.signingBytes(p), dev.privateKey).toString('base64url'), old, nonce);
+  // signed under the instance's earlier addresses: one in its history (the export says so), one only the importer knows
+  db().metaSet('public_url_history', JSON.stringify(['https://e_signed.nookara.cc']));
+  for (const [instance, body] of [['https://e_signed.nookara.cc', 'from the old address'], ['https://signed-bonfire.example', 'from the oldest address']]) {
+    const ts = Date.now() - 200 * 864e5, n = 'n-' + crypto.randomBytes(6).toString('hex');
+    const pl = signing.buildPayload({ iss: 'https://velora.ikelene.net', instance, community: sid, channel: cid, author: '123', ts, nonce: n, body, attachments: [] });
+    db().run('INSERT INTO messages (channel_id, user_id, body, created_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)', ch.id, u.id, body, ts, KID, crypto.sign(null, signing.signingBytes(pl), dev.privateKey).toString('base64url'), ts, n);
+  }
   src = { sid, cid };
   const r = await fetch(`${inst.url}/api/v1/servers/${sid}/export`, { headers: { Authorization: 'Bearer ' + session } });
   zip = Buffer.from(await r.arrayBuffer());
@@ -71,10 +79,17 @@ let moved;
 test('the import keeps what each was signed as and checks it; the view carries it and a client can check it', async () => {
   const r = await upload('/api/v2/homeserver/import', { owner: 'v:123', slug: 'moved', previous_url: 'https://e-signed.nookara.cc' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.signatures, { checked: 4, verified: 3, failed: 1, unknown: 0 });
+  const sg = r.body.signatures;
+  assert.deepEqual([sg.checked, sg.verified, sg.failed, sg.unknown], [6, 4, 2, 0]);
+  assert.deepEqual(sg.failed_reasons, { bad_signature: 2 });
+  assert.equal(sg.failed_samples.length, 2);
+  assert.deepEqual(sg.origins.sort(), ['https://chat.test', 'https://e_signed.nookara.cc']);
   moved = r.body.sid;
   const msgs = await messagesOf(moved);
   const by = b => msgs.find(m => m.body === b);
+  assert.equal(by('from the old address').signature.moved_from, 'https://e_signed.nookara.cc');
+  assert.ok(clientCheck(by('from the old address').signature));
+  assert.ok((await api(inst.url).get('/.well-known/ember')).body.previous_urls.includes('https://e_signed.nookara.cc'), 'the origin it verified under is in previous_urls');
   for (const b of ['signed hello', 'signed reply', 'from last year']) {
     const m = by(b);
     assert.equal(m.verified, true, b);
@@ -102,10 +117,14 @@ test('backfill: a server imported before sig_orig was kept gets it from its expo
   db().run('UPDATE messages SET sig_orig = NULL, verified = 0 WHERE channel_id IN (SELECT id FROM channels WHERE community_id = ?)', c.id);
   assert.equal((await upload('/api/v2/homeserver/import/signatures', { sid: 'nope' })).status, 404);
   for (let i = 0; i < 2; i++) {
-    const b = await upload('/api/v2/homeserver/import/signatures', { sid: r.body.sid });
+    const b = await upload('/api/v2/homeserver/import/signatures', { sid: r.body.sid }, { origins: ['https://signed-bonfire.example/'] });
     assert.equal(b.status, 200, JSON.stringify(b.body));
-    assert.deepEqual([b.body.matched, b.body.missing, b.body.verified, b.body.failed], [4, 0, 3, 1]);
+    assert.deepEqual([b.body.matched, b.body.missing, b.body.verified, b.body.failed], [6, 0, 5, 1]);
   }
   const m = (await messagesOf(r.body.sid)).find(x => x.body === 'from last year');
   assert.deepEqual([m.verified, m.signature.moved_from], [true, 'https://chat.test']);
+  const oldest = (await messagesOf(r.body.sid)).find(x => x.body === 'from the oldest address');
+  assert.deepEqual([oldest.verified, oldest.signature.moved_from], [true, 'https://signed-bonfire.example']);
+  assert.ok((await api(inst.url).get('/.well-known/ember')).body.previous_urls.includes('https://signed-bonfire.example'));
+  assert.equal((await upload('/api/v2/homeserver/import/signatures', { sid: r.body.sid }, { origins: 'nope' })).body.error, 'invalid_origins');
 });
