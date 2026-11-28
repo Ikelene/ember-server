@@ -84,7 +84,7 @@ const SIGN_CONTEXT = {
   game: 'bonfire-gw-v1',            // Minecraft plugin identity proof (PROTOCOL §18)
 };
 // JWT types: written as the old ones; receipts are accepted under either name
-const TYP = { owner: 'bonfire-owner+jwt', botAdd: 'bonfire-botadd+jwt', receipt: 'bonfire-receipt+jwt' };
+const TYP = { owner: 'bonfire-owner+jwt', botAdd: 'bonfire-botadd+jwt', receipt: 'bonfire-receipt+jwt', serverPayee: 'ember-server-payee+jwt' };
 const RECEIPT_TYPS = ['bonfire-receipt+jwt', 'ember-receipt+jwt'];
 
 // ---------------------------------------------------------------- things clients and bots see (TODO protocol v2)

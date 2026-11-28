@@ -47,6 +47,42 @@ function shopView(cid, me) {
   return out;
 }
 
+// ---------- payouts (PROTOCOL §12.5a): a server's paid roles pay its owner ----------
+// the pay request's server fields: Nookara pays the account the owner linked to this server, or (no link) an owner that is a
+// Nookara account when it trusts this homeserver's word for it
+const payments = () => require('../payments');
+function sellerOf(c) {
+  const o = auth.userById(c.owner_id);
+  if (!o) return { server: c.sid, server_owner: 'none:' + c.owner_id };
+  const own = o.nookara_id && o.kind !== 'remote' ? String(o.nookara_id) : null;
+  return { server: c.sid, server_owner: payments().accountId(o), ...(own ? { server_owner_nookara: own } : {}) };
+}
+function payoutServer(sid, me) {
+  const c = C.findCommunity(sid);
+  const snap = C.snapOf(c);
+  if (!snap.isOwner(me.id) && !snap.can(me.id, P.MANAGE_ROLES)) throw err('not_allowed', 403);
+  return c;
+}
+// GET /api/v2/servers/:sid/payout (owner / Manage roles): where its paid roles pay out
+async function payout(sid, me) {
+  const c = payoutServer(sid, me);
+  const owner = Number(c.owner_id) === Number(me.id);
+  if (!client.registered()) return { available: false, linked: false, payee: null, you_are_owner: owner };
+  const v = await client.call('POST', relayPath('/server-payee'), sellerOf(c));
+  return { available: true, linked: !!v.linked, source: v.source || null, payee: v.payee || null, linked_at: v.linked_at || null, you_are_owner: owner, you: !!v.payee && !!me.nookara_id && String(v.payee.id) === String(me.nookara_id) };
+}
+// GET /api/v2/servers/:sid/payout-attestation (owner only) -> { attestation }: the owner hands it to Nookara with their own login.
+// The Nookara account paid is their own (a Nookara account) or the one they linked for payments (payments.js).
+function payoutAttestation(sid, me) {
+  const c = C.findCommunity(sid);
+  if (Number(c.owner_id) !== Number(me.id)) throw err('owner_only', 403);
+  if (!client.registered()) throw err('payment_unavailable', 409);
+  const u = auth.userById(me.id);
+  const payer = payments().payerOf(u);
+  if (!payer) throw payments().requireLink();
+  return { attestation: client.serverPayeeAttestation(c.sid, payments().accountId(u), payer.nookara_id), nookara_id: payer.nookara_id };
+}
+
 // POST /channels/:cid/shop/:rid
 async function buy(cid, me, rid, body = {}) {
   const { c, snap, r, price } = shopItem(cid, me, rid);
@@ -70,7 +106,7 @@ async function buy(cid, me, rid, body = {}) {
   if (pr.status === 'creating') {
     let out;
     try {
-      out = await client.call('POST', relayPath('/pay-request'), { user_id: String(me.nookara_id), amount: price, reason: `The ${r.name} role in ${c.name}`.slice(0, 200), ref: pr.ref });
+      out = await client.call('POST', relayPath('/pay-request'), { user_id: String(me.nookara_id), amount: price, reason: `The ${r.name} role in ${c.name}`.slice(0, 200), ref: pr.ref, ...sellerOf(c) });
     } catch (e) {
       // network trouble / rate limits keep the attempt (and its ref) for a retry; a refusal ends it
       if (!(e.code === ERR.unreachable || e.status === 429 || e.status >= 500)) setAttempt(pr.id, { status: 'failed', error: e.code || 'payment_failed' });
@@ -185,4 +221,4 @@ let running = false;
 function start() { running = true; client.events.on('registered', poll); poll(); }
 function stop() { running = false; clearTimeout(timer); timer = null; }
 
-module.exports = { start, stop, buy, status, shopView, verifyReceipt, check, purchased, RECEIPT_TYP, _setPollMs: ms => { POLL_MS = ms; } };
+module.exports = { start, stop, buy, status, shopView, payout, payoutAttestation, verifyReceipt, check, purchased, RECEIPT_TYP, _setPollMs: ms => { POLL_MS = ms; } };

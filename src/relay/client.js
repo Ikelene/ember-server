@@ -148,6 +148,14 @@ function ownerAttestation(nookaraId) {
   return input + '.' + sign(input);
 }
 
+// a server owner's proof (PROTOCOL §12.5a): they carry it to Nookara (POST its servers/payout route) so the server's paid roles pay them
+function serverPayeeAttestation(sid, ownerAccount, nookaraId) {
+  const k = loadKey(), iat = Math.floor(Date.now() / 1000);
+  const enc = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const input = enc({ alg: 'EdDSA', typ: TYP.serverPayee }) + '.' + enc({ iss: k.id, url: config.get().public_url, server: String(sid), owner: String(ownerAccount), sub: String(nookaraId), iat, exp: iat + ATTEST_TTL, jti: crypto.randomBytes(16).toString('base64url') });
+  return input + '.' + sign(input);
+}
+
 // what registration depends on: a change re-registers
 const fingerprint = () => { const c = config.get(); return [c.nookara_registration, c.nookara_url, c.public_url, c.name, config.mode(), require('../operator-terms').accepted() ? 'terms' : 'noterms'].join('|'); };
 const BACKOFF = [5e3, 15e3, 60e3, 5 * 60e3, 15 * 60e3, 30 * 60e3];
@@ -207,4 +215,4 @@ async function registerNow() {
   return out;
 }
 
-module.exports = { loadKey, identity, sign, enabled, registered, trusted, setTrusted, setVoice, voiceQuota, status, call, http, register, registerNow, ownerAttestation, start, stop, events, stateOf };
+module.exports = { loadKey, identity, sign, enabled, registered, trusted, setTrusted, setVoice, voiceQuota, status, call, http, register, registerNow, ownerAttestation, serverPayeeAttestation, start, stop, events, stateOf };

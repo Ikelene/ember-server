@@ -57,6 +57,11 @@ const CSS = `
 .lead{margin:0 0 4px;font-size:14px;color:var(--muted)}
 .btn{display:flex;align-items:center;justify-content:center;gap:10px}
 .btn img{width:20px;height:20px;object-fit:cover}
+.open-in{margin-top:14px}
+.open-in>summary{list-style:none;cursor:pointer}
+.open-in>summary::-webkit-details-marker{display:none}
+.open-in .btn small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.open-in .choices .btn{flex-direction:column;gap:2px}
 .paste{margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:14px;color:var(--muted)}
 .paste dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:8px 0 0}
 .paste dt{color:var(--muted)}
@@ -81,15 +86,19 @@ function render({ c, code }) {
   const initial = esc((Array.from(String(d.name || '').trim())[0] || 'E').toUpperCase());
   const h = page.head(`Join ${d.name}`, 'invite', previewMeta(d, c, code, icon));
   const proto = `web+ember:invite?${new URLSearchParams({ url, address: d.address, ...(code ? { code } : {}) })}`; // (address + code: older apps)
-  const clients = cfg.invites.clients.map(x => `<a class="btn" href="${esc(fill(x.url, vars))}" rel="noopener">${x.icon_url ? `<img src="${esc(x.icon_url)}" alt="">` : ''}Open in ${esc(x.name)}</a>`).join('\n  ');
+  // "Open in Ember" opens the list of ways in: the clients in config `invites.clients`, then an installed Ember app
+  const clients = cfg.invites.clients.map(x => `<a class="btn" href="${esc(fill(x.url, vars))}" rel="noopener"><span>${x.icon_url ? `<img src="${esc(x.icon_url)}" alt=""> ` : ''}${esc(x.name)}</span><small>in your browser</small></a>`).join('\n    ');
   const n = d.member_count;
   const body = `
   <p class="lead">You are invited to join</p>
   <div class="srv"><div class="ic">${icon ? `<img src="${esc(icon)}" alt="">` : initial}</div><div><h1>${esc(d.name)}</h1>
     <div class="sub">${n.toLocaleString('en-US')} member${n === 1 ? '' : 's'} · ${esc(JOIN[d.join_policy] || d.join_policy)}</div></div></div>
   ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ''}
-  <a class="btn primary" href="${esc(proto)}">Open in your Ember app</a>
-  ${clients}
+  <details class="open-in"><summary class="btn primary">Open in Ember</summary>
+    <div class="choices">
+    ${clients}
+    <a class="btn" href="${esc(proto)}"><span>Ember app</span><small>desktop or phone, if it's installed</small></a>
+    </div></details>
   <div class="paste">Or paste this link into any Ember client:
     <dl><dt>Link</dt><dd>${esc(url)}</dd></dl></div>`;
   return `${h.top}${body}${h.bottom}`;

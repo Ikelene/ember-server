@@ -28,6 +28,8 @@ function register(app) {
   app.get(v1('/channels/:cid/shop'), req => shop.shopView(req.params.cid, req.user));
   app.post(v1('/channels/:cid/shop/:rid'), req => shop.buy(req.params.cid, req.user, req.params.rid, req.body || {}));
   app.get(v1('/channels/:cid/shop/:rid/status'), req => shop.status(req.params.cid, req.user, req.params.rid));
+  app.get('/api/v2/servers/:sid/payout', req => shop.payout(req.params.sid, req.user));
+  app.get('/api/v2/servers/:sid/payout-attestation', req => shop.payoutAttestation(req.params.sid, req.user));
   app.delete(v1('/channels/:cid/shop/:rid'), req => { C.shopRole(req.params.cid, req.user, req.params.rid, false); return shop.shopView(req.params.cid, req.user); });
 
   // ---- starboard ----

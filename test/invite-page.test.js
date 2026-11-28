@@ -34,7 +34,7 @@ test('discovery advertises invites: url_base and the default clients', async () 
   const origin = new URL(base).port ? `http://localhost:${new URL(base).port}` : base;
   assert.deepEqual(d.invites, {
     url_base: origin + '/i/',
-    clients: [{ name: 'Ember', url: 'https://nookara.cc/chat#/invite?u={url}' }, { name: 'Canopy', url: 'https://canopy.ikelene.net/#/invite?u={url}' }],
+    clients: [{ name: 'Ember', url: 'https://nookara.cc/chat#/invite?u={url}' }],
   });
 });
 
@@ -54,7 +54,7 @@ test('a valid invite renders the page: card, open-in buttons, web+ember link, th
   assert.ok(html.includes('1 member ·'));
   const url = `${origin()}/i/${code}`;
   assert.ok(html.includes(`href="https://nookara.cc/chat#/invite?u=${enc(url)}"`));
-  assert.ok(html.includes(`href="https://canopy.ikelene.net/#/invite?u=${enc(url)}"`));
+  assert.ok(!html.includes("canopy") && html.includes(">Open in Ember</summary>"), "one Open in Ember list, no unofficial clients");
   assert.ok(html.includes(`href="web+ember:invite?url=${enc(url)}&amp;address=camp-fire%40localhost&amp;code=${code}"`));
   assert.ok(html.includes(`<dd>${url}</dd>`) && !html.includes('<dd>camp-fire@localhost</dd>'), 'the link, no address');
   // a client asking for JSON gets the server; the old /i/<slug>/<code> link is the same invite
@@ -125,14 +125,14 @@ test('invites settings: validated, saved, shown to admins, reach discovery and t
   assert.deepEqual(s.invites, { url_base: 'https://links.example/i/', clients });
   assert.deepEqual((await disco()).invites, { url_base: 'https://links.example/i/', clients });
   const html = await (await page(`/i/camp-fire/${code}`)).text();
-  assert.ok(html.includes(`href="http://localhost:5173/chat#/i/camp-fire@localhost/${code}"`) && html.includes('Open in Dev &lt;Ember&gt;') && html.includes('src="https://a.test/e.png"'));
+  assert.ok(html.includes(`href="http://localhost:5173/chat#/i/camp-fire@localhost/${code}"`) && html.includes('Dev &lt;Ember&gt;</span>') && html.includes('>Open in Ember</summary>') && html.includes('src="https://a.test/e.png"'));
   assert.ok(!html.includes('canopy.ikelene.net'));
   assert.ok(html.includes(`<dd>https://links.example/i/${code}</dd>`)); // (an older {address}/{code} template still fills in)
   // only clients changes: url_base stays
   assert.equal((await set({ clients: [] })).status, 200);
   assert.deepEqual((await disco()).invites, { url_base: 'https://links.example/i/', clients: [] });
   assert.equal((await set(null)).status, 200);
-  assert.equal((await disco()).invites.clients.length, 2);
+  assert.equal((await disco()).invites.clients.length, 1);
   assert.match((await disco()).invites.url_base, /^http:\/\/localhost:\d+\/i\/$/);
   // the domain is not the public url's host: https://<domain>/i/
   assert.equal((await alice.a.patch('/api/v1/instance/settings', { domain: 'camp.example' })).status, 200);
