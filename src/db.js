@@ -441,6 +441,9 @@ const MIGRATIONS = [
     d.prepare('UPDATE roles SET permissions = permissions | ? WHERE (permissions & ?) <> 0').run(VOICE, SEND);
     d.prepare('UPDATE roles SET permissions = permissions | ? WHERE (permissions & ?) <> 0').run(PIN, MANAGE_MESSAGES);
   },
+  // v37: more than one valid token per bot (bots.js fromHeader): a bot moved here from several servers keeps each one's token
+  `CREATE TABLE IF NOT EXISTS bot_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at INTEGER NOT NULL);
+  CREATE INDEX IF NOT EXISTS bot_tokens_user ON bot_tokens(user_id);`,
 ];
 
 // the database used to be bonfire.db: take it over (with its WAL / shared-memory files) when there is no ember.db yet

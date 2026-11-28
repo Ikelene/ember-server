@@ -115,6 +115,7 @@ function resetToken(me, ref) {
   managedByGallery(r);
   const token = newToken(r.user_id);
   db.run('UPDATE bots SET token_hash = ? WHERE user_id = ?', sha256(token), r.user_id);
+  db.run('DELETE FROM bot_tokens WHERE user_id = ?', r.user_id); // (the tokens it came here with stop too)
   closeGateways(r.user_id, 4004, 'token reset');
   return { token };
 }
@@ -153,7 +154,8 @@ function addToServer(me, username, sid) {
 function fromHeader(h) {
   const m = /^Bot\s+(\S+)$/i.exec(String(h || ''));
   if (!m || m[1].length > 200) return null;
-  const r = db.get('SELECT user_id, gallery_active FROM bots WHERE token_hash = ?', sha256(m[1]));
+  const th = sha256(m[1]);
+  const r = db.get('SELECT user_id, gallery_active FROM bots WHERE token_hash = ?', th) || db.get('SELECT b.user_id, b.gallery_active FROM bot_tokens t JOIN bots b ON b.user_id = t.user_id WHERE t.token_hash = ?', th);
   if (r && r.gallery_active === 0) return null; // a gallery bot Nookara took away
   const u = r && auth.userById(r.user_id);
   return u && !u.banned ? u : null;
