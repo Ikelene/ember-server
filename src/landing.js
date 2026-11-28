@@ -208,7 +208,7 @@ function page() {
   const first = t => esc((Array.from(String(t || '').trim())[0] || 'E').toUpperCase());
   const server = v => `<div class="srv">
       <div class="si">${v.icon_url ? `<img src="${esc(v.icon_url)}" alt="">` : first(v.name)}</div>
-      <div class="sw"><h3>${esc(v.name)}</h3><div class="sa">${esc(v.address)}</div>${v.description ? `<p>${esc(v.description)}</p>` : ''}
+      <div class="sw"><h3>${esc(v.name)}</h3>${v.description ? `<p>${esc(v.description)}</p>` : ''}
         <div class="meta"><span>${icon('users', 14)}<b>${fmt(v.members)}</b> member${v.members === 1 ? '' : 's'}</span><span>${icon('lock', 14)}${esc(JOIN[v.join_policy] || v.join_policy)}</span></div></div>
       <a class="btn primary" href="${esc(v.invite_url)}">${icon('flame')}Join</a>
     </div>`;

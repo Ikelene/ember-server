@@ -170,7 +170,7 @@ function serverView(c, snap, me) {
     // unmarked_aliases: the Danger zone switch, so role editors only offer "Use unmarked aliases" while it can do something
     ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id), unmarked_aliases: !!S().get(c).advanced?.unmarked_aliases } : {}),
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
-    invite: role ? c.invite_code : undefined, // every member can invite people
+    invite: role ? c.invite_code : undefined, invite_url: role ? require('./invite-page').codeUrl(c.invite_code) : undefined, // every member can invite people
     join_policy: c.join_policy, allow_signing: (config.mode() === 'nookara' || config.nookaraIdentity()), // signing: always allowed in nookara mode, never required
     upload_ceiling_mb: uploadCeiling(c), ...(me ? { my_upload_max_mb: effectiveUploadMax(c, snap, me) } : {}),
     allow_uploads: !!c.allow_uploads, upload_max_mb: Math.min(validUploadMax(c.upload_max_mb) ?? uploadCeiling(c), uploadCeiling(c)), listed: !!c.listed, instance: instanceOrigin(),
@@ -346,8 +346,9 @@ function resolveAddress(address) {
   const m = /^([^@\s]+)(?:@([^@\s]+))?$/.exec(String(address || '').trim().toLowerCase());
   if (!m) throw err('server_not_found', 404);
   if (m[2] && m[2] !== config.domain()) throw err('wrong_homeserver', 404);
-  const c = db.get('SELECT * FROM communities WHERE slug = ?', m[1]);
-  if (!c) throw err('server_not_found', 404);
+  const c = db.get("SELECT * FROM communities WHERE slug = ? AND kind = 'server'", m[1]);
+  // servers are found by address only when listed (or the homeserver's only one); any other is joined with an invite link
+  if (!c || (!c.listed && communityCount() !== 1)) throw err('server_not_found', 404);
   return { sid: c.sid, slug: c.slug, address: addressOf(c) };
 }
 // the discovery document's view of a server
@@ -605,7 +606,7 @@ function inviteInfo(code) {
   const { c } = findInvite(code);
   return serverView(c, snapOf(c), null);
 }
-const inviteView = i => ({ code: i.code, created_by: userView(auth.userById(i.created_by))?.id || null, created_at: i.created_at, expires_at: i.expires_at ?? null, max_uses: i.max_uses ?? null, uses: i.uses });
+const inviteView = i => ({ code: i.code, url: require('./invite-page').codeUrl(i.code), created_by: userView(auth.userById(i.created_by))?.id || null, created_at: i.created_at, expires_at: i.expires_at ?? null, max_uses: i.max_uses ?? null, uses: i.uses });
 function listInvites(sid, me) {
   const { c, snap } = memberCommunity(sid, me);
   if (!snap.can(me.id, P.MANAGE_SERVER)) throw err('not_allowed', 403);

@@ -58,7 +58,7 @@ test('a browser gets the landing page: escaped name/description, stats, join lin
   assert.ok(html.includes('cosy &lt;script&gt;'));
   assert.match(html, /<meta property="og:title" content="Ember Instance">/); // the homeserver's own name on top
   assert.match(html, /<meta property="og:description" content="2 members">/);
-  assert.match(html, /<div class="sa">camp-fire-friends@localhost<\/div>/);
+  assert.ok(!html.includes('camp-fire-friends@localhost'), 'servers have no address to show');
   assert.match(html, /<meta name="twitter:card" content="summary">/);
   // http dev server: the long #/i/ form
   assert.ok(html.includes(`https://ember.nookara.cc/#/i/${encodeURIComponent(base.replace('127.0.0.1', 'localhost'))}`) || html.includes('https://ember.nookara.cc/#/i/http'));

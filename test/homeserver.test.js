@@ -174,8 +174,12 @@ test('slugs: picked or derived, unique, changed by the owner only', async () => 
   B.slug = 'bobs';
 });
 
-test('resolve: slug@domain or the slug alone; the domain is a setting', async () => {
+test('resolve: slug@domain or the slug alone, listed servers only; the domain is a setting', async t => {
   const get = a => api(base).get('/api/v1/servers/resolve?address=' + encodeURIComponent(a));
+  // an unlisted server has no address to find it by: it is joined with an invite link (listed for the rest of this test)
+  assert.deepEqual([(await get('bobs@localhost')).status, (await get('bobs@localhost')).body.error], [404, 'server_not_found']);
+  for (const [who, s] of [[alice, A], [bob, B]]) assert.equal((await who.a.patch(S(s.sid), { listed: true })).status, 200);
+  t.after(async () => { for (const [who, s] of [[alice, A], [bob, B]]) await who.a.patch(S(s.sid), { listed: false }); });
   assert.deepEqual((await get('bobs@localhost')).body, { sid: B.sid, slug: 'bobs', address: 'bobs@localhost' });
   assert.deepEqual((await get(' Camp-Fire ')).body, { sid: A.sid, slug: 'camp-fire', address: 'camp-fire@localhost' });
   for (const [a, code] of [['nobody@localhost', 'server_not_found'], ['bobs-place', 'server_not_found'], ['bobs@elsewhere.example', 'wrong_homeserver'], ['', 'server_not_found'], ['a@b@c', 'server_not_found']]) {
@@ -221,9 +225,10 @@ test('landing page: the homeserver on top, every listed server under it', async 
   const html = await (await fetch(base + '/', { headers: { Accept: 'text/html' } })).text();
   assert.match(html, /<title>The Woods on Ember<\/title>/);
   assert.ok(html.includes('a homeserver &lt;b&gt;for&lt;/b&gt; camps'));
-  for (const s of ['<h3>Camp Fire</h3>', '<h3>Bobs Place</h3>', 'camp-fire@localhost', 'bobs@localhost', 'run by two']) assert.ok(html.includes(s), s);
+  for (const s of ['<h3>Camp Fire</h3>', '<h3>Bobs Place</h3>', 'run by two']) assert.ok(html.includes(s), s);
+  assert.ok(!html.includes('camp-fire@localhost'), 'no server addresses on the page');
   const invites = [(await alice.a.get(S(A.sid))).body.server.invite, (await bob.a.get(S(B.sid))).body.server.invite];
-  for (const [i, code] of invites.entries()) assert.ok(html.includes(`/i/${['camp-fire', 'bobs'][i]}/${code}"`), 'join link');
+  for (const code of invites) assert.ok(html.includes(`/i/${code}"`), 'join link');
   assert.ok(!html.includes('alice') && !html.includes('carol'), 'no member names');
   const stats = (await api(base).get('/api/v1/instance/stats')).body;
   assert.equal(stats.name, 'The Woods'); assert.equal(stats.domain, 'localhost');

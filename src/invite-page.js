@@ -1,5 +1,6 @@
 'use strict';
-// Client-neutral invite links: https://<domain>/i/<slug>/<code> (and /i/<slug> for a listed server). A browser gets a page
+// Client-neutral invite links: https://<domain>/i/<code> (older links /i/<slug>/<code> keep working, and /i/<slug> for a listed
+// server). A browser gets a page
 // with the server's card and "Open in" buttons for the clients in config `invites.clients`; any other client gets JSON.
 // Plain server-rendered HTML like the sign-in page: no scripts, every value escaped.
 const config = require('./config');
@@ -16,18 +17,25 @@ const absUrl = u => {
   try { const x = new URL(String(u), config.get().public_url + '/'); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; }
 };
 
-// a client's url template -> the link for this invite (no code: the "/{code}" part goes away)
-function fill(tpl, { slug, domain, code }) {
-  const e = encodeURIComponent, v = { slug: e(slug), domain: e(domain), address: `${e(slug)}@${e(domain)}`, code: code ? e(code) : '' };
+// a client's url template -> the link for this invite: {url} is the invite link itself (url-encoded), {code} its code; the older
+// {address} {slug} {domain} still fill in (no code: the "/{code}" part goes away)
+function fill(tpl, { slug, domain, code, url }) {
+  const e = encodeURIComponent, v = { slug: e(slug), domain: e(domain), address: `${e(slug)}@${e(domain)}`, code: code ? e(code) : '', url: e(url || inviteUrl(slug, code)) };
   let s = String(tpl);
   if (!code) s = s.replace(/\/\{code\}/g, '');
-  return s.replace(/\{(slug|domain|address|code)\}/g, (_, k) => v[k]);
+  return s.replace(/\{(slug|domain|address|code|url)\}/g, (_, k) => v[k]);
 }
 
-// the client-neutral link for a server (and invite code)
-const inviteUrl = (slug, code) => config.get().invites.url_base + encodeURIComponent(slug) + (code ? '/' + encodeURIComponent(code) : '');
+// the client-neutral link: <url_base><code> for an invite, <url_base><slug> for a listed server without one
+const inviteUrl = (slug, code) => config.get().invites.url_base + encodeURIComponent(code || slug);
+const codeUrl = code => config.get().invites.url_base + encodeURIComponent(code);
 
 // -> { c, code } | throws invalid_invite 404. With a code: the invite must be for this slug's server. Without: listed servers only
+// /i/<x>: an invite code first, else a listed server's slug
+function resolveOne(x) {
+  try { const { c } = C.findInvite(x); if (c && c.kind === 'server') return { c, code: String(x).trim() }; } catch { /* not a code */ }
+  return resolve(x, null);
+}
 function resolve(slug, code) {
   const c = db.get("SELECT * FROM communities WHERE slug = ? AND kind = 'server'", String(slug || '').toLowerCase());
   if (!c) throw err('invalid_invite', 404);
@@ -69,10 +77,10 @@ function previewMeta(d, c, code, icon) {
 
 function render({ c, code }) {
   const cfg = config.get(), d = C.discoveryView(c), icon = absUrl(c.icon_url);
-  const vars = { slug: c.slug, domain: cfg.domain, code };
+  const url = inviteUrl(c.slug, code), vars = { slug: c.slug, domain: cfg.domain, code, url };
   const initial = esc((Array.from(String(d.name || '').trim())[0] || 'E').toUpperCase());
   const h = page.head(`Join ${d.name}`, 'invite', previewMeta(d, c, code, icon));
-  const proto = `web+ember:invite?${new URLSearchParams({ address: d.address, ...(code ? { code } : {}) })}`;
+  const proto = `web+ember:invite?${new URLSearchParams({ url, address: d.address, ...(code ? { code } : {}) })}`; // (address + code: older apps)
   const clients = cfg.invites.clients.map(x => `<a class="btn" href="${esc(fill(x.url, vars))}" rel="noopener">${x.icon_url ? `<img src="${esc(x.icon_url)}" alt="">` : ''}Open in ${esc(x.name)}</a>`).join('\n  ');
   const n = d.member_count;
   const body = `
@@ -82,8 +90,8 @@ function render({ c, code }) {
   ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ''}
   <a class="btn primary" href="${esc(proto)}">Open in your Ember app</a>
   ${clients}
-  <div class="paste">Or paste this into any Ember client:
-    <dl><dt>Address</dt><dd>${esc(d.address)}</dd>${code ? `<dt>Code</dt><dd>${esc(code)}</dd>` : ''}<dt>Link</dt><dd>${esc(inviteUrl(c.slug, code))}</dd></dl></div>`;
+  <div class="paste">Or paste this link into any Ember client:
+    <dl><dt>Link</dt><dd>${esc(url)}</dd></dl></div>`;
   return `${h.top}${body}${h.bottom}`;
 }
 
@@ -93,7 +101,7 @@ function notFound() {
 
 function handle(req, res) {
   let r;
-  try { r = resolve(req.params.slug, req.params.code); } catch (e) {
+  try { r = req.params.code ? resolve(req.params.slug, req.params.code) : resolveOne(req.params.slug); } catch (e) {
     if (e.status !== 404 || !wantsHtml(req)) throw e;
     return page.send(res, 404, notFound());
   }
@@ -106,4 +114,4 @@ function register(app) {
   app.get('/i/:slug/:code', { auth: false }, handle);
 }
 
-module.exports = { register, fill, inviteUrl, resolve };
+module.exports = { register, fill, inviteUrl, codeUrl, resolve };

@@ -42,7 +42,8 @@ function discovery({ legacy = false } = {}) {
     // the homeserver itself, and the servers it lists (PROTOCOL §5a). `community` stays for protocol 1 clients: one server per instance
     // (with its branding, PROTOCOL §5e: the name and pictures its pages show, and the theme tokens clients may tint it with)
     homeserver: { ...require('../branding').discovery(), description: cfg.description },
-    // client-neutral invite links: <url_base><slug>/<code>; clients: [{ name, url, icon_url? }], url templates with {address} {slug} {domain} {code}
+    // client-neutral invite links: <url_base><code>; clients: [{ name, url, icon_url? }], url templates with {url} (the invite link,
+    // url-encoded) {code}, and the older {address} {slug} {domain}
     invites: { url_base: cfg.invites.url_base, clients: cfg.invites.clients },
     creation: { mode: cfg.creation.mode, per_account: cfg.creation.per_account, ...(cfg.creation.mode === 'request' ? { request_url: require('../server-requests').requestUrl() } : {}) }, // who may make a server here (admins / allowlist / request / anyone); request: where to ask
     communities_count: C.communityCount(),

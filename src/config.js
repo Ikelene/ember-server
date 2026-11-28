@@ -33,8 +33,8 @@ const CREATION_MODES = ['admins', 'allowlist', 'request', 'anyone'];
 // client-neutral invite links (https://<domain>/i/<slug>/<code>): the "Open in" buttons of the invite page. In a url
 // {address} is slug@domain, and {slug}, {domain} and {code} are what they say
 const DEFAULT_INVITE_CLIENTS = [
-  { name: 'Ember', url: 'https://nookara.cc/chat#/i/{address}/{code}' },
-  { name: 'Canopy', url: 'https://canopy.ikelene.net/#/i/{address}/{code}' },
+  { name: 'Ember', url: 'https://nookara.cc/chat#/invite?u={url}' },
+  { name: 'Canopy', url: 'https://canopy.ikelene.net/#/invite?u={url}' },
 ];
 const DOMAIN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
