@@ -16,7 +16,8 @@ const { err, now } = require('./util');
 
 const MAX_INVITES = 500, FRESH = 10 * 60 * 1000;
 const claimed = () => !!db.metaGet('owner_user_id');
-const mode = () => (claimed() ? config.get().accounts.registration : 'open');
+// unclaimed: open, so the owner can make the account that claims it, unless Nookara accounts sign in here (the owner uses theirs)
+const mode = () => (claimed() || config.nookaraIdentity() ? config.get().accounts.registration : 'open');
 // may someone make an account here at all (with whatever the mode asks for)
 const canRegister = () => mode() !== 'closed';
 

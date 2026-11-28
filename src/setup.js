@@ -17,10 +17,10 @@ function boot() {
   terms.boot(); // hosted: Nookara's acceptance; headless: EMBER_ACCEPT_OPERATOR_TERMS
   const stranded = auth.ownerStranded(); // switched accounts mode: the owner's account can't sign in any more
   if (auth.claimed() && !stranded) { try { fs.unlinkSync(file()); } catch { /* none */ } return; }
-  // EMBER_OWNER (a Nookara account) claims the instance, or takes over from a stranded owner, only on Nookara accounts:
-  // on local accounts that owner could never sign in
+  // EMBER_OWNER (a Nookara account) claims the instance, or takes over from a stranded owner, where Nookara accounts sign in:
+  // Nookara accounts mode, or a homeserver whose own accounts include Nookara identities (on plain local accounts it could never sign in)
   let pre = env('OWNER');
-  if (pre && config.mode() !== 'nookara') { console.error(`[setup] ignoring EMBER_OWNER="${pre}": this instance uses local accounts, so claim it with the setup code`); pre = null; }
+  if (pre && config.mode() !== 'nookara' && !config.nookaraIdentity()) { console.error(`[setup] ignoring EMBER_OWNER="${pre}": this instance uses local accounts, so claim it with the setup code`); pre = null; }
   if (pre && !terms.accepted()) {
     // headless setup must accept the Ember Server Operator Terms explicitly (--accept-operator-terms / EMBER_ACCEPT_OPERATOR_TERMS=1)
     console.error(`[setup] ignoring EMBER_OWNER="${pre}": accept the Ember Server Operator Terms (${terms.URL}) with --accept-operator-terms or EMBER_ACCEPT_OPERATOR_TERMS=1, or claim with the setup code and tick the box`);
