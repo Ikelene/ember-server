@@ -74,9 +74,12 @@ function register(app, { restart }) {
       out.admin = true;
       out.plan = managed.usage(planCommunity(req)); // ?sid= one server's usage
       out.runtime = V.runtime();
+      out.install = V.install(); // how it was installed = how to update it (Server info shows the steps)
       out.stats = V.stats();
       // ?refresh=1 (Server info > Refresh): really ask Nookara again instead of the cached answer
-      out.update = await V.update({ fresh: String(req.query?.refresh || '') === '1' });
+      const c = await V.check({ fresh: String(req.query?.refresh || '') === '1' });
+      out.update = c.update;
+      if (!c.update) out.update_reason = c.reason; // why there is no update status: no_build_identity | check_disabled | unreachable
       if (out.update) out.update.one_click = require('../selfupdate').support().supported; // the "Update now" button can do it from Ember
     }
     return out;

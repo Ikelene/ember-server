@@ -1,7 +1,10 @@
 'use strict';
 // Build identity + live stats + "am I outdated?" (PROTOCOL §3 `build`, §5c `GET /api/v1/instance/info`).
-// The image is built with EMBER_BUILD_* env vars (Dockerfile ARG -> ENV, set by hostd/rebuild-image.sh); a build-info.json beside
-// package.json is the fallback for a plain checkout. Without either, commit is null and no update check is made.
+// Where the identity comes from, first match wins:
+//   env   EMBER_BUILD_* (the old BONFIRE_BUILD_* still work) (Dockerfile ARG -> ENV, set by hostd/rebuild-image.sh and the release script)
+//   git   the .git checkout this runs from (src/gitinfo.js: HEAD + commit date, read once at start = the code that is running)
+//   file  build-info.json beside package.json (written by scripts/build-info.js, e.g. inside `docker build` from the .git it was given)
+// Without any of them commit is null and no update check is made (update reason "no_build_identity").
 const { env, DB_FILE, NOOKARA_PATHS } = require('./compat');
 const fs = require('fs');
 const path = require('path');
@@ -10,21 +13,53 @@ const config = require('./config');
 const db = require('./db');
 
 const startedAt = Date.now();
+const ROOT = path.join(__dirname, '..');
 let fileInfo = {};
-try { fileInfo = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'build-info.json'), 'utf8')); } catch { /* not built by the release script */ }
-const pick = (envKey, key) => { const v = env(envKey) || fileInfo[key]; return v ? String(v) : null; };
+try { fileInfo = JSON.parse(fs.readFileSync(path.join(ROOT, 'build-info.json'), 'utf8')); } catch { /* not built by the release script */ }
+// the .git checkout is read once, at start: it describes the code this process loaded, even after a `git pull` on disk
+const gitInfo = env('BUILD_FROM_GIT') === '0' ? null : require('./gitinfo').read(ROOT);
+function current() {
+  if (env('BUILD_COMMIT')) return { source: 'env', src: {} };
+  if (gitInfo) return { source: 'git', src: { commit: gitInfo.commit, commit_date: gitInfo.commit_date, built_at: null, dirty: gitInfo.dirty === true, build_id: gitInfo.commit } };
+  if (fileInfo.commit) return { source: 'file', src: fileInfo };
+  return { source: null, src: {} };
+}
 
 function build() {
+  const { source, src } = current();
+  const pick = (envKey, key) => { const v = source === 'env' ? env(envKey) : src[key]; return v ? String(v) : null; };
   const commit = pick('BUILD_COMMIT', 'commit');
   return {
+    source, // env | git | file | null
     version: pkg.version,
     commit,
     commit_short: commit ? commit.slice(0, 7) : null,
     commit_date: pick('BUILD_COMMIT_DATE', 'commit_date'), // ISO 8601, date of the commit
     built_at: pick('BUILD_AT', 'built_at'),                // ISO 8601, when the image was built
-    dirty: (pick('BUILD_DIRTY', 'dirty') || '0') === '1' || fileInfo.dirty === true,
+    dirty: (pick('BUILD_DIRTY', 'dirty') || '0') === '1' || src.dirty === true,
     build_id: pick('BUILD_ID', 'build_id') || commit, // commit, + "+<treehash>" when built from uncommitted changes
   };
+}
+
+// How this server was installed, so Server info can say how to update it (the server never updates itself, except through hostd):
+//   managed       Nookara-hosted: updated by Nookara
+//   host_agent    EMBER_UPDATE_URL set: one-click update through bonfire-hostd
+//   docker_image  a container from a published image (EMBER_IMAGE baked in by the release script): pull + recreate
+//   docker_build  a container built from source (`docker build` / compose `build: .`): git pull + rebuild
+//   git           `node src/index.js` from a git checkout: git pull + npm ci + restart
+//   unknown       anything else (a tarball, a copy)
+const inContainer = () => ['/.dockerenv', '/run/.containerenv'].some(f => { try { return fs.existsSync(f); } catch { return false; } }) || env('CONTAINER') === '1';
+function install() {
+  const b = current();
+  let kind = 'unknown';
+  if (require('./managed').active()) kind = 'managed';
+  else if (require('./selfupdate').support().supported) kind = 'host_agent';
+  else if (inContainer()) kind = env('IMAGE') ? 'docker_image' : 'docker_build';
+  else if (b.source === 'git') kind = 'git';
+  const out = { kind };
+  if (kind === 'docker_image') out.image = String(env('IMAGE')).slice(0, 200);
+  if (kind === 'git') { out.branch = gitInfo.branch; out.dirty = gitInfo.dirty; }
+  return out;
 }
 
 // ---- live stats (cached 30 s: COUNT(*) over a big messages table is not free) ----
@@ -79,14 +114,26 @@ async function fetchLatest({ fresh = false } = {}) {
   })();
   try { return await latest.pending; } finally { latest.pending = null; }
 }
-// {outdated, latest, checked_at} or null when we cannot tell (unbuilt server, check disabled, Nookara unreachable)
-async function update({ fresh = false } = {}) {
+// { update: {outdated, latest, checked_at} | null, reason } - reason says why update is null:
+//   no_build_identity  this server doesn't know which commit it runs (built without .git or build args)
+//   check_disabled     EMBER_UPDATE_CHECK=0
+//   unreachable        server-latest.json could not be fetched (and there is no earlier answer)
+async function check({ fresh = false } = {}) {
   const me = build();
+  if (env('UPDATE_CHECK') === '0') return { update: null, reason: 'check_disabled' };
+  if (!me.build_id) return { update: null, reason: 'no_build_identity' };
   const l = await fetchLatest({ fresh });
-  if (!l || !me.build_id) return null;
+  if (!l) return { update: null, reason: 'unreachable' };
   let outdated = l.build_id !== me.build_id;
-  if (outdated && l.built_at && me.built_at) outdated = Date.parse(l.built_at) > Date.parse(me.built_at); // never nag a server that is ahead
-  return { outdated, latest: l, checked_at: new Date(latest.at).toISOString() };
+  // a self-built server on the released commit is current (only release builds carry the "+<treehash>" of a dirty rebuild)
+  if (outdated && me.source !== 'env' && l.commit === me.commit) outdated = false;
+  // never nag a server that is ahead (a newer checkout, a fork). Commit dates first: built_at of a self-built image is just when
+  // its admin ran `docker build`, so an old commit built today would look newer than the release. Build times only for the same commit.
+  if (outdated && l.commit !== me.commit && l.commit_date && me.commit_date) outdated = Date.parse(l.commit_date) > Date.parse(me.commit_date);
+  else if (outdated && l.built_at && me.built_at) outdated = Date.parse(l.built_at) > Date.parse(me.built_at);
+  return { update: { outdated, latest: l, checked_at: new Date(latest.at).toISOString() }, reason: null };
 }
+// {outdated, latest, checked_at} or null when we cannot tell (see check() for why)
+async function update(opts) { return (await check(opts)).update; }
 
-module.exports = { build, stats, runtime, update, startedAt, _resetLatest: () => { latest = { at: 0, ttl: 0, v: null, pending: null }; }, _setNow: f => { now = f || (() => Date.now()); } };
+module.exports = { build, stats, runtime, update, check, install, startedAt, root: ROOT, gitInfo: () => gitInfo, _resetLatest: () => { latest = { at: 0, ttl: 0, v: null, pending: null }; }, _setNow: f => { now = f || (() => Date.now()); } };

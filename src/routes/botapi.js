@@ -147,7 +147,7 @@ function register(app) {
   post('/channels/:cid/messages', async (req, bot) => {
     const ctx = channel(bot, req.params.cid);
     let body = req.body || {}, files = [];
-    if (/^multipart\//i.test(req.headers['content-type'] || '')) { const f = await uploads.readForm(req); body = f.fields; files = f.files; }
+    if (/^multipart\//i.test(req.headers['content-type'] || '')) { const f = await uploads.readForm(req, { maxBytes: C.botUploadBytes(ctx.c, bot) }); body = f.fields; files = f.files; }
     if (body.payload_json != null) { try { body = JSON.parse(body.payload_json); } catch { throw err('empty_message'); } }
     const text = B.textIn(ctx.c, ctx.snap, body.content, body.allowed_mentions);
     const fl = W.withFiles(files, body.embeds, bot.id, ctx.c.id);

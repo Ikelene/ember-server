@@ -164,6 +164,10 @@ const forWebhook = (token, appId) => {
   return it;
 };
 
+const bytesFor = it => C.botUploadBytes(db.get('SELECT * FROM communities WHERE id = ?', it.communityId), commUser(it.botId));
+const uploadBytes = (id, token) => bytesFor(find(id, token));
+const webhookUploadBytes = (token, appId) => bytesFor(forWebhook(token, appId));
+
 function ephView(it, id, d, thinking = false) {
   const bot = commUser(it.botId);
   return {
@@ -458,4 +462,4 @@ function dismiss(me, id) {
   if (it && it.userId === me.id) { it.eph.delete(String(id)); ephIndex.delete(String(id)); }
 }
 
-module.exports = { invoke, callback, followup, getMessage, editFollowup, deleteFollowup, start, stop, dismiss, _live: live };
+module.exports = { invoke, callback, followup, getMessage, editFollowup, deleteFollowup, uploadBytes, webhookUploadBytes, start, stop, dismiss, _live: live };

@@ -56,25 +56,26 @@ function register({ get, post, patch, put, del, guild }) {
   });
 
   // answering an interaction (the token in the path is the key, so no bot token is needed)
-  const readBody = async req => {
+  // `maxBytes` runs only for uploads, and checks the token before any file is read
+  const readBody = async (req, maxBytes) => {
     if (!/^multipart\//i.test(req.headers['content-type'] || '')) return { body: req.body || {}, files: [] };
-    const f = await uploads.readForm(req);
+    const f = await uploads.readForm(req, { maxBytes: maxBytes() });
     let body = f.fields;
     if (body.payload_json != null) { try { body = JSON.parse(body.payload_json); } catch { throw err('invalid_form_body', 400, { message: 'Invalid payload_json' }); } }
     return { body, files: f.files };
   };
   post('/interactions/:id/:token/callback', async req => {
-    const { body, files } = await readBody(req);
+    const { body, files } = await readBody(req, () => I.uploadBytes(req.params.id, req.params.token));
     await I.callback(req.params.id, req.params.token, body, files);
   }, { anon: true });
   post('/webhooks/:app/:token', async req => {
-    const { body, files } = await readBody(req);
+    const { body, files } = await readBody(req, () => I.webhookUploadBytes(req.params.token, req.params.app));
     const msg = await I.followup(req.params.token, req.params.app, body, files);
     return String(req.query.wait) === 'false' ? undefined : msg;
   }, { anon: true });
   get('/webhooks/:app/:token/messages/:mid', req => I.getMessage(req.params.token, req.params.app, req.params.mid), { anon: true });
   patch('/webhooks/:app/:token/messages/:mid', async req => {
-    const { body, files } = await readBody(req);
+    const { body, files } = await readBody(req, () => I.webhookUploadBytes(req.params.token, req.params.app));
     return I.editFollowup(req.params.token, req.params.app, req.params.mid, body, files);
   }, { anon: true });
   del('/webhooks/:app/:token/messages/:mid', req => { I.deleteFollowup(req.params.token, req.params.app, req.params.mid); }, { anon: true });

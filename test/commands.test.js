@@ -129,6 +129,12 @@ test('running a command: the bot gets INTERACTION_CREATE, answers, followups', a
   assert.equal((await cb('1', 'nope', { type: 4, data: { content: 'x' } })).body.code, 10062);
 
   const hook = (m, p, body) => botCall(m, `/webhooks/${ev.application_id}/${ev.token}${p}`, body, false);
+  // a file over 8 MB follows the server's upload limit (slash replies with video)
+  const big = new FormData();
+  big.append('files[0]', new Blob([new Uint8Array(9 * 1024 * 1024)]), 'big.bin');
+  const r9 = await fetch(`${base}/bot/v1/webhooks/${ev.application_id}/${ev.token}`, { method: 'POST', body: big });
+  const bf = { status: r9.status, body: await r9.json() };
+  assert.equal(bf.status, 200, JSON.stringify(bf.body));
   const f = await hook('POST', '', { content: 'followup' });
   assert.equal(f.body.content, 'followup');
   assert.equal((await hook('PATCH', `/messages/${f.body.id}`, { content: 'edited followup' })).body.content, 'edited followup');

@@ -184,6 +184,10 @@ test('webhooks: manage, execute with the token, embeds, files, rate limit', asyn
   assert.match(mp.body.embeds[0].image.url, /\/uploads\/.+\.png$/);
   assert.deepEqual(mp.body.attachments.map(a => a.filename), ['note.wav']);
   assert.equal((await fetch(mp.body.embeds[0].image.url.replace(/^http:\/\/localhost:\d+/, base))).status, 200);
+  const big = () => { const f = new FormData(); f.append('files[0]', new Blob([new Uint8Array(9 * 1024 * 1024)]), 'big.bin'); return f; };
+  const bigRes = await hook.raw('POST', path + '?wait=true', big());
+  assert.equal(bigRes.status, 200, JSON.stringify(bigRes.body));
+  assert.equal((await hook.raw('POST', `/api/v1/webhooks/${h.wid}/wrongtoken`, big())).status, 404);
   // management
   assert.equal((await alice.a.patch(`/api/v1/hooks/${h.wid}`, { name: 'Renamed', new_token: true })).body.webhook.name, 'Renamed');
   assert.equal((await hook.raw('POST', path, { content: 'old token' })).status, 404);
