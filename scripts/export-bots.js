@@ -16,7 +16,7 @@ const db = new DatabaseSync(file, { readOnly: true });
 const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c);
 const table = t => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
 
-const servers = db.prepare("SELECT * FROM communities WHERE kind = 'server'" + (sid ? ' AND sid = ?' : '')).all(...(sid ? [sid] : []));
+const servers = db.prepare('SELECT * FROM communities' + (has('communities', 'kind') ? " WHERE kind = 'server'" + (sid ? ' AND sid = ?' : '') : (sid ? ' WHERE sid = ?' : ''))).all(...(sid ? [sid] : [])); // (older instances have no kind column)
 if (servers.length !== 1) { console.error(sid ? `no server ${sid}` : `${servers.length} servers here: name one (sid)`); process.exit(1); }
 const c = servers[0];
 const gallery = has('bots', 'gallery_id');
