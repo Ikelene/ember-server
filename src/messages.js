@@ -134,7 +134,7 @@ function messageView(r, snap) {
     mention_roles: r.mention_roles ? String(r.mention_roles).split(',').filter(Boolean).map(rid).filter(Boolean) : [],
     created_at: r.created_at, edited_at: r.edited_at || null,
     components: json(r.components, undefined), interaction: interactionView(r.interaction),
-    signature: r.sig_kid ? { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } : null,
+    signature: require('./moved-signatures').view(r),
     verified: r.sig_kid ? (r.verified == null ? null : !!r.verified) : null,
     ...(r.bridge ? { bridge: r.bridge } : {}),
     ...(r.sticker_id ? { sticker: stickerOf(r.sticker_id) } : {}),
@@ -460,7 +460,7 @@ async function editMessage(id, me, text, { signature, scopes, embeds, components
   if (body !== r.body) mod().beforePost({ ch, c, snap }, me, body, { edit: true });
   const atts = attachments === undefined ? json(r.attachments, []) : cleanAttachments(attachments);
   const sig = await checkSignature({ me, c, ch, signature, scopes, body, attachments: atts, replyTo: r.reply_to, editOf: r.id, sticker: r.sticker_id });
-  db.run('UPDATE messages SET body = ?, edited_at = ?, sig_kid = ?, sig_sig = ?, sig_ts = ?, sig_nonce = ?, verified = ?, embeds = ?, components = ?, interaction = ?, attachments = ? WHERE id = ?',
+  db.run('UPDATE messages SET sig_orig = NULL, body = ?, edited_at = ?, sig_kid = ?, sig_sig = ?, sig_ts = ?, sig_nonce = ?, verified = ?, embeds = ?, components = ?, interaction = ?, attachments = ? WHERE id = ?',
     body, silent ? r.edited_at : Date.now(), sig?.sig_kid ?? null, sig?.sig_sig ?? null, sig?.sig_ts ?? null, sig?.sig_nonce ?? null, sig?.verified ?? null,
     nextEmbeds?.length ? JSON.stringify(nextEmbeds) : null, nextComps?.length ? JSON.stringify(nextComps) : null,
     interaction === undefined ? r.interaction : interaction ? JSON.stringify(interaction) : null, atts.length ? JSON.stringify(atts) : null, r.id);

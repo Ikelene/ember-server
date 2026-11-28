@@ -99,7 +99,7 @@ function exportCommunity(sid, me) {
           ...(r.embeds ? { embeds: JSON.parse(r.embeds) } : {}),
           reply_to: r.reply_to ? String(r.reply_to) : null, created_at: r.created_at, edited_at: r.edited_at || null, system: !!r.system,
           ...(r.sys_kind ? { sys_kind: r.sys_kind } : {}), pinned: !!r.pinned_at, reactions: rx.get(r.id) || [],
-          ...(r.sig_kid ? { signature: { kid: r.sig_kid, sig: r.sig_sig, ts: r.sig_ts, nonce: r.sig_nonce } } : {}),
+          ...(r.sig_kid ? { signature: require('./moved-signatures').view(r) } : {}), // (with signed: what it was signed as, when it moved here signed)
           ...(r.bridge ? { bridge: r.bridge } : {}),
           ...(r.sticker_id ? { sticker: r.sticker_id } : {}),
           ...(r.alias_name ? { alias: { name: r.alias_name, avatar_url: r.alias_avatar || null } } : {}),
@@ -165,6 +165,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     return null;
   };
 
+  const sigJobs = []; // signed messages: checked against what they were signed as once the import is in (moved-signatures.js)
   const result = db.tx(() => {
     const st = cj.settings || {};
     // (a password isn't exported: a password server comes back asking to join)
@@ -301,6 +302,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     // messages, oldest first per channel
     const idMap = new Map(); // old message id -> new id
     const replies = [];
+    const MS = require('./moved-signatures');
     for (const [oldCid, ch] of chMap) {
       const file = entries[`messages/${oldCid}.jsonl`];
       if (!file) continue;
@@ -331,6 +333,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
           m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null, stickerMap.get(m.sticker) ?? null);
         const nid = Number(res.lastInsertRowid);
         idMap.set(String(m.id), nid);
+        if (sig) { const cands = MS.candidates(m, { source: manifest.source, community: manifest.community, channel: oldCid }); if (cands.length) { db.run('UPDATE messages SET sig_orig = ? WHERE id = ?', JSON.stringify(cands[0]), nid); sigJobs.push({ id: nid, sig, cands }); } }
         if (u?.kind === 'bot' && m.alias && typeof m.alias === 'object') { // a bot's alias survives only when the author is still that bot
           try { const al = require('./messages').cleanAlias(u, m.alias); if (al) db.run('UPDATE messages SET alias_name = ?, alias_avatar = ? WHERE id = ?', al.name, al.avatar, nid); } catch { /* invalid alias: drop it */ }
         }
@@ -386,6 +389,8 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     return db.get('SELECT * FROM communities WHERE id = ?', c.id);
   });
   require('./bridge/cloudlink').channelsChanged(); // imported CloudLink bridge channels connect now
+  const check = require('./moved-signatures').verifyAll(sigJobs).catch(e => { console.error('[import] signature check failed:', e.message); return null; });
+  if (opts.report) opts.report.signatureCheck = check;
   return result;
 }
 

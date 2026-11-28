@@ -76,7 +76,17 @@ function register(app) {
       return { ...b, ...(problem ? { problem, action: problem === 'bot_not_in_server' ? 'reinvite_bot' : problem === 'bridge_not_set_up' ? 'homeserver_bot_needed' : problem === 'matrix_bot_needed' ? 'owner_sets_matrix_bot' : problem === 'guild_already_linked' ? 'resolve_conflict' : 'check' } : {}) };
     });
     const main = require('./db').get('SELECT invite_code FROM communities WHERE id = ?', c.id).invite_code;
-    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut, members: report.members || { added: 0, already: 0, skipped: [] }, bots: report.bots || [] };
+    return { sid: c.sid, slug: c.slug, address: C.addressOf(c), owner: owner.principal, main_invite_code: main, invite_code: report.invite_code || null, invites: report.invites || [], bridges: bridgesOut, members: report.members || { added: 0, already: 0, skipped: [] }, bots: report.bots || [], signatures: (await report.signatureCheck) || null };
+  });
+  // POST /api/v2/homeserver/import/signatures?sid=<sid> (multipart `file`: the export the server was imported from): its signed
+  // messages get the payload they were signed as and are checked again (for servers imported before that was kept). Safe to repeat.
+  // -> { sid, matched, missing, checked, verified, failed, unknown }
+  app.post('/api/v2/homeserver/import/signatures', { admin: true }, async req => {
+    const c = db.get("SELECT * FROM communities WHERE sid = ? AND kind = 'server'", String(req.query?.sid || ''));
+    if (!c) throw err('server_not_found', 404);
+    const { buffer } = await uploads.readMultipart(req, { maxBytes: 1024 * 1024 * 1024, fieldSize: 512 * 1024 });
+    if (!buffer) throw err('no_file');
+    return { sid: c.sid, ...(await require('./moved-signatures').backfill(c, exp.readExport(buffer))) };
   });
   // POST /api/v2/homeserver/import/bots?sid=<sid> (multipart `file`: the export the server was imported from; optionally `bots`:
   // JSON, its bots when the export does not carry them, scripts/export-bots.js) -> { sid, bots, members, messages, mentions }.

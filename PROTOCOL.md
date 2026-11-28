@@ -1288,6 +1288,14 @@ If verification fails, the instance rejects the message with `bad_signature`. Bo
 
 **What the API returns.** Each message gains `signature: { kid, sig, ts, nonce } | null` and `verified: true | false | null`. `null` means unsigned. The API also returns `reply_to` (the stored id, even if the target was deleted) for reconstructing the signed payload. **Clients verify independently** against Nookara keys, so they don't trust `verified`. An edit without a signature clears `signature` and `verified`. Exports keep signatures, and so does a later re-import.
 
+
+**Moved messages.** A signed message that moved to another homeserver (an import, §5a, or a restored backup) was signed for its old instance, server, channel and message ids, and over its body before the import rewrote anything in it (mentions of moved bots, §5a). None of that matches the message there any more, so the import keeps the payload it was signed as and checks that, without step 5 (a signature from last year is still its author's). Such a message's `signature` also has:
+- `signed`: the exact payload object above, as signed (`instance` = the old origin, `community` = the old sid, `channel` = the old cid, `reply_to` / `edit_of` = old message ids, `body` = the original text, `attachments` = the refs as signed).
+- `moved_from`: the old origin (= `signed.instance`). It is one of discovery's `previous_urls` when an admin moved the server with `previous_url`.
+
+`verified` is the homeserver's check of `signed`. A client that checks for itself verifies `PREFIX + canonical(signature.signed)` with the key of `kid` (`NOOKARA/bonfire/keys/kid/:kid`; `key.user_id == signed.author`, not revoked before `signed.ts`), skipping the clock rule, and may require `moved_from` to be in `previous_urls`. It does not compare `signed` with the message as shown (ids, and the body where a mention was rewritten, differ). An edit on the new homeserver drops `signed` (a new signature, if any, is checked as usual). An export carries `signature.signed` along, so a message that moves again keeps it.
+
+`POST /api/v2/homeserver/import/signatures?sid=<sid>` (instance admins; multipart `file`: the export the server was imported from) fills `signed` in for a server imported before it was kept: each signed message of the export is found by its `sig` + `nonce` in that server and checked again. Safe to repeat. -> `{ sid, matched, missing, checked, verified, failed, unknown }` (`unknown`: the key could not be fetched; `verified` stays `null`). The admin import's answer has `signatures: { checked, verified, failed, unknown }`.
 ---
 
 ## 9. Export format `bonfire-export-v1` (zip, built with `fflate`)

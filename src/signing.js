@@ -67,10 +67,11 @@ function publicKeyOf(b64) {
 }
 
 // -> { ok: true } | { ok: false, reason }
-async function verify({ payload, signature, nookaraId, now = Date.now() }) {
+// skew: false checks a signature from the past (a moved message, moved-signatures.js) without the clock-skew rule
+async function verify({ payload, signature, nookaraId, now = Date.now(), skew = true }) {
   if (!signature || typeof signature !== 'object' || typeof signature.kid !== 'string' || typeof signature.sig !== 'string') return { ok: false, reason: 'malformed' };
   if (Number(signature.ts) !== payload.ts || String(signature.nonce) !== payload.nonce) return { ok: false, reason: 'mismatch' };
-  if (!Number.isFinite(payload.ts) || Math.abs(payload.ts - now) > SKEW) return { ok: false, reason: 'timestamp' };
+  if (!Number.isFinite(payload.ts) || (skew && Math.abs(payload.ts - now) > SKEW)) return { ok: false, reason: 'timestamp' };
   const key = await lookupKey(signature.kid, now);
   if (!key) return { ok: false, reason: key === undefined ? 'key_unavailable' : 'unknown_key' };
   if (String(key.user_id) !== String(nookaraId)) return { ok: false, reason: 'wrong_user' };
