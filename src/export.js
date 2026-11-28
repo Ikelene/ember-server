@@ -69,6 +69,10 @@ function exportCommunity(sid, me) {
     user: auth.userView(u), roles: [...snap.roleIds(u.id)].map(roleByRid).filter(Boolean), joined_at: u.joined_at, ...(snap.isOwner(u.id) ? { owner: true } : {}),
   })).join('\n') + (members.length ? '\n' : ''));
 
+  // its bots, with their token hashes when the exporter owns them (import-bots.js: a homeserver admin's import keeps them working)
+  const bots = require('./import-bots').exportBots(c, me, localFile);
+  files['bots.jsonl'] = strToU8(bots.map(b => JSON.stringify(b)).join('\n') + (bots.length ? '\n' : ''));
+
   for (const ch of snap.channels) {
     const lines = [];
     let last = 0;
@@ -149,10 +153,13 @@ function importCommunity(me, buffer, parsed, opts = {}) {
   };
   const mapUrl = (v, kind) => (typeof v === 'string' && v.startsWith('files/') ? storeFile(v, kind) : (/^https?:\/\//.test(v || '') ? v : null));
 
-  // who is who: v: principals keep identity; l: principals only if they're this instance's own accounts
+  // who is who: v: principals keep identity; l: principals only if they're this instance's own accounts; b: the bots that came
+  // with it (a trusted import, below)
+  let botMap = new Map();
   const resolve = u => {
     const principal = typeof u === 'string' ? u : u?.id;
     if (typeof principal !== 'string') return null;
+    if (botMap.has(principal)) return botMap.get(principal);
     if (principal.startsWith('v:') && /^v:[1-9]\d{0,19}$/.test(principal)) return auth.ensureNookaraPlaceholder(principal.slice(2), u?.username, u?.pfp);
     if (principal.startsWith('l:') && sameInstance) return auth.userByPrincipal(principal) || null;
     return null;
@@ -284,6 +291,13 @@ function importCommunity(me, buffer, parsed, opts = {}) {
       }
     }
 
+    // the server's bots (opts.bots, else the export's bots.jsonl): only for a trusted import, an admin moving it for its owner
+    const IB = require('./import-bots');
+    if (opts.trusted) {
+      const records = Array.isArray(opts.bots) ? opts.bots : entries['bots.jsonl'] ? jsonl(entries['bots.jsonl']) : [];
+      botMap = IB.carry(records, { c, fallbackOwner: auth.userById(c.owner_id), mapUrl: v => mapUrl(v, 'chat'), report });
+    }
+
     // messages, oldest first per channel
     const idMap = new Map(); // old message id -> new id
     const replies = [];
@@ -312,7 +326,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
         const res = db.run(
           `INSERT INTO messages (channel_id, user_id, body, attachments, system, sys_kind, author_name, author_avatar, embeds, bridge, pinned_at, created_at, edited_at, sig_kid, sig_sig, sig_ts, sig_nonce, verified, sticker_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ch.id, u?.id ?? null, String(m.body ?? '').slice(0, 4000), atts.length ? JSON.stringify(atts) : null, m.system ? 1 : 0, m.sys_kind ? String(m.sys_kind).slice(0, 12) : null,
+          ch.id, u?.id ?? null, String(IB.remapMentions(m.body, botMap) ?? '').slice(0, 4000), atts.length ? JSON.stringify(atts) : null, m.system ? 1 : 0, m.sys_kind ? String(m.sys_kind).slice(0, 12) : null,
           nameOnly ? clean(nameOnly, 80) : null, nameOnly ? (m.author_avatar || m.author?.pfp || null) : null, Array.isArray(m.embeds) ? JSON.stringify(m.embeds) : null, m.bridge ? String(m.bridge).slice(0, 10) : null,
           m.pinned ? created : null, created, Number(m.edited_at) || null, sig?.kid ?? null, sig?.sig ?? null, sig ? Number(sig.ts) || 0 : null, sig ? String(sig.nonce ?? '') : null, sig ? 0 : null, stickerMap.get(m.sticker) ?? null);
         const nid = Number(res.lastInsertRowid);
@@ -345,6 +359,7 @@ function importCommunity(me, buffer, parsed, opts = {}) {
     for (const m of entries['members.jsonl'] ? jsonl(entries['members.jsonl']) : []) {
       const u = resolve(m.user);
       const p = typeof m.user?.id === 'string' ? m.user.id : null;
+      if (p && botMap.has(p)) { const j = IB.join(c, botMap.get(p), m.roles, rid => roleMap.get(rid)); if (j.added) tally.added++; else if (j.why) tally.skipped.push({ id: p, username: botMap.get(p).username, why: j.why }); else tally.already++; continue; }
       const ours = u && ((u.kind === KIND_NOOKARA && nookaraHere) || (u.kind === 'local' && !nookara && sameInstance));
       if (!ours) { if (p && p !== me.principal) tally.skipped.push({ id: p, username: clean(m.user?.username, 64) || null, why: p.startsWith('l:') ? 'local_account_elsewhere' : 'not_an_account_here' }); continue; }
       if (u.id === me.id || db.get('SELECT 1 FROM members WHERE community_id = ? AND user_id = ?', c.id, u.id)) { tally.already++; continue; }
