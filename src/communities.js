@@ -171,7 +171,7 @@ function serverView(c, snap, me) {
     ...(isMember ? { timeout_until: require('./moderation').timeoutUntil(c, me.id), unmarked_aliases: !!S().get(c).advanced?.unmarked_aliases } : {}),
     role, perms: me ? base : undefined, allow_accent: c.allow_accent !== 0,
     invite: role ? c.invite_code : undefined, // every member can invite people
-    join_policy: c.join_policy, allow_signing: config.mode() === 'nookara', // signing: always allowed in nookara mode, never required
+    join_policy: c.join_policy, allow_signing: (config.mode() === 'nookara' || config.nookaraIdentity()), // signing: always allowed in nookara mode, never required
     upload_ceiling_mb: uploadCeiling(c), ...(me ? { my_upload_max_mb: effectiveUploadMax(c, snap, me) } : {}),
     allow_uploads: !!c.allow_uploads, upload_max_mb: Math.min(validUploadMax(c.upload_max_mb) ?? uploadCeiling(c), uploadCeiling(c)), listed: !!c.listed, instance: instanceOrigin(),
   };

@@ -17,9 +17,9 @@ const gatedAt = new Map(); // nookara id -> ms of the last restriction check
 const GATE_TTL = 30 * 1000, SWEEP = 30 * 1000;
 let offset = 0, timer = null;
 
-const enabled = () => config.mode() === 'nookara' && config.get().nookara_registration !== 'off' && env('PROFILE_SYNC') !== '0';
+const enabled = () => (config.mode() === 'nookara' || config.nookaraIdentity()) && config.get().nookara_registration !== 'off' && env('PROFILE_SYNC') !== '0';
 // restrictions apply on every Nookara-accounts instance, whatever the registration setting
-const gateOn = () => config.mode() === 'nookara' && env('PROFILE_SYNC') !== '0';
+const gateOn = () => (config.mode() === 'nookara' || config.nookaraIdentity()) && env('PROFILE_SYNC') !== '0';
 
 async function fetchProfiles(ids, fresh = false, ms = 8000) {
   const r = await fetch(`${config.get().nookara_url}${NOOKARA_PATHS.profiles}?ids=${ids.join(',')}${fresh ? '&_=' + Date.now() : ''}`, { signal: AbortSignal.timeout(ms), headers: { Accept: 'application/json' } });

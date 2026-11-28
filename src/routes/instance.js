@@ -20,6 +20,7 @@ const claimLimit = limiter(10, 600 * 1000);
 function discovery({ legacy = false } = {}) {
   const cfg = config.get();
   const mode = config.mode();
+  const nk = mode === 'nookara' || config.nookaraIdentity(); // Nookara accounts sign in here (and so sign messages)
   // withLegacy: the `nookara` object also goes out as `velora` (older clients read that)
   return withLegacy({
     software: legacy ? LEGACY_SOFTWARE : SOFTWARE, version: pkg.version, protocol: 1, protocol_version: 2,
@@ -29,10 +30,10 @@ function discovery({ legacy = false } = {}) {
     name: cfg.name, description: cfg.description, icon_url: cfg.icon_url, public_url: cfg.public_url, previous_urls: require('../public-url').previousUrls(), // earlier addresses (signed messages name the one they were sent to)
     accounts_mode: legacy ? wireMode(mode) : mode,
     // signing_issuers: the "iss" a message signature may name here, preferred first (clients sign with the first one they know)
-    nookara: mode === 'nookara' ? { issuer: cfg.nookara_url, jwks_url: `${cfg.nookara_url}${NOOKARA_PATHS.jwks}`, signing_issuers: require('../signing').issuers() } : null,
+    nookara: nk ? { issuer: cfg.nookara_url, jwks_url: `${cfg.nookara_url}${NOOKARA_PATHS.jwks}`, signing_issuers: require('../signing').issuers() } : null,
     claimed: auth.claimed() && !auth.ownerStranded(), // false also when the owner's account can't sign in under this accounts mode: the setup code hands it over
     registration: mode === 'local' && (cfg.registration === 'open' || !auth.claimed()) ? 'open' : 'closed',
-    features: { signing: mode === 'nookara', voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
+    features: { signing: nk, voice: require('../voice').available(), uploads: true, youtube: require('../youtube').enabled(), minecraft: true, bridges: require('../bridge').features(), member_presence: true, wake: true, server_profiles: true, account_profiles: mode === 'local' },
     max_upload_mb: cfg.max_upload_mb,
     read_only: managed.readOnly(), // PROTOCOL §19.5
     managed: managed.view(), // the old hosted containers' plan (old clients read it), null otherwise

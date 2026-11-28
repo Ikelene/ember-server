@@ -105,7 +105,7 @@ async function assertCloneAllowed(buf, me, from, into = null) {
   if (lockedBy(hash, { userId: me.id, into }).length) throw err('cloning_disabled', 403);
   const nookaraId = me.nookara_id || null;
   const asks = [];
-  if (config.mode() === 'nookara' && config.get().nookara_url) asks.push(askRemote(config.get().nookara_url, hash, nookaraId).then(a => ({ ...a, code: 'clone_locked' })));
+  if ((config.mode() === 'nookara' || config.nookaraIdentity()) && config.get().nookara_url) asks.push(askRemote(config.get().nookara_url, hash, nookaraId).then(a => ({ ...a, code: 'clone_locked' })));
   let fromOrigin = null;
   try { fromOrigin = from ? new URL(String(from).slice(0, 500)).origin : null; } catch { fromOrigin = null; }
   if (fromOrigin && fromOrigin !== selfOrigin() && fromOrigin !== config.get().nookara_url && !/(^|\.)nookara\.cc$/.test(new URL(fromOrigin).hostname)) {

@@ -245,7 +245,7 @@ function cleanAttachments(list) {
 async function checkSignature({ me, c, ch, signature, scopes, body, attachments, replyTo, editOf, sticker = null, system = false }) {
   const nookara = me && me.kind === KIND_NOOKARA;
   if (!signature) return null; // signing is optional, never required
-  if (config.mode() !== 'nookara' || !nookara) throw err('signing_unavailable', 400);
+  if (!(config.mode() === 'nookara' || config.nookaraIdentity()) || !nookara) throw err('signing_unavailable', 400); // (a homeserver whose accounts include Nookara identities signs too)
   if (!scopes?.includes('sign')) throw err('insufficient_scope', 403);
   let hashes;
   try { hashes = signing.attachmentRefs(attachments); } catch { throw err('bad_signature', 400); }

@@ -30,7 +30,7 @@ function apply(list) {
 }
 
 async function sync() {
-  if (busy || !client.registered() || config.mode() !== 'nookara') return 0;
+  if (busy || !client.registered() || !(config.mode() === 'nookara' || config.nookaraIdentity())) return 0;
   busy = true;
   let changed = 0;
   try {
